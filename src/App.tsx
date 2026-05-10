@@ -214,6 +214,7 @@ const volToDb = (vol: number) => {
 };
 
 // --- Components ---
+let updateClip: (id: string, updates: Partial<Clip>) => void;
 const PropertyControl = ({ 
   label, 
   value, 
@@ -923,7 +924,7 @@ const Monitor = React.memo(({
                               className="w-full h-full object-fill" 
                             />
                           ) : clips.find(c => c.id === pip.clipId)!.type === 'document' ? (
-                            <DocumentLayer clip={clips.find(c => c.id === pip.clipId)!} onUpdateClip={onUpdateClip} />
+                            <DocumentLayer clip={clips.find(c => c.id === pip.clipId)!} onUpdateClip={updateClip} />
                           ) : (
                             <img 
                               src={clips.find(c => c.id === pip.clipId)!.url} 
@@ -978,7 +979,7 @@ const Monitor = React.memo(({
                   crossOrigin="anonymous"
                 />
               ) : activeClip.type === 'document' ? (
-                <DocumentLayer clip={activeClip} onUpdateClip={onUpdateClip} />
+                <DocumentLayer clip={activeClip} onUpdateClip={updateClip} />
               ) : (
                 <img src={activeClip.url} alt={activeClip.name} className={`w-full h-full ${imageFit === 'fill' ? 'object-fill' : 'object-cover'}`} referrerPolicy="no-referrer" />
               )
@@ -1510,7 +1511,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
               onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
             />
         ) : clip.type === 'document' ? (
-          <DocumentLayer clip={clip} onUpdateClip={onUpdateClip} />
+          <DocumentLayer clip={clip} onUpdateClip={updateClip} />
         ) : (
           <img src={clip.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
         )}
@@ -3150,7 +3151,7 @@ const Inspector = React.memo(({
                         autoPlay 
                       />
                     ) : clip.type === 'document' ? (
-                      <DocumentLayer clip={clip} onUpdateClip={onUpdateClip} />
+                      <DocumentLayer clip={clip} onUpdateClip={updateClip} />
                     ) : (
                       <img src={clip.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                     )}
@@ -4177,6 +4178,7 @@ const LayersSection = React.memo(({
   onSetLayerOutput,
   onUpdateLayer,
   onUpdateClip,
+  onSelectLayer,
   outputs,
   externalScreens,
   clips,
@@ -4198,6 +4200,7 @@ const LayersSection = React.memo(({
   onSetLayerOutput: (layerId: string, outputId: string | null) => void,
   onUpdateLayer: (layerId: string, updates: Partial<Layer>) => void,
   onUpdateClip: (clipId: string, updates: Partial<Clip>) => void,
+  onSelectLayer: (layerId: string) => void,
   outputs: any[],
   externalScreens: Screen[],
   clips: Clip[],
@@ -4255,7 +4258,10 @@ const LayersSection = React.memo(({
           {layers.map((layer, lIdx) => (
             <div key={layer.id} className="flex gap-2 items-center group/row">
               <div 
-                onClick={() => onUpdateLayer(layer.id, {})}
+                onClick={() => {
+                  onSelectLayer(layer.id);
+                  onUpdateLayer(layer.id, {});
+                }}
                 className={`w-32 h-16 px-2 py-1.5 border rounded flex flex-col justify-between group relative overflow-visible shrink-0 cursor-pointer transition-all ${
                   layer.activeClipId ? 'bg-obs-surface' : 'bg-black/10'
                 } ${layers.find(l => l.activeClipId === l.slots.find(s => s?.id === layer.activeClipId)?.id) ? 'border-obs-accent ring-1 ring-obs-accent/20' : 'border-obs-border'}`}
@@ -5463,7 +5469,7 @@ export default function App() {
   const [previewLevel, setPreviewLevel] = useState(0);
   const [programLevel, setProgramLevel] = useState(0);
 
-  const updateClip = (id: string, updates: Partial<Clip>) => {
+  updateClip = (id: string, updates: Partial<Clip>) => {
     setClips(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
     setDeckClips(prev => {
       const newDecks = { ...prev };
@@ -6169,7 +6175,7 @@ export default function App() {
                           </div>
                           
                           <div className="space-y-1">
-                            {(programClip?.type === 'document' || programClip?.name.toLowerCase().endsWith('.pdf')) ? (
+                            {(programClip?.totalPages || programClip?.type === 'document' || programClip?.type === 'pdf' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
                               <>
                                 <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
                                   <div 
@@ -6237,7 +6243,7 @@ export default function App() {
                 </span>
               </div>
               <div className="flex-1 relative flex items-center justify-center bg-[#050505] overflow-hidden">
-                {selectedLibraryUrls.size === 1 ? (() => {
+                {selectedLibraryUrls.size === 1 ? ((clipUpdateFunction) => {
                   const selectedFile = libraryFiles.find(f => selectedLibraryUrls.has(f.url));
                   if (!selectedFile) return null;
                   if (selectedFile.type.startsWith('video')) {
@@ -6252,11 +6258,11 @@ export default function App() {
                       />
                     );
                   } else if (selectedFile.type === 'document' || selectedFile.type?.includes('pdf')) {
-                    return <DocumentLayer clip={selectedFile} onUpdateClip={updateClip} />;
+                    return <DocumentLayer clip={selectedFile} onUpdateClip={clipUpdateFunction} />;
                   } else {
                     return <img src={selectedFile.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />;
                   }
-                })() : (
+                })(updateClip) : (
                   <div className="text-obs-muted opacity-10 flex flex-col items-center gap-1.5">
                     <MonitorIcon size={32} strokeWidth={1} />
                     <span className="text-[7px] uppercase font-black tracking-[0.3em]">Selecciona un archivo</span>
@@ -6544,7 +6550,7 @@ export default function App() {
             {/* Pinned area for layers and playlists pegged to docks */}
               <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-4 py-2 space-y-4">
                 <CollapsibleSection title="Gestión de Capas" defaultOpen={workMode === 'layers'} disabled={workMode !== 'layers'}>
-                  <div className={workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}>
+                  <div className={`max-h-[260px] overflow-y-auto pr-1 ${workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
                     <LayersSection 
                       layers={layers}
                       activeColumnTrigger={activeColumnTrigger}
@@ -6571,6 +6577,8 @@ export default function App() {
                       }}
                       onUpdateClip={updateClip}
                       onTriggerClip={(layerId, slotIdx, mode) => {
+                        setSelectedItemId(layerId);
+                        setSelectedItemType('layer' as any);
                         onTriggerLayerClip(layerId, slotIdx, mode);
                       }}
                       onTriggerColumn={handleColumnTrigger}
