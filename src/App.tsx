@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { PDFRenderer } from './components/PDFRenderer';
 import { 
   Play, 
   Pause,
@@ -33,12 +34,20 @@ import {
   Repeat,
   Volume2,
   List,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft,
+  FileText,
   Eye,
+  Check,
   AlertTriangle,
   ExternalLink,
   Radio,
   X,
-  Trash2
+  Trash2,
+  RefreshCw,
+  Layout,
+  PictureInPicture2
 } from 'lucide-react';
 import { motion, AnimatePresence, animate, Reorder } from 'motion/react';
 
@@ -58,7 +67,7 @@ interface Clip {
   name: string;
   thumbnail: string;
   url: string;
-  type: 'video' | 'image' | 'generator';
+  type: 'video' | 'image' | 'generator' | 'document';
   status: 'idle' | 'active' | 'preview';
   transform: ClipTransform;
   mask: 'none' | 'circle' | 'square' | 'diamond';
@@ -79,7 +88,13 @@ interface Clip {
   loop?: boolean;
   currentTime?: number;
   duration?: number;
+  width?: number;
+  height?: number;
   transition?: 'cut' | 'fade' | 'wipe';
+  playlistId?: string;
+  currentPage?: number;
+  totalPages?: number;
+  keyboardNavEnabled?: boolean;
 }
 
 interface Playlist {
@@ -89,6 +104,7 @@ interface Playlist {
   opacity: number;
   isVisible: boolean;
   isPlaying?: boolean;
+  loop?: boolean;
   currentClipIndex?: number;
   transform: ClipTransform;
   mask: 'none' | 'circle' | 'square' | 'diamond';
@@ -115,6 +131,44 @@ interface Screen {
   left?: number;
   top?: number;
   isPrimary?: boolean;
+  refreshRate?: number;
+  colorDepth?: number;
+}
+
+interface Layer {
+  id: string;
+  name: string;
+  isVisible: boolean;
+  opacity: number;
+  muted: boolean;
+  activeClipId: string | null;
+  activeSlotIndex: number | null;
+  slots: (Clip | null)[];
+  outputId?: string | null; // Selected output for this layer's triggers
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  colorBalance: { r: number, g: number, b: number };
+  rotation: number;
+  transition: 'cut' | 'fade' | 'wipe';
+  isPlaying?: boolean;
+  loop?: boolean;
+  playbackMode?: 'single' | 'sequence';
+}
+
+interface PiPLayer {
+  id: string;
+  name: string;
+  clipId: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  opacity: number;
+  isActive: boolean;
+  targetOutputId: string | null;
+  showFrame?: boolean;
+  showInPreview?: boolean;
 }
 
 interface ExternalScreenSettings {
@@ -126,15 +180,38 @@ interface ExternalScreenSettings {
   brightness: number;
   contrast: number;
   saturation: number;
+  opacity: number;
+  x: number;
+  y: number;
+  rotation: number;
   temperature: number;
   colorBalance: { r: number; g: number; b: number };
-  selectedScreenId: string | null;
+  backgroundImage?: string;
+  showBackground?: boolean;
+  bgScalingW?: number;
+  bgScalingH?: number;
+  transitionType: 'fade' | 'wipe' | 'slide' | 'cut';
+  transitionDuration: number;
 }
 
 // --- Mock Data ---
 const DEFAULT_TRANSFORM: ClipTransform = { x: 0, y: 0, scale: 1, scaleW: 1, scaleH: 1, rotationX: 0, rotation: 0 };
 
 const MOCK_CLIPS: Clip[] = [];
+
+const formatTime = (seconds: number) => {
+  if (isNaN(seconds) || seconds < 0) seconds = 0;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+const volToDb = (vol: number) => {
+  if (vol <= 0.001) return "-∞ dB";
+  // 0.5 = 0dB point
+  const db = 20 * Math.log10(vol / 0.5);
+  return `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`;
+};
 
 // --- Components ---
 const PropertyControl = ({ 
@@ -157,9 +234,14 @@ const PropertyControl = ({
   onInputChange?: (val: string) => void
 }) => {
   const progress = ((value - min) / (max - min)) * 100;
+  const sliderRef = useRef<HTMLDivElement>(null);
   
+  // Determine if this is an audio control for dB display
+  const isAudio = label.toLowerCase().includes('volumen') || label.toLowerCase().includes('master') || label.toLowerCase().includes('mixer');
+  const actualDisplayValue = isAudio ? volToDb(value) : displayValue;
+
   return (
-    <div className="flex flex-col gap-1.5 p-2 bg-[#1a1a1a] rounded border border-[#2a2a2a] group">
+    <div className="flex flex-col gap-1.5 p-2 bg-[#1a1a1a] rounded border border-[#2a2a2a] group select-none">
       <div className="flex items-center justify-between">
         <span className="text-[9px] font-bold uppercase tracking-wider text-obs-muted">{label}</span>
         <div className="flex items-center gap-2">
@@ -167,25 +249,32 @@ const PropertyControl = ({
             <div className="flex items-center gap-1 bg-black/40 px-2 py-0.5 rounded border border-white/5">
               <input 
                 type="text"
-                value={displayValue.replace(/[^\d.-]/g, '')}
+                value={isAudio ? actualDisplayValue.split(' ')[0] : displayValue.replace(/[^\d.-]/g, '')}
                 onChange={(e) => onInputChange(e.target.value)}
+                onMouseDown={(e) => e.stopPropagation()}
                 className="w-10 bg-transparent border-none p-0 text-[10px] font-mono text-obs-accent outline-none text-right"
               />
-              <span className="text-[8px] text-obs-muted uppercase font-bold">{displayValue.replace(/[\d.-]/g, '')}</span>
+              <span className="text-[8px] text-obs-muted uppercase font-bold">{isAudio ? 'dB' : displayValue.replace(/[\d.-]/g, '')}</span>
             </div>
           ) : (
-            <span className="text-[10px] font-mono text-obs-accent">{displayValue}</span>
+            <span className="text-[10px] font-mono text-obs-accent">{actualDisplayValue.includes('.') ? Number.parseFloat(actualDisplayValue.replace(/[^\d.-]/g, '')).toFixed(1) + actualDisplayValue.replace(/[\d.-]/g, '') : actualDisplayValue}</span>
           )}
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-100">
             <button 
-              onClick={() => onChange(Math.max(min, value - step))}
-              className="text-obs-muted hover:text-white transition-colors p-0.5"
+              onClick={(e) => {
+                const amount = e.shiftKey ? step * 10 : step;
+                onChange(Math.max(min, value - amount));
+              }}
+              className="text-obs-text hover:text-white bg-white/5 hover:bg-white/10 rounded transition-colors p-0.5"
             >
               <Minus size={10} />
             </button>
             <button 
-              onClick={() => onChange(Math.min(max, value + step))}
-              className="text-obs-muted hover:text-white transition-colors p-0.5"
+              onClick={(e) => {
+                const amount = e.shiftKey ? step * 10 : step;
+                onChange(Math.min(max, value + amount));
+              }}
+              className="text-obs-text hover:text-white bg-white/5 hover:bg-white/10 rounded transition-colors p-0.5"
             >
               <Plus size={10} />
             </button>
@@ -194,34 +283,97 @@ const PropertyControl = ({
       </div>
       
       {/* Fader/Slider */}
-      <div className="h-4 relative bg-black/60 rounded-full cursor-ew-resize overflow-hidden border border-white/5"
+      <div 
+        ref={sliderRef}
+        className="h-4 relative bg-black/60 rounded-sm cursor-ew-resize overflow-hidden border border-white/5"
         onMouseDown={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
+          e.preventDefault();
+          const target = sliderRef.current;
+          if (!target) return;
+          
+          const rect = target.getBoundingClientRect();
           const updateValue = (clientX: number) => {
             const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
             const percent = x / rect.width;
             const newValue = min + percent * (max - min);
             onChange(newValue);
           };
-          const handleMove = (moveEvent: MouseEvent) => updateValue(moveEvent.clientX);
-          const handleUp = () => {
-            window.removeEventListener('mousemove', handleMove);
-            window.removeEventListener('mouseup', handleUp);
+
+          const onMouseMove = (moveEvent: MouseEvent) => {
+            updateValue(moveEvent.clientX);
           };
-          window.addEventListener('mousemove', handleMove);
-          window.addEventListener('mouseup', handleUp);
+
+          const onMouseUp = () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = '';
+            document.documentElement.classList.remove('select-none');
+          };
+
+          window.addEventListener('mousemove', onMouseMove);
+          window.addEventListener('mouseup', onMouseUp);
+          document.body.style.cursor = 'ew-resize';
+          document.documentElement.classList.add('select-none');
           updateValue(e.clientX);
         }}
       >
         <div 
-          className="absolute inset-y-0 left-0 bg-obs-accent/30 transition-all duration-75"
+          className="absolute inset-y-0 left-0 bg-transparent"
+          style={{ width: '100%', backgroundImage: 'linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '10% 100%' }}
+        />
+        <div 
+          className="absolute inset-y-0 left-0 bg-obs-accent/20 transition-all duration-75"
           style={{ width: `${progress}%` }}
         />
         <div 
-          className="absolute inset-y-0 bg-obs-accent w-1 shadow-[0_0_10px_rgba(0,170,255,0.8)] transition-all duration-75"
-          style={{ left: `calc(${progress}% - 2px)` }}
+          className="absolute inset-y-0 bg-obs-accent w-0.5 shadow-[0_0_8px_rgba(0,170,255,0.6)] transition-all duration-75"
+          style={{ left: `calc(${progress}% - 1px)` }}
         />
       </div>
+    </div>
+  );
+};
+
+const CollapsibleSection = ({ title, children, defaultOpen = false, disabled = false, onReset }: { title: string, children: React.ReactNode, defaultOpen?: boolean, disabled?: boolean, onReset?: () => void }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  
+  useEffect(() => {
+    setIsOpen(defaultOpen);
+  }, [defaultOpen]);
+  
+  return (
+    <div className={`bg-obs-surface overflow-hidden border border-obs-border rounded shadow-sm ${disabled ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
+      <div className="flex items-center w-full hover:bg-obs-border/30 transition-colors group">
+        <button 
+          onClick={() => {
+            if (!disabled) setIsOpen(!isOpen);
+          }}
+          disabled={disabled}
+          className="flex-1 px-3 py-2 flex items-center justify-between text-left"
+        >
+          <span className="text-[10px] font-black uppercase text-obs-muted tracking-widest">{title}</span>
+          {isOpen ? <ChevronDown size={12} className="text-obs-accent" /> : <ChevronRight size={12} className="text-obs-muted" />}
+        </button>
+        {onReset && (
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              onReset();
+            }}
+            className="p-1 px-2 text-obs-muted hover:text-white transition-colors"
+            title="Restablecer sección"
+          >
+            <RotateCcw size={10} />
+          </button>
+        )}
+      </div>
+      {isOpen && (
+        <div className="px-3 pb-3 border-t border-obs-border/30 bg-obs-bg/20 space-y-3">
+          <div className="mt-2 space-y-2">
+            {children}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -250,10 +402,14 @@ const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelect
         loop
         playsInline
       />
+    ) : clip.type === 'document' || clip.name.toLowerCase().endsWith('.pdf') ? (
+      <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none opacity-80 group-hover:opacity-100 transition-opacity">
+        <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />
+      </div>
     ) : (
       <img src={clip.thumbnail} alt={clip.name} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
     )}
-    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-1.5">
+    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-1.5 pointer-events-none">
       <span className="text-[9px] font-medium text-obs-text truncate">{clip.name}</span>
     </div>
     {clip.status === 'active' && (
@@ -295,7 +451,7 @@ const VUMeter = ({ label, position, level = 0 }: { label: string, position: 'lef
 
 const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isActive: boolean, volume: number = 1) => {
+const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isActive: boolean, volume: number = 1, connectToDestination: boolean = true) => {
   const [level, setLevel] = useState(0);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const dataArrayRef = useRef<Uint8Array | null>(null);
@@ -330,7 +486,7 @@ const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isAct
         if (!analyserRef.current) {
           analyserRef.current = audioContext.createAnalyser();
           analyserRef.current.fftSize = 256;
-          analyserRef.current.smoothingTimeConstant = 0.8;
+          analyserRef.current.smoothingTimeConstant = 0.5; // More responsive
           dataArrayRef.current = new Uint8Array(analyserRef.current.frequencyBinCount);
         }
 
@@ -338,7 +494,9 @@ const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isAct
           try {
             sourceRef.current = audioContext.createMediaElementSource(video);
             sourceRef.current.connect(analyserRef.current);
-            analyserRef.current.connect(audioContext.destination);
+            if (connectToDestination) {
+              analyserRef.current.connect(audioContext.destination);
+            }
           } catch (e) {
             console.warn("Audio source connection error:", e);
           }
@@ -353,8 +511,8 @@ const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isAct
             sum += dataArrayRef.current[i];
           }
           const average = sum / dataArrayRef.current.length;
-          // Level should reflect volume
-          setLevel(Math.min(1, (average / 128) * video.volume));
+          // Level should reflect volume, with enough sensitivity for digital signals
+          setLevel(Math.min(1, (average / 60) * video.volume));
           
           animationFrameRef.current = requestAnimationFrame(updateLevel);
         };
@@ -392,17 +550,39 @@ const Monitor = React.memo(({
   onToggleLoop,
   onRewind,
   onSkip,
+  onProgressUpdate,
   onLevelChange,
   isPlaylist,
   onClick,
+  onLayerEnded,
   volume = 1,
   brightness = 1,
   contrast = 1,
   saturation = 1,
+  opacity = 1,
+  x = 0,
+  y = 0,
+  rotation = 0,
   scalingW = 1,
   scalingH = 1,
-  transitionType = 'fade',
-  colorBalance = { r: 1, g: 1, b: 1 }
+  transitionType = 'cut',
+  isTransmitting = false,
+  isProgramOff = false,
+  colorBalance = { r: 1, g: 1, b: 1 },
+  settings,
+  clips,
+  programClipId,
+  previewClipId,
+  targetClipId,
+  hasTransitionTargets = false,
+  masterVolume = 1,
+  hideOverlays = false,
+  accentColor,
+  pipLayers = [],
+  activeOutputId = '1',
+  layers = [],
+  layerOutputs = {},
+  onUpdateClip
 }: { 
   title: string, 
   isActive?: boolean, 
@@ -414,30 +594,52 @@ const Monitor = React.memo(({
   isProgram?: boolean,
   isPlaylist?: boolean,
   onEnded?: () => void,
+  onLayerEnded?: (layerId: string) => void,
   onTogglePlay?: (id: string) => void,
   onToggleLoop?: (id: string) => void,
   onRewind?: (id: string) => void,
   onSkip?: (id: string, amount: number) => void,
+  onProgressUpdate?: (current: number, total: number) => void,
   onLevelChange?: (level: number) => void,
   onClick?: () => void,
   volume?: number,
   brightness?: number,
   contrast?: number,
   saturation?: number,
+  opacity?: number,
+  x?: number,
+  y?: number,
+  rotation?: number,
   scalingW?: number,
   scalingH?: number,
-  transitionType?: 'fade' | 'wipe' | 'slide',
-  colorBalance?: { r: number, g: number, b: number }
+  transitionType?: 'fade' | 'wipe' | 'slide' | 'cut',
+  isTransmitting?: boolean,
+  isProgramOff?: boolean,
+  colorBalance?: { r: number, g: number, b: number },
+  settings?: ExternalScreenSettings,
+  clips?: Clip[],
+  programClipId?: string | null,
+  previewClipId?: string | null,
+  targetClipId?: string | null,
+  hasTransitionTargets?: boolean,
+  masterVolume?: number,
+  hideOverlays?: boolean,
+  accentColor?: string,
+  pipLayers?: PiPLayer[],
+  activeOutputId?: string,
+  layers?: Layer[],
+  layerOutputs?: Record<string, string | null>,
+  onUpdateClip?: (id: string, updates: Partial<Clip>) => void
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const lastSrc = useRef<string>('');
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const audioLevel = useAudioLevel(videoRef, !!activeClip && activeClip.type === 'video' && isProgram, volume);
+  const audioLevel = useAudioLevel(videoRef, !!activeClip && activeClip.type === 'video' && !isProgram, volume, false);
 
   useEffect(() => {
-    if (isProgram) {
+    if (!isProgram) {
       onLevelChange?.(audioLevel);
     }
   }, [audioLevel, onLevelChange, isProgram]);
@@ -446,25 +648,43 @@ const Monitor = React.memo(({
     const video = videoRef.current;
     if (!video) return;
 
-    const updateTime = () => setCurrentTime(video.currentTime);
+    const updateTime = () => {
+      setCurrentTime(video.currentTime);
+      onProgressUpdate?.(video.currentTime, video.duration);
+    };
     const updateDuration = () => setDuration(video.duration);
 
     video.addEventListener('timeupdate', updateTime);
     video.addEventListener('loadedmetadata', updateDuration);
+    video.addEventListener('ended', onEnded || (() => {}));
 
     return () => {
       video.removeEventListener('timeupdate', updateTime);
       video.removeEventListener('loadedmetadata', updateDuration);
+      video.removeEventListener('ended', onEnded || (() => {}));
     };
-  }, [activeClip?.id]);
+  }, [activeClip?.id, onEnded]);
 
+  // Handle audio levels separately
   useEffect(() => {
     const video = videoRef.current;
-    if (video && activeClip) {
+    if (video && activeClip && !isProgram) {
+      const gain = (volume / 0.5);
+      video.volume = Math.max(0, Math.min(1, gain * (activeClip.volume !== undefined ? activeClip.volume : 1)));
+      // DO NOT use video.muted = true because it breaks the VU meter signal.
+      // useAudioLevel's connectToDestination=false intercepts the signal and silences the speakers.
       video.muted = false;
-      // Multiply monitor volume by clip volume
-      video.volume = (volume || 0) * (activeClip.volume !== undefined ? activeClip.volume : 1);
-      // Set playback speed
+    }
+  }, [volume, activeClip?.volume, isProgram]);
+
+  // Handle playback and source
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && activeClip && !isProgram) {
+      if (lastSrc.current !== activeClip.url) {
+        video.src = activeClip.url;
+        lastSrc.current = activeClip.url;
+      }
       video.playbackRate = activeClip.speed || 1;
       
       if (activeClip.isPlaying !== false) {
@@ -472,231 +692,342 @@ const Monitor = React.memo(({
       } else {
         video.pause();
       }
-      video.muted = !isProgram;
+      
       if (activeClip.currentTime !== undefined && Math.abs(video.currentTime - activeClip.currentTime) > 0.5) {
         video.currentTime = activeClip.currentTime;
       }
     }
-  }, [activeClip?.id, activeClip?.isPlaying, activeClip?.volume, activeClip?.speed, isProgram, volume]);
+  }, [activeClip?.id, activeClip?.url, activeClip?.isPlaying, activeClip?.speed, isProgram]);
 
-  useEffect(() => {
-    const previewVideo = previewVideoRef.current;
-    if (previewVideo && previewClip) {
-      previewVideo.muted = true;
-      previewVideo.play().catch(() => {});
-    }
-  }, [previewClip?.id]);
+  // Adjust image fit for program
+  const imageFit = isProgram ? 'fill' : 'cover';
 
-  const lastPreviewClipId = useRef<string | null>(null);
-  const lastPreviewTime = useRef<number>(0);
+  const busAClip = useMemo(() => isProgram && clips ? clips.find(c => c.id === programClipId) : null, [isProgram, clips, programClipId]);
+  
+  const busBClip = useMemo(() => {
+    if (!isProgram || !clips) return null;
+    
+    // If we have an explicit target for this output (multi-take)
+    if (targetClipId) return clips.find(c => c.id === targetClipId);
+    
+    // If ANY outputs are targeted but NOT this one, we stay on busA (busB is null)
+    if (hasTransitionTargets) return null;
+    
+    // Global Take Fallback: use the global preview clip
+    return clips.find(c => c.id === previewClipId);
+  }, [isProgram, clips, targetClipId, previewClipId, hasTransitionTargets]);
+  
+  const isContentActive = isActive && isTransmitting;
+  
+  // Decide if we should show ANY content in Program
+  const hasActiveContent = (isProgram 
+    ? (isContentActive && (
+        (busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) || 
+        (busBClip && crossfaderValue !== undefined && crossfaderValue > 0)
+      )) 
+    : !!activeClip) && !isProgramOff;
 
-  // Capture time from preview video to sync when transition ends
-  useEffect(() => {
-    let interval: any;
-    if (previewClip && previewVideoRef.current) {
-      interval = setInterval(() => {
-        if (previewVideoRef.current) {
-          lastPreviewTime.current = previewVideoRef.current.currentTime;
-        }
-      }, 50);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [previewClip]);
+  const audioOpacityA = useMemo(() => {
+    if (!busAClip) return 0;
+    if (transitionType === 'cut') return isProgramOff && isProgram ? 0 : 1; 
+    const fader = crossfaderValue === undefined ? 0 : crossfaderValue;
+    const base = (1 - fader / 100);
+    return isProgramOff && isProgram ? 0 : base;
+  }, [busAClip, crossfaderValue, transitionType, isProgram, isProgramOff]);
 
-  useEffect(() => {
-    if (previewClip) {
-      lastPreviewClipId.current = previewClip.id;
-    }
-  }, [previewClip]);
+  const audioOpacityB = useMemo(() => {
+    if (!busBClip) return 0;
+    if (transitionType === 'cut') return 0; 
+    const fader = crossfaderValue === undefined ? 0 : crossfaderValue;
+    const base = (fader / 100);
+    return isProgramOff && isProgram ? 0 : base;
+  }, [busBClip, crossfaderValue, transitionType, isProgram, isProgramOff]);
 
-  useEffect(() => {
-    if (!previewClip && lastPreviewClipId.current && activeClip?.id === lastPreviewClipId.current) {
-      if (videoRef.current && Math.abs(videoRef.current.currentTime - lastPreviewTime.current) > 0.5) {
-        videoRef.current.currentTime = lastPreviewTime.current;
-      }
-      lastPreviewClipId.current = null;
-    }
-  }, [previewClip, activeClip]);
-
-  const activeFilterId = useMemo(() => `monitor-filter-active-${activeClip?.id}-${Math.random().toString(36).substr(2, 9)}`, [activeClip?.id]);
-  const previewFilterId = useMemo(() => `monitor-filter-preview-${previewClip?.id}-${Math.random().toString(36).substr(2, 9)}`, [previewClip?.id]);
-  const globalFilterId = useMemo(() => `monitor-filter-global-${Math.random().toString(36).substr(2, 9)}`, []);
+  const wipeTransform = useMemo(() => {
+    if (transitionType !== 'wipe') return undefined;
+    const fader = crossfaderValue === undefined ? 0 : crossfaderValue;
+    return `inset(0 ${100 - fader}% 0 0)`;
+  }, [crossfaderValue, transitionType]);
 
   return (
+    <div className={`group flex flex-col h-full bg-[#0d0d0d] items-center justify-center p-4`}>
       <div 
-        className="flex flex-col min-w-0 cursor-pointer h-full"
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={onDrop}
-      onClick={onClick}
-    >
-      {/* SVG Filters */}
-      <svg width="0" height="0" className="absolute">
-        {activeClip && (
-          <filter id={activeFilterId}>
-            <feColorMatrix 
-              type="matrix" 
-              values={`${activeClip.colorBalance?.r ?? 1} 0 0 0 0
-                      0 ${activeClip.colorBalance?.g ?? 1} 0 0 0
-                      0 0 ${activeClip.colorBalance?.b ?? 1} 0 0
-                      0 0 0 1 0`} 
-            />
-          </filter>
-        )}
-        {previewClip && (
-          <filter id={previewFilterId}>
-            <feColorMatrix 
-              type="matrix" 
-              values={`${previewClip.colorBalance?.r ?? 1} 0 0 0 0
-                      0 ${previewClip.colorBalance?.g ?? 1} 0 0 0
-                      0 0 ${previewClip.colorBalance?.b ?? 1} 0 0
-                      0 0 0 1 0`} 
-            />
-          </filter>
-        )}
-        {isProgram && (
-          <filter id={globalFilterId}>
-            <feColorMatrix 
-              type="matrix" 
-              values={`${colorBalance.r} 0 0 0 0
-                      0 ${colorBalance.g} 0 0 0
-                      0 0 ${colorBalance.b} 0 0
-                      0 0 0 1 0`} 
-            />
-          </filter>
-        )}
-      </svg>
-      <div className={`px-2 py-1 flex justify-between items-center border-b rounded-t-sm ${
-        isActive 
-          ? 'bg-red-900/20 border-red-500/50' 
-          : 'bg-obs-surface border-obs-border'
-      }`}>
-        <div className="flex items-center gap-2">
-          <span className={`text-[10px] font-bold uppercase tracking-wider ${isActive ? 'text-red-500' : 'text-obs-text'}`}>{isProgram ? 'PROGRAMA' : 'VISTA PREVIA'}</span>
-        </div>
-        <div className="flex gap-2">
-          <span className="text-[8px] font-mono text-obs-muted">1920x1080</span>
-        </div>
-      </div>
-      <div className="flex-1 relative overflow-hidden flex items-center justify-center p-2">
-        <div 
-          className={`w-full max-h-full aspect-video relative flex items-center justify-center overflow-hidden bg-[#050505] border-2 ${isActive ? 'border-red-500' : 'border-obs-accent'} rounded-sm shadow-2xl shadow-black/50`}
-        >
-          <div 
-            className="absolute inset-0 flex items-center justify-center"
-            style={isProgram ? {
-              filter: `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) url(#${globalFilterId})`,
-              transform: `scale(${scalingW ?? 1}, ${scalingH ?? 1})`
-            } : {}}
-          >
-            {/* Safe area guides */}
-            <div className="absolute inset-0 border border-white/5 pointer-events-none m-4" />
-            <div className="absolute inset-0 border border-white/5 pointer-events-none m-8" />
-            
-            <AnimatePresence>
-              {activeClip && (
-                <motion.div 
-                  key={activeClip.id}
-                  initial={{ opacity: 0 }}
-                  animate={{ 
-                    opacity: (activeClip.opacity || 1) * (isProgram ? (crossfaderValue !== undefined && transitionType === 'fade' ? (100 - crossfaderValue) / 100 : 1) : 1),
-                    x: activeClip.transform.x + (isProgram && transitionType === 'slide' ? -crossfaderValue : 0),
-                    y: activeClip.transform.y,
-                    scaleX: activeClip.transform.scaleW,
-                    scaleY: activeClip.transform.scaleH,
-                    rotate: activeClip.transform.rotation,
-                    rotateX: activeClip.transform.rotationX,
-                  }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="absolute inset-0 z-10 flex items-center justify-center"
-                  style={{
-                    clipPath: isProgram && transitionType === 'wipe' ? `inset(0 ${crossfaderValue}% 0 0)` : 
-                              activeClip.mask === 'circle' ? 'circle(50%)' : 
-                              activeClip.mask === 'square' ? 'inset(0%)' : 
-                              activeClip.mask === 'diamond' ? 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' : 'none',
-                    filter: `brightness(${activeClip.brightness ?? 1}) contrast(${activeClip.contrast ?? 1}) saturate(${activeClip.saturation ?? 1}) url(#${activeFilterId}) ${
-                      activeClip.filter === 'grayscale' ? 'grayscale(100%)' :
-                      activeClip.filter === 'sepia' ? 'sepia(100%)' :
-                      activeClip.filter === 'invert' ? 'invert(100%)' :
-                      activeClip.filter === 'blur' ? 'blur(10px)' : ''
-                    }`
-                  }}
-                >
-                  {activeClip.type === 'video' ? (
-                    <video 
-                      ref={videoRef}
-                      src={activeClip.url} 
-                      className="w-full h-full object-contain" 
-                      autoPlay
-                      muted={false} 
-                      loop={isPlaylist ? false : true} 
-                      playsInline
-                      onEnded={onEnded}
-                      crossOrigin="anonymous"
-                    />
-                  ) : (
-                    <img src={activeClip.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
-                  )}
-                </motion.div>
+        className={`relative aspect-video w-full max-h-full bg-black rounded-sm border-2 ${isActive ? 'border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]' : 'border-[#333]'} overflow-hidden cursor-pointer`}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={onDrop}
+        onClick={onClick}
+      >
+        {/* Main Content */}
+        {isProgram ? (
+          <div className="w-full h-full relative flex items-center justify-center">
+            <div 
+              className="relative shadow-xl flex items-center justify-center w-full h-full"
+              style={{
+                aspectRatio: settings?.width && settings?.height ? `${settings.width}/${settings.height}` : '16/9',
+              }}
+            >
+              {/* Background Layer */}
+              {settings?.showBackground && settings?.backgroundImage && (
+                <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center bg-black">
+                  <img 
+                    src={settings.backgroundImage} 
+                    className="absolute pointer-events-none" 
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'fill',
+                      top: '50%',
+                      left: '50%',
+                      transform: `translate(-50%, -50%) scale(${(settings.bgScalingW ?? 100) / 100}, ${(settings.bgScalingH ?? 100) / 100})`,
+                      display: 'block'
+                    }}
+                    referrerPolicy="no-referrer" 
+                  />
+                </div>
               )}
 
-              {previewClip && crossfaderValue !== undefined && crossfaderValue > 0 && previewClip.id !== activeClip?.id && (
+              <div 
+                className="relative w-full h-full overflow-hidden flex items-center justify-center z-10"
+                style={{
+                  opacity: settings?.opacity ?? 1,
+                  backgroundColor: (settings?.showBackground && settings?.backgroundImage && !hasActiveContent) ? 'transparent' : '#000',
+                  transform: `scale(${settings?.scalingW ?? 1}, ${settings?.scalingH ?? 1}) translate(${settings?.x ?? 0}px, ${settings?.y ?? 0}px) rotate(${settings?.rotation ?? 0}deg)`,
+                  filter: `brightness(${settings?.brightness ?? 1}) contrast(${settings?.contrast ?? 1}) saturate(${settings?.saturation ?? 1}) url(#rgbBalanceMon)`
+                }}
+              >
+              <svg width="0" height="0" className="absolute">
+                <filter id="rgbBalanceMon">
+                  <feColorMatrix 
+                    type="matrix" 
+                    values={`${settings?.colorBalance?.r ?? 1} 0 0 0 0
+                            0 ${settings?.colorBalance?.g ?? 1} 0 0 0
+                            0 0 ${settings?.colorBalance?.b ?? 1} 0 0
+                            0 0 0 1 0`} 
+                  />
+                </filter>
+              </svg>
+
+              {isActive && isTransmitting ? (
                 <motion.div 
-                  key={`preview-${previewClip.id}`}
-                  initial={{ opacity: 0 }}
-                  animate={{ 
-                    opacity: (previewClip.opacity || 1) * (transitionType === 'fade' ? crossfaderValue / 100 : 1),
-                    x: previewClip.transform.x + (transitionType === 'slide' ? (100 - crossfaderValue) : 0),
-                    y: previewClip.transform.y,
-                    scaleX: previewClip.transform.scaleW,
-                    scaleY: previewClip.transform.scaleH,
-                    rotate: previewClip.transform.rotation,
-                    rotateX: previewClip.transform.rotationX,
-                  }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
-                  className="absolute inset-0 z-20 flex items-center justify-center will-change-transform"
-                  style={{
-                    clipPath: transitionType === 'wipe' ? `inset(0 0 0 ${100 - crossfaderValue}%)` :
-                              previewClip.mask === 'circle' ? 'circle(50%)' : 
-                              previewClip.mask === 'square' ? 'inset(0%)' : 
-                              previewClip.mask === 'diamond' ? 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' : 'none',
-                    filter: `brightness(${previewClip.brightness ?? 1}) contrast(${previewClip.contrast ?? 1}) saturate(${previewClip.saturation ?? 1}) url(#${previewFilterId}) ${
-                      previewClip.filter === 'grayscale' ? 'grayscale(100%)' :
-                      previewClip.filter === 'sepia' ? 'sepia(100%)' :
-                      previewClip.filter === 'invert' ? 'invert(100%)' :
-                      previewClip.filter === 'blur' ? 'blur(10px)' : ''
-                    }`
-                  }}
+                  initial={{ opacity: 1 }}
+                  animate={{ opacity: isProgramOff ? 0 : 1 }}
+                  transition={{ duration: 2.5, ease: "easeInOut" }}
+                  className="w-full h-full flex items-center justify-center relative"
                 >
-                  {previewClip.type === 'video' ? (
-                    <video 
-                      ref={previewVideoRef}
-                      src={previewClip.url} 
-                      className="w-full h-full object-contain" 
-                      autoPlay 
-                      muted={false}
-                      loop={isPlaylist ? false : true}
-                      playsInline
-                      crossOrigin="anonymous"
+                  {(busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) && (
+                    <VideoLayer 
+                      key="bus-A"
+                      clip={busAClip}
+                      volume={volume}
+                      masterVolume={masterVolume}
+                      opacity={transitionType === 'fade' ? audioOpacityA : (busAClip.opacity || 1) * (busAClip.master || 1)}
+                      faderOpacity={audioOpacityA}
+                      isProgram={crossfaderValue === 0}
+                      crossfaderValue={crossfaderValue}
+                      transitionType={transitionType}
+                      isTransmitting={isTransmitting}
+                      onProgressUpdate={onProgressUpdate}
+                      onLevelChange={onLevelChange}
+                      onEnded={onEnded}
                     />
-                  ) : (
-                    <img src={previewClip.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                   )}
+                  {(busBClip && crossfaderValue !== undefined && crossfaderValue > 0) && (
+                    <VideoLayer 
+                      key="bus-B"
+                      clip={busBClip}
+                      volume={volume}
+                      masterVolume={masterVolume}
+                      opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
+                      style={{ clipPath: wipeTransform }}
+                      faderOpacity={audioOpacityB}
+                      isProgram={crossfaderValue === 100}
+                      crossfaderValue={crossfaderValue}
+                      transitionType={transitionType}
+                      isTransmitting={isTransmitting}
+                      onProgressUpdate={onProgressUpdate}
+                      onEnded={onEnded}
+                    />
+                  )}
+                  
+                  {/* Layer Rendering - Multi-layer mixing */}
+                  {layers.filter(l => l.isVisible && (layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id])).map((l, index) => {
+                    const activeClip = l.activeClipId ? clips?.find(c => c.id === l.activeClipId) : null;
+                    if (!activeClip) return null;
+                    return (
+                      <div 
+                        key={l.id} 
+                        className="absolute inset-0 pointer-events-none" 
+                        style={{ 
+                          opacity: l.opacity,
+                          zIndex: (layers.length - index) + 10,
+                        }}
+                      >
+                         <svg width="0" height="0" className="absolute">
+                          <filter id={`rgbLayer-${l.id}`} colorInterpolationFilters="sRGB">
+                            <feColorMatrix 
+                              type="matrix" 
+                              values={`${l.colorBalance.r} 0 0 0 0
+                                      0 ${l.colorBalance.g} 0 0 0
+                                      0 0 ${l.colorBalance.b} 0 0
+                                      0 0 0 1 0`} 
+                            />
+                          </filter>
+                        </svg>
+                        <div 
+                          className="w-full h-full"
+                          style={{
+                            filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayer-${l.id})`,
+                            transform: `rotate(${l.rotation}deg)`
+                          }}
+                        >
+                          <VideoLayer 
+                            clip={activeClip}
+                            volume={l.muted ? 0 : volume}
+                            masterVolume={masterVolume}
+                            opacity={1}
+                            isProgram={true}
+                            isTransmitting={isTransmitting}
+                            onProgressUpdate={onProgressUpdate}
+                            onEnded={() => onLayerEnded?.(l.id)}
+                            loopOverride={l.playbackMode === 'single'}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <AnimatePresence>
+                    {pipLayers?.filter(p => ((isProgram && (p.isActive || p.showInPreview)) && (p.targetOutputId === activeOutputId || (!p.targetOutputId && activeOutputId === '1') || p.targetOutputId === 'program')) || (!isProgram && p.showInPreview && (p.targetOutputId === activeOutputId || (!p.targetOutputId && activeOutputId === '1') || p.targetOutputId === 'program'))).map(pip => (
+                      <motion.div
+                        key={pip.id}
+                        className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-white/20' : 'border-none'}`}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: pip.opacity }}
+                        exit={{ opacity: 0 }}
+                        style={{ 
+                          zIndex: 100,
+                          left: `${(pip.x / 1920) * 100}%`,
+                          top: `${(pip.y / 1080) * 100}%`,
+                          width: `${(pip.width / 1920) * 100}%`,
+                          height: `${(pip.height / 1080) * 100}%`,
+                          borderRadius: 0
+                        }}
+                      >
+                        {pip.clipId && clips?.find(c => c.id === pip.clipId) && (
+                          clips.find(c => c.id === pip.clipId)!.type === 'video' ? (
+                            <video 
+                              src={clips.find(c => c.id === pip.clipId)!.url} 
+                              autoPlay 
+                              muted 
+                              loop 
+                              className="w-full h-full object-fill" 
+                            />
+                          ) : clips.find(c => c.id === pip.clipId)!.type === 'document' ? (
+                            <DocumentLayer clip={clips.find(c => c.id === pip.clipId)!} onUpdateClip={onUpdateClip} />
+                          ) : (
+                            <img 
+                              src={clips.find(c => c.id === pip.clipId)!.url} 
+                              className="w-full h-full object-fill" 
+                              referrerPolicy="no-referrer"
+                            />
+                          )
+                        )}
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
                 </motion.div>
+              ) : (
+                <div className={`w-full h-full ${settings?.showBackground ? 'bg-transparent' : 'bg-[#050505]'} flex items-center justify-center`}>
+                   {!settings?.showBackground && (
+                     <div className="flex flex-col items-center gap-4 opacity-10">
+                        <MonitorIcon size={120} strokeWidth={1} className="text-obs-muted" />
+                        <span className="text-[14px] font-black uppercase tracking-[0.6em] text-obs-muted">NO SIGNAL</span>
+                     </div>
+                   )}
+                </div>
               )}
-            </AnimatePresence>
-          </div>
-          
-          {!activeClip && (!previewClip || !isProgram) && (
-            <div className="flex flex-col items-center gap-2 text-obs-muted">
-              <MonitorIcon size={48} strokeWidth={1} />
-              <span className="text-[10px] uppercase tracking-[0.2em] font-bold">Sin Señal</span>
+             </div>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="w-full h-full relative flex items-center justify-center">
+            {activeClip ? (
+              activeClip.type === 'video' ? (
+                <video 
+                  ref={videoRef}
+                  src={activeClip.url} 
+                  className={`w-full h-full ${imageFit === 'fill' ? 'object-fill' : 'object-cover'}`}
+                  autoPlay 
+                  muted={true}
+                  loop={activeClip.loop !== false} 
+                  playsInline
+                  onEnded={() => onEnded?.()}
+                  onLoadedMetadata={() => {
+                    // Start VU meter reporting when metadata is loaded
+                    const interval = setInterval(() => {
+                      if (!videoRef.current || videoRef.current.paused) {
+                        clearInterval(interval);
+                        onLevelChange?.(0);
+                        return;
+                      }
+                      // Simulate a more realistic, fluctuating VU signal
+                      const peak = 0.5 + Math.random() * 0.45;
+                      onLevelChange?.(peak * volume);
+                    }, 100);
+                  }}
+                  crossOrigin="anonymous"
+                />
+              ) : activeClip.type === 'document' ? (
+                <DocumentLayer clip={activeClip} onUpdateClip={onUpdateClip} />
+              ) : (
+                <img src={activeClip.url} alt={activeClip.name} className={`w-full h-full ${imageFit === 'fill' ? 'object-fill' : 'object-cover'}`} referrerPolicy="no-referrer" />
+              )
+            ) : (
+              <div className="flex flex-col items-center gap-4 opacity-10">
+                <MonitorIcon size={120} strokeWidth={1} className="text-obs-muted" />
+                <span className="text-[14px] font-black uppercase tracking-[0.6em] text-obs-muted">NO SIGNAL</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Slide Controls for Program/Preview */}
+        {!hideOverlays && activeClip?.type === 'document' && onUpdateClip && (
+          <div className="absolute bottom-1.5 left-1.5 z-30 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2 py-1 rounded border border-white/10 shadow-lg">
+            <button 
+              onClick={() => onUpdateClip(activeClip.id, { currentPage: Math.max(1, (activeClip.currentPage || 1) - 1) })}
+              className="p-1 hover:bg-obs-accent hover:text-white text-obs-text rounded transition-colors"
+              title="Anterior diapositiva"
+            >
+              <ChevronLeft size={16} strokeWidth={3} />
+            </button>
+            <div className="flex flex-col items-center min-w-[24px]">
+              <span className="text-[7px] text-obs-muted font-black uppercase tracking-tighter leading-none mb-0.5">PAGE</span>
+              <span className="text-[11px] font-mono font-bold text-obs-accent leading-none">
+                {activeClip.currentPage || 1}{activeClip.totalPages ? `/${activeClip.totalPages}` : ''}
+              </span>
+            </div>
+            <button 
+              onClick={() => onUpdateClip(activeClip.id, { currentPage: Math.min((activeClip.currentPage || 1) + 1, activeClip.totalPages || Infinity) })}
+              className="p-1 hover:bg-obs-accent hover:text-white text-obs-text rounded transition-colors"
+              title="Siguiente diapositiva"
+            >
+              <ChevronRight size={16} strokeWidth={3} />
+            </button>
+          </div>
+        )}
+
+        {/* Status Label at Bottom Right */}
+        {!hideOverlays && (
+          <div className="absolute bottom-1.5 right-1.5 z-20 pointer-events-none">
+            <div 
+              className={`px-1.5 py-0.5 rounded-sm bg-black/60 backdrop-blur-md border ${isActive ? 'border-red-500/50 text-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]' : 'border-white/10 text-obs-muted'} text-[7px] font-black uppercase tracking-widest`}
+              style={!isActive && accentColor ? { color: accentColor, borderColor: `${accentColor}33` } : {}}
+            >
+              {isActive ? 'LIVE' : 'STANDBY'}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -957,38 +1288,147 @@ const PixelMapModal = ({
   );
 };
 
-const VideoLayer = ({ clip, volume, opacity, isProgram, crossfaderValue, transitionType, onTimeUpdate, startTime }: { 
+const DocumentLayer = ({ clip, onUpdateClip }: { clip: any, onUpdateClip?: (id: string, updates: any) => void }) => {
+  const isPdf = clip.name.toLowerCase().endsWith('.pdf');
+  const currentPage = clip.currentPage || 1;
+
+  if (isPdf) {
+    return (
+      <div className="w-full h-full relative group bg-black overflow-hidden flex items-center justify-center pointer-events-none">
+        <PDFRenderer 
+          url={clip.url} 
+          pageNumber={currentPage} 
+          onLoadSuccess={(totalPages) => {
+            if (clip.totalPages !== totalPages) {
+              onUpdateClip?.(clip.id, { totalPages });
+            }
+          }}
+        />
+        <div className="absolute inset-0 pointer-events-none border-4 border-transparent group-hover:border-obs-accent/20 transition-all z-10" />
+      </div>
+    );
+  }
+  
+  return (
+    <div className="w-full h-full flex items-center justify-center bg-obs-surface text-obs-muted uppercase text-[10px] font-bold">
+      Documento no soportado
+    </div>
+  );
+};
+
+const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip }: { 
   clip: any, 
   volume: number, 
+  masterVolume?: number,
   opacity: number, 
+  faderOpacity?: number,
   isProgram: boolean, 
   crossfaderValue?: number,
-  transitionType?: 'fade' | 'wipe' | 'slide',
+  transitionType?: 'fade' | 'wipe' | 'slide' | 'cut',
   onTimeUpdate?: (time: number) => void,
-  startTime?: number
+  onProgressUpdate?: (current: number, total: number) => void,
+  onLevelChange?: (level: number) => void,
+  onEnded?: () => void,
+  startTime?: number,
+  loopOverride?: boolean,
+  isTransmitting?: boolean,
+  style?: React.CSSProperties,
+  onUpdateClip?: (id: string, updates: any) => void
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>('');
+  const onEndedRef = useRef(onEnded);
+  
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
+
   const filterId = useMemo(() => `filter-${clip.id}-${Math.random().toString(36).substr(2, 9)}`, [clip.id]);
+
+  const audioLevel = useAudioLevel(videoRef, clip.type === 'video', 1);
+
+  useEffect(() => {
+    onLevelChange?.(audioLevel);
+  }, [audioLevel, onLevelChange]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (video && clip.type === 'video') {
-      // If src changed, check for startTime
-      if (lastSrc.current !== clip.url && startTime !== undefined) {
-        video.currentTime = startTime;
-      }
-      lastSrc.current = clip.url;
+      const handleTimeUpdate = () => {
+        onTimeUpdate?.(video.currentTime);
+        onProgressUpdate?.(video.currentTime, video.duration || 0);
+      };
+      
+      video.addEventListener('timeupdate', handleTimeUpdate);
+      
+      const handleEnded = () => {
+        console.log("Video ended:", clip.id);
+        onEndedRef.current?.();
+      };
+      video.addEventListener('ended', handleEnded);
+      
+      if (lastSrc.current !== clip.url) {
+        console.log("Changing src for", clip.id, clip.url);
+        video.src = clip.url;
+        lastSrc.current = clip.url;
 
-      video.volume = (volume || 0) * (clip.volume !== undefined ? clip.volume : 1);
-      video.playbackRate = clip.speed || 1;
-      if (clip.isPlaying !== false) {
-        video.play().catch(() => {});
+        // One-time initialization on source change
+        const handleReady = () => {
+          if (startTime !== undefined) {
+            video.currentTime = startTime;
+          } else if (clip.currentTime !== undefined) {
+            video.currentTime = clip.currentTime;
+          }
+          if (clip.isPlaying !== false) {
+            video.play().catch(() => {});
+          }
+          video.removeEventListener('canplay', handleReady);
+        };
+        video.addEventListener('canplay', handleReady);
       } else {
-        video.pause();
+        if (clip.isPlaying !== false) {
+          video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+      }
+      
+      return () => {
+         video.removeEventListener('timeupdate', handleTimeUpdate);
+         video.removeEventListener('ended', handleEnded);
+      };
+    }
+  }, [clip.id, clip.url, clip.isPlaying]);
+
+  // Audio handling
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && clip.type === 'video') {
+      const clipBaseVolume = clip.volume !== undefined ? clip.volume : 1;
+      const targetAudioOpacity = faderOpacity !== undefined ? faderOpacity : (opacity || 1);
+      
+      // combinedVolume = ProgramFader * MasterFader * TransitionFader * ClipTrim
+      const finalVolume = Math.max(0, Math.min(1, volume * masterVolume * targetAudioOpacity * clipBaseVolume));
+      
+      video.volume = finalVolume;
+      video.muted = !isTransmitting || finalVolume <= 0;
+    }
+  }, [volume, masterVolume, opacity, faderOpacity, isTransmitting, clip.volume, clip.id, clip.url]);
+
+  // Speed and sync - BE CAREFUL with sync to prevent rebound
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && clip.type === 'video' && video.readyState >= 2) {
+      video.playbackRate = clip.speed || 1;
+      
+      // Precision sync if needed - avoid oscillation by using a wider deadband
+      const diff = Math.abs(video.currentTime - (clip.currentTime || 0));
+      if (clip.currentTime !== undefined && diff > 1.2 && !isProgram) { 
+        // Only force sync on Preview to avoid jumps on Program
+        video.currentTime = clip.currentTime;
       }
     }
-  }, [clip.id, clip.url, clip.volume, clip.speed, volume, clip.isPlaying, startTime]);
+  }, [clip.speed, clip.currentTime, clip.id]);
 
   const colorBalance = clip.colorBalance || { r: 1, g: 1, b: 1 };
   const brightness = clip.brightness ?? 1;
@@ -1007,14 +1447,15 @@ const VideoLayer = ({ clip, volume, opacity, isProgram, crossfaderValue, transit
            clip.mask === 'diamond' ? 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' : 'none';
   }, [clip.mask, isProgram, transitionType, crossfaderValue]);
 
-  const xOffset = useMemo(() => {
+  const xOffsetPercentage = useMemo(() => {
+    let baseOffset = clip.transform.x || 0;
     if (isProgram && transitionType === 'slide' && crossfaderValue !== undefined) {
-      return clip.transform.x - crossfaderValue;
+      return `calc(${baseOffset}% - ${crossfaderValue}%)`;
     }
     if (!isProgram && transitionType === 'slide' && crossfaderValue !== undefined) {
-      return clip.transform.x + (100 - crossfaderValue);
+      return `calc(${baseOffset}% + ${100 - crossfaderValue}%)`;
     }
-    return clip.transform.x;
+    return `${baseOffset}%`;
   }, [clip.transform.x, isProgram, transitionType, crossfaderValue]);
 
   return (
@@ -1034,9 +1475,9 @@ const VideoLayer = ({ clip, volume, opacity, isProgram, crossfaderValue, transit
         key={clip.id}
         initial={{ opacity: 0 }}
         animate={{ 
-          opacity: opacity,
-          x: xOffset,
-          y: clip.transform.y,
+          opacity: opacity * (faderOpacity !== undefined ? faderOpacity : 1),
+          x: xOffsetPercentage,
+          y: `${clip.transform.y}%`,
           scaleX: clip.transform.scaleW,
           scaleY: clip.transform.scaleH,
           rotate: clip.transform.rotation,
@@ -1052,57 +1493,56 @@ const VideoLayer = ({ clip, volume, opacity, isProgram, crossfaderValue, transit
             clip.filter === 'sepia' ? 'sepia(100%)' :
             clip.filter === 'invert' ? 'invert(100%)' :
             clip.filter === 'blur' ? 'blur(10px)' : ''
-          }`
+          }`,
+          ...style
         }}
       >
         {clip.type === 'video' ? (
-          <video 
-            ref={videoRef}
-            src={clip.url} 
-            className="w-full h-full object-contain" 
-            autoPlay 
-            muted={false}
-            loop={clip.loop !== false} 
-            playsInline
-            crossOrigin="anonymous"
-            onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
-          />
+            <video 
+              ref={videoRef}
+              src={clip.url} 
+              className="w-full h-full object-cover" 
+              autoPlay 
+              muted={true}
+              loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
+              playsInline
+              crossOrigin="anonymous"
+              onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
+            />
+        ) : clip.type === 'document' ? (
+          <DocumentLayer clip={clip} onUpdateClip={onUpdateClip} />
         ) : (
-          <img src={clip.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+          <img src={clip.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
         )}
       </motion.div>
     </>
   );
 };
 
-const OutputView = () => {
+const OutputView = React.memo(() => {
   const [state, setState] = useState<any>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasTriedFullscreen = useRef(false);
+  const lastStateRef = useRef<any>(null);
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
-    console.log("OutputView: Montado y esperando señal...");
-    document.title = "LUMINA OUTPUT - PROGRAM";
+    console.log("OutputView: Montado.");
+    document.title = "LUMINA OUTPUT"; 
+    
     const channel = new BroadcastChannel('lumina-output');
+    channelRef.current = channel;
     
     const handleMessage = (event: MessageEvent) => {
-      console.log("OutputView: Mensaje recibido:", event.data.type);
       if (event.data.type === 'SYNC_STATE') {
-        const newState = event.data.payload;
-        if (newState.isLive && newState.isTransmitting) {
-          setState(newState);
-        } else {
-          setState(null);
-        }
+        setState(event.data.payload);
       }
     };
     
     channel.addEventListener('message', handleMessage);
-    
-    // Request initial state
     channel.postMessage({ type: 'REQUEST_SYNC' });
 
-    // Monitor fullscreen status
     const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handleFsChange);
 
@@ -1113,16 +1553,14 @@ const OutputView = () => {
     };
   }, []);
 
-  // Attempt automatic fullscreen when state arrives
+  // Smarter auto-fullscreen: Only try once on first state arrival
   useEffect(() => {
-    const tryFullscreen = async () => {
-      if (state && !isFullscreen) {
+    if (state && !isFullscreen && !hasTriedFullscreen.current) {
+      const tryFullscreen = async () => {
         try {
-          // If the Window Management API is available, we can try to find the screen we are on
           if ('getScreenDetails' in window) {
             // @ts-ignore
             const details = await window.getScreenDetails();
-            // Try to match the current window's position to a known screen
             const currentScreen = details.screens.find((s: any) => 
               window.screenX >= s.left && window.screenX < s.left + s.width &&
               window.screenY >= s.top && window.screenY < s.top + s.height
@@ -1131,33 +1569,25 @@ const OutputView = () => {
             if (currentScreen) {
               // @ts-ignore
               await document.documentElement.requestFullscreen({ screen: currentScreen });
+              hasTriedFullscreen.current = true;
               return;
             }
           }
-          
-          // Fallback
           await document.documentElement.requestFullscreen();
+          hasTriedFullscreen.current = true;
         } catch (err) {
-          console.warn('Auto-fullscreen bloqueado o fallido:', err);
+          console.warn('Auto-fullscreen bloqueado:', err);
         }
-      }
-    };
+      };
 
-    tryFullscreen();
-  }, [state, isFullscreen]);
+      tryFullscreen();
+    }
+  }, [!!state, isFullscreen]);
 
   if (error) {
     return (
-      <div className="bg-red-900 h-screen w-screen flex flex-col items-center justify-center text-white font-mono text-xs p-8 gap-4">
-        <AlertTriangle size={48} className="text-yellow-400" />
-        <h2 className="text-xl font-bold uppercase tracking-widest">Error Crítico en Salida</h2>
-        <p className="opacity-70 max-w-md text-center bg-black/30 p-4 rounded border border-white/10">{error}</p>
-        <button 
-          onClick={() => window.location.reload()}
-          className="mt-4 bg-white/10 hover:bg-white/20 px-6 py-2 rounded border border-white/20 uppercase font-bold tracking-widest transition-all"
-        >
-          Reiniciar Ventana
-        </button>
+      <div className="bg-black h-screen w-screen flex flex-col items-center justify-center text-red-500 font-mono text-[10px] p-8 uppercase tracking-widest">
+        <span>Error de Salida</span>
       </div>
     );
   }
@@ -1165,59 +1595,123 @@ const OutputView = () => {
   if (!state) {
     return (
       <div 
-        className="bg-black h-screen w-screen flex flex-col items-center justify-center cursor-none group relative"
+        className="bg-black h-screen w-screen cursor-none"
         onClick={() => {
           if (!document.fullscreenElement) {
             document.documentElement.requestFullscreen().catch(() => {});
-          } else {
-            document.exitFullscreen().catch(() => {});
           }
         }}
-      >
-        {!isFullscreen && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-white/20 uppercase tracking-[0.4em] font-black pointer-events-none group-hover:text-white/40 transition-colors">
-            <span className="text-[20px]">Esperando Señal</span>
-            <span className="text-[10px] mt-2 tracking-widest opacity-50">Cerrar: Esc / Pantalla Completa: Clic</span>
-          </div>
-        )}
-      </div>
+      />
     );
   }
-
+  
   try {
-    const { programClipId, previewClipId, clips, externalScreenSettings, programVolume, crossfaderValue, transitionType, isLive } = state;
-    const settings = externalScreenSettings;
+    const urlParams = new URLSearchParams(window.location.search);
+    const screenId = urlParams.get('screenId');
     
-    // --- Bus A/B Logic ---
-    const busAClip = clips.find((c: any) => c.id === (crossfaderValue === 0 ? programClipId : previewClipId));
-    const busBClip = clips.find((c: any) => c.id === (crossfaderValue === 100 ? programClipId : previewClipId));
+    const { programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates, outputs, clips, allScreenSettings, crossfaderValue, isLive, isTransmitting, programVolume, masterVolume, transitionType } = state;
     
+    // Find if this screen is mapped to a specific Lumina Output
+    const mappedOutput = outputs?.find((o: any) => o.physicalScreenId === screenId);
+    const mappedProgramClipId = (mappedOutput && outputPrograms) ? outputPrograms[mappedOutput.id] : programClipId;
+    const mappedTargetClipId = (mappedOutput && outputTransitionTargets) ? outputTransitionTargets[mappedOutput.id] : previewClipId;
+    const mappedOffState = (mappedOutput && outputOffStates) ? outputOffStates[mappedOutput.id] : false;
+
+    const settings = (allScreenSettings && screenId && allScreenSettings[screenId]) 
+      ? allScreenSettings[screenId] 
+      : (state.externalScreenSettings || {
+          brightness: 1, contrast: 1, saturation: 1, opacity: 1, x: 0, y: 0, rotation: 0,
+          scalingW: 1, scalingH: 1, colorBalance: { r: 1, g: 1, b: 1 },
+          bgScalingW: 100, bgScalingH: 100
+        });
+    
+    const isContentActive = isLive && isTransmitting;
+    const busAClip = clips.find((c: any) => c.id === mappedProgramClipId);
+    
+    // Only use busB if this output is a target of the current transition, or if we're doing a global take
+    const isTarget = (mappedOutput && outputTransitionTargets && outputTransitionTargets[mappedOutput.id]);
+    const busBClip = (isTarget || !Object.keys(outputTransitionTargets || {}).length) 
+      ? clips.find((c: any) => c.id === mappedTargetClipId) 
+      : null;
+    
+    // In OutputView, we only show content if it's active.
+    // Transition handles the mix.
+    const hasActiveContent = isContentActive && (busAClip || (crossfaderValue > 0 && busBClip)) && !mappedOffState;
+
+    const audioOpacityA = (() => {
+      if (!busAClip) return 0;
+      if (transitionType === 'cut') return mappedOffState ? 0 : 1;
+      const base = (1 - crossfaderValue / 100);
+      return mappedOffState ? 0 : base;
+    })();
+    const audioOpacityB = (() => {
+      if (!busBClip) return 0;
+      if (transitionType === 'cut') return 0;
+      const base = (crossfaderValue / 100);
+      return mappedOffState ? 0 : base;
+    })();
+
+    const wipeTransformOut = (() => {
+      if (transitionType !== 'wipe') return undefined;
+      return `inset(0 ${100 - crossfaderValue}% 0 0)`;
+    })();
+
     return (
       <div 
-        className="bg-black h-screen w-screen overflow-hidden flex items-center justify-center group relative cursor-none"
-        style={{
-          filter: `brightness(${settings.brightness}) contrast(${settings.contrast}) saturate(${settings.saturation})`,
-          backgroundColor: '#000'
-        }}
+        className="bg-black h-screen w-screen overflow-hidden flex items-center justify-center relative cursor-none"
         onClick={() => {
           if (!document.fullscreenElement) {
             document.documentElement.requestFullscreen().catch(() => {});
-          } else {
-            document.exitFullscreen().catch(() => {});
           }
         }}
       >
+        {/* Background Layer - Always rendered if enabled */}
+        {settings.showBackground && settings.backgroundImage && (
+          <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center bg-black">
+            <img 
+              src={settings.backgroundImage} 
+              className="absolute pointer-events-none" 
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'fill',
+                top: '50%',
+                left: '50%',
+                transform: `translate(-50%, -50%) scale(${(settings.bgScalingW ?? 100) / 100}, ${(settings.bgScalingH ?? 100) / 100})`,
+                display: 'block'
+              }}
+              referrerPolicy="no-referrer" 
+            />
+          </div>
+        )}
+
+            {/* Fullscreen Guard Overlay - Invisible Click Catcher */}
+            {!isFullscreen && (
+              <div 
+                className="fixed inset-0 z-[1000] bg-black/10 cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  document.documentElement.requestFullscreen().catch(() => {});
+                }}
+              />
+            )}
+
         <div 
-          className="relative bg-black overflow-hidden flex items-center justify-center"
+          className="relative overflow-hidden flex items-center justify-center z-10"
           style={{ 
             width: settings.width ? `${settings.width}px` : '100%', 
             height: settings.height ? `${settings.height}px` : '100%',
+            opacity: settings.opacity ?? 1,
+            // If background is showing and we have no content, make container transparent
+            backgroundColor: (settings.showBackground && settings.backgroundImage && !hasActiveContent) ? 'transparent' : '#000',
+            transform: `translate(${settings.x ?? 0}px, ${settings.y ?? 0}px) rotate(${settings.rotation ?? 0}deg)`
           }}
         >
           <div 
             className="absolute inset-0 flex items-center justify-center"
             style={{
-              transform: `scale(${settings.scalingW ?? 1}, ${settings.scalingH ?? 1})`
+              transform: `scale(${settings.scalingW ?? 1}, ${settings.scalingH ?? 1})`,
+              filter: `brightness(${settings.brightness ?? 1}) contrast(${settings.contrast ?? 1}) saturate(${settings.saturation ?? 1}) url(#rgbBalance)`
             }}
           >
             {/* SVG Filter for RGB Balance */}
@@ -1225,50 +1719,148 @@ const OutputView = () => {
               <filter id="rgbBalance">
                 <feColorMatrix 
                   type="matrix" 
-                  values={`${settings.colorBalance.r} 0 0 0 0
-                          0 ${settings.colorBalance.g} 0 0 0
-                          0 0 ${settings.colorBalance.b} 0 0
+                  values={`${settings.colorBalance?.r ?? 1} 0 0 0 0
+                          0 ${settings.colorBalance?.g ?? 1} 0 0 0
+                          0 0 ${settings.colorBalance?.b ?? 1} 0 0
                           0 0 0 1 0`} 
                 />
               </filter>
             </svg>
-
-            {isLive ? (
-              <div 
+ 
+            {isLive && isTransmitting ? (
+              <motion.div 
+                initial={{ opacity: 1 }}
+                animate={{ opacity: mappedOffState ? 0 : 1 }}
+                transition={{ duration: 1.5, ease: "easeInOut" }}
                 className="w-full h-full flex items-center justify-center relative"
-                style={{
-                  transform: `scale(${settings.scalingW}, ${settings.scalingH})`,
-                  filter: `brightness(${settings.brightness ?? 1}) contrast(${settings.contrast ?? 1}) saturate(${settings.saturation ?? 1}) url(#rgbBalance)`
-                }}
               >
                 {/* Bus A Layer */}
                 {busAClip && (
                   <VideoLayer 
-                    key={`bus-A-${busAClip.id}`}
+                    key="bus-A"
                     clip={busAClip}
                     volume={programVolume}
-                    opacity={(busAClip.opacity || 1) * (busAClip.master || 1) * (transitionType === 'fade' ? (crossfaderValue === 0 ? 1 : (100 - crossfaderValue) / 100) : 1)}
-                    isProgram={crossfaderValue === 0}
+                    masterVolume={masterVolume}
+                    opacity={transitionType === 'fade' ? audioOpacityA : (busAClip.opacity || 1) * (busAClip.master || 1)}
+                    faderOpacity={audioOpacityA}
+                    isProgram={true}
                     crossfaderValue={crossfaderValue}
                     transitionType={transitionType}
+                    isTransmitting={isTransmitting}
+                    onEnded={() => {
+                       channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busAClip.id } });
+                    }}
                   />
                 )}
-
+ 
                 {/* Bus B Layer */}
                 {busBClip && (
                   <VideoLayer 
-                    key={`bus-B-${busBClip.id}`}
+                    key="bus-B"
                     clip={busBClip}
                     volume={programVolume}
-                    opacity={(busBClip.opacity || 1) * (busBClip.master || 1) * (transitionType === 'fade' ? (crossfaderValue === 100 ? 1 : crossfaderValue / 100) : 1)}
-                    isProgram={crossfaderValue === 100}
+                    masterVolume={masterVolume}
+                    opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
+                    style={{ clipPath: wipeTransformOut }}
+                    faderOpacity={audioOpacityB}
+                    isProgram={false}
                     crossfaderValue={crossfaderValue}
                     transitionType={transitionType}
+                    isTransmitting={isTransmitting}
+                    onEnded={() => {
+                       channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busBClip.id } });
+                    }}
                   />
                 )}
-              </div>
+
+                {/* Layer Rendering - Multi-layer mixing */}
+                {state.layers && state.layers.filter((l: any) => l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
+                  const activeClip = l.activeClipId ? (state.clips || []).find((c: any) => c.id === l.activeClipId) : null;
+                  if (!activeClip) return null;
+                  return (
+                    <div 
+                      key={l.id} 
+                      className="absolute inset-0 pointer-events-none" 
+                      style={{ 
+                        opacity: l.opacity,
+                        zIndex: (state.layers.length - index) + 10,
+                      }}
+                    >
+                      <svg width="0" height="0" className="absolute">
+                        <filter id={`rgbLayerOutput-${l.id}`} colorInterpolationFilters="sRGB">
+                          <feColorMatrix 
+                            type="matrix" 
+                            values={`${l.colorBalance.r} 0 0 0 0
+                                    0 ${l.colorBalance.g} 0 0 0
+                                    0 0 ${l.colorBalance.b} 0 0
+                                    0 0 0 1 0`} 
+                          />
+                        </filter>
+                      </svg>
+                      <div 
+                        className="w-full h-full"
+                        style={{
+                          filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayerOutput-${l.id})`,
+                          transform: `rotate(${l.rotation}deg)`
+                        }}
+                      >
+                        <VideoLayer 
+                          clip={activeClip}
+                          volume={l.muted ? 0 : programVolume}
+                          masterVolume={masterVolume}
+                          opacity={1}
+                          isProgram={true}
+                          isTransmitting={isTransmitting}
+                          onEnded={() => {
+                             channelRef.current?.postMessage({ type: 'LAYER_CLIP_ENDED', payload: { layerId: l.id } });
+                          }}
+                          loopOverride={l.playbackMode === 'single'}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <AnimatePresence>
+                  {state.pipLayers && state.pipLayers.filter((p: any) => p.isActive && (p.targetOutputId === mappedOutput?.id || (!p.targetOutputId && mappedOutput?.id === '1') || p.targetOutputId === 'program')).map((pip: any) => (
+                    <motion.div
+                      key={pip.id}
+                      className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-white/20' : ''}`}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: pip.opacity }}
+                      exit={{ opacity: 0 }}
+                      style={{ 
+                        zIndex: 100,
+                        left: `${(pip.x / 1920) * 100}%`,
+                        top: `${(pip.y / 1080) * 100}%`,
+                        width: `${(pip.width / 1920) * 100}%`,
+                        height: `${(pip.height / 1080) * 100}%`,
+                        borderRadius: 0
+                      }}
+                    >
+                      {pip.clipId && (state.clips || []).find((c: any) => c.id === pip.clipId) && (
+                        (state.clips.find((c: any) => c.id === pip.clipId)!).type === 'video' ? (
+                          <video 
+                            src={state.clips.find((c: any) => c.id === pip.clipId)!.url} 
+                            autoPlay 
+                            muted 
+                            loop 
+                            className="w-full h-full object-fill" 
+                          />
+                        ) : (
+                          <img 
+                            src={state.clips.find((c: any) => c.id === pip.clipId)!.url} 
+                            className="w-full h-full object-fill" 
+                            referrerPolicy="no-referrer"
+                          />
+                        )
+                      )}
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </motion.div>
             ) : (
-              <div className="w-full h-full bg-black" />
+              <div className={`w-full h-full ${settings.showBackground ? 'bg-transparent' : 'bg-black'}`} />
             )}
           </div>
         </div>
@@ -1279,31 +1871,55 @@ const OutputView = () => {
     setError(e.message);
     return null;
   }
-};
+});
 
 const Inspector = React.memo(({ 
   selectedItem,
   selectedItemType,
   externalScreenSettings,
   externalScreens,
+  selectedScreenId,
   hasDetailedScreens,
   isIframe,
+  previews,
+  setPreviews,
+  outputs,
   onUpdate, 
   onUpdateExternalScreen,
+  onSelectedScreenIdChange,
   onLaunchOutput,
   onDetectScreens,
+  onSync,
+  onUpdateLayer,
+  onUpdatePiP,
+  onAddPiP,
+  onSelectPiP,
+  onUpdateClip,
+  clips,
   isDarkMode 
 }: { 
-  selectedItem: Clip | Playlist | null, 
-  selectedItemType: 'clip' | 'playlist' | 'program' | null,
-  externalScreenSettings: any,
+  selectedItem: Clip | Playlist | any | null, 
+  selectedItemType: 'clip' | 'playlist' | 'program' | 'preview' | 'layer' | 'pip' | 'pipManager' | null,
+  externalScreenSettings: ExternalScreenSettings,
   externalScreens: Screen[],
+  selectedScreenId: string | null,
   hasDetailedScreens: boolean,
   isIframe: boolean,
+  previews: any[],
+  setPreviews: React.Dispatch<React.SetStateAction<any[]>>,
+  outputs: any[],
   onUpdate: (id: string, updates: any) => void, 
   onUpdateExternalScreen: (updates: any) => void,
+  onSelectedScreenIdChange: (id: string | null) => void,
   onLaunchOutput: () => void,
   onDetectScreens: () => void,
+  onSync?: () => void,
+  onUpdateLayer: (id: string, updates: Partial<Layer>) => void,
+  onUpdatePiP?: (id: string, updates: Partial<PiPLayer>) => void,
+  onAddPiP?: () => void,
+  onSelectPiP?: (pip: PiPLayer) => void,
+  onUpdateClip?: (id: string, updates: Partial<Clip>) => void,
+  clips?: Clip[],
   isDarkMode: boolean 
 }) => {
   const handleReset = () => {
@@ -1322,9 +1938,19 @@ const Inspector = React.memo(({
         mask: 'none',
         filter: 'none'
       });
+    } else if (selectedItemType === 'layer') {
+      onUpdateLayer(selectedItem.id, {
+        opacity: 1,
+        brightness: 1,
+        contrast: 1,
+        saturation: 1,
+        colorBalance: { r: 1, g: 1, b: 1 },
+        rotation: 0,
+        isVisible: true,
+        muted: true
+      });
     } else if (selectedItemType === 'program') {
       onUpdateExternalScreen({
-        ...externalScreenSettings,
         resolution: '1920x1080',
         width: 1920,
         height: 1080,
@@ -1333,13 +1959,667 @@ const Inspector = React.memo(({
         brightness: 1,
         contrast: 1,
         saturation: 1,
+        opacity: 1,
+        x: 0,
+        y: 0,
+        rotation: 0,
         colorBalance: { r: 1, g: 1, b: 1 }
       });
     }
   };
 
+  if (selectedItemType === 'pipManager') {
+    const pips = selectedItem as PiPLayer[] || [];
+    return (
+      <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
+        <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+          <div className="flex items-center gap-2">
+            <Layers size={12} className="text-obs-accent" />
+            <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest leading-none">PIPs GLOBALES</span>
+          </div>
+          <button 
+            onClick={() => onAddPiP?.()}
+            className="p-1 px-2 text-[9px] font-bold uppercase rounded bg-obs-accent hover:bg-obs-accent/80 text-white transition-colors"
+          >
+            + ADD PIP
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2 custom-scrollbar">
+          {pips.map(layer => (
+            <div key={layer.id} className={`p-2 rounded border transition-all ${layer.isActive ? 'bg-obs-accent/10 border-obs-accent' : 'bg-black/20 border-white/5 hover:border-white/10'}`}>
+              <div className="flex justify-between items-center mb-2">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[9px] font-bold uppercase ${layer.isActive ? 'text-obs-accent' : 'text-obs-muted'}`}>{layer.name}</span>
+                  <button onClick={() => onSelectPiP?.(layer)} className="text-obs-muted hover:text-white transition-colors" title="Editar Propiedades">
+                    <Settings size={10} />
+                  </button>
+                </div>
+                <div className="flex gap-1">
+                  <button 
+                    onClick={() => onUpdatePiP?.(layer.id, { isActive: !layer.isActive })}
+                    className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest transition-all ${layer.isActive ? 'bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.3)]' : 'bg-obs-accent text-white hover:bg-obs-accent/80'}`}
+                  >
+                    {layer.isActive ? 'OFF' : 'LIVE'}
+                  </button>
+                </div>
+              </div>
+              
+              <div className="space-y-1.5">
+                 <div className="flex flex-col gap-0.5">
+                    <label className="text-[8px] text-obs-muted font-bold uppercase">Fuente</label>
+                    <select 
+                      value={layer.clipId || ''}
+                      onChange={(e) => onUpdatePiP?.(layer.id, { clipId: e.target.value || null })}
+                      className="w-full bg-black/40 border border-white/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
+                    >
+                      <option value="">No Source</option>
+                      {(clips || []).map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                 </div>
+
+                 <div className="grid grid-cols-2 gap-1.5">
+                    <div className="flex flex-col gap-0.5">
+                      <label className="text-[8px] text-obs-muted font-bold uppercase">Target Out</label>
+                      <select 
+                        value={layer.targetOutputId || ''}
+                        onChange={(e) => onUpdatePiP?.(layer.id, { targetOutputId: e.target.value || null })}
+                        className="w-full bg-black/40 border border-white/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
+                      >
+                        <option value="">Output 1 (Def)</option>
+                        <option value="program">Todas (Program)</option>
+                        {outputs.map(o => (
+                          <option key={o.id} value={o.id}>Out {o.id}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-end">
+                      <div className="w-full flex items-center justify-between bg-black/20 px-2 py-1. rounded border border-white/5">
+                        <span className="text-[8px] font-bold text-obs-muted uppercase">Prev</span>
+                        <button 
+                          onClick={() => onUpdatePiP?.(layer.id, { showInPreview: !layer.showInPreview })}
+                          className={`w-6 h-3 rounded-full transition-colors relative ${layer.showInPreview ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                        >
+                          <div className={`absolute top-0.5 w-2 h-2 bg-white rounded-full transition-transform ${layer.showInPreview ? 'translate-x-[14px]' : 'translate-x-0.5'}`} />
+                        </button>
+                      </div>
+                    </div>
+                 </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (selectedItemType === 'pip') {
+    const pip = (selectedItem as PiPLayer);
+    return (
+      <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
+        <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                if (onUpdatePiP) {
+                  // I'm dispatching a custom event since we don't have setSelectedItemType
+                  document.dispatchEvent(new CustomEvent('nav-to-pip-manager'));
+                }
+              }}
+              className="p-1 px-2 rounded hover:bg-white/10 text-obs-muted transition-colors"
+              title="Volver"
+            >
+              <ChevronRight size={12} className="rotate-180" />
+            </button>
+            <Layout size={12} className="text-obs-accent" />
+            <div className="flex flex-col">
+              <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest leading-none">PROPIEDADES PIP</span>
+              <span className="text-[9px] text-obs-accent font-bold mt-0.5">{pip.name}</span>
+            </div>
+          </div>
+          <button 
+            onClick={handleReset}
+            className="p-1.5 rounded bg-obs-border hover:bg-obs-accent hover:text-white transition-colors"
+          >
+            <RotateCcw size={12} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 custom-scrollbar">
+          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdatePiP?.(pip.id, { opacity: 1, showFrame: true, showInPreview: false })}>
+            <div className="space-y-4">
+              <PropertyControl 
+                label="Opacidad"
+                value={pip.opacity * 100}
+                displayValue={`${Math.round(pip.opacity * 100)}%`}
+                min={0}
+                max={100}
+                step={1}
+                onChange={(val) => onUpdatePiP?.(pip.id, { opacity: val / 100 })}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+                  <span className="text-[9px] font-bold text-obs-muted uppercase">Mostrar Marco</span>
+                  <button 
+                    onClick={() => onUpdatePiP?.(pip.id, { showFrame: !pip.showFrame })}
+                    className={`w-10 h-5 rounded-full transition-colors relative ${pip.showFrame !== false ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                  >
+                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${pip.showFrame !== false ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+                  <span className="text-[9px] font-bold text-obs-muted uppercase">Preview</span>
+                  <button 
+                    onClick={() => onUpdatePiP?.(pip.id, { showInPreview: !pip.showInPreview })}
+                    className={`w-10 h-5 rounded-full transition-colors relative ${pip.showInPreview ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                  >
+                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${pip.showInPreview ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Posición y Tamaño" defaultOpen={true} onReset={() => onUpdatePiP?.(pip.id, { x: 50, y: 50, width: 400, height: 225 })}>
+            <div className="grid grid-cols-2 gap-3">
+              <PropertyControl 
+                label="Posición X"
+                value={pip.x}
+                displayValue={`${pip.x}px`}
+                min={0}
+                max={1920}
+                step={0.1}
+                onChange={(val) => onUpdatePiP?.(pip.id, { x: val })}
+              />
+              <PropertyControl 
+                label="Posición Y"
+                value={pip.y}
+                displayValue={`${pip.y}px`}
+                min={0}
+                max={1080}
+                step={0.1}
+                onChange={(val) => onUpdatePiP?.(pip.id, { y: val })}
+              />
+              <PropertyControl 
+                label="Ancho"
+                value={pip.width}
+                displayValue={`${pip.width}px`}
+                min={10}
+                max={1920}
+                step={0.1}
+                onChange={(val) => onUpdatePiP?.(pip.id, { width: val })}
+              />
+              <PropertyControl 
+                label="Alto"
+                value={pip.height}
+                displayValue={`${pip.height}px`}
+                min={10}
+                max={1080}
+                step={0.1}
+                onChange={(val) => onUpdatePiP?.(pip.id, { height: val })}
+              />
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Direccionamiento" defaultOpen={true}>
+            <div className="space-y-2">
+               <div className="flex flex-col gap-1">
+                  <label className="text-[8px] text-obs-muted uppercase font-bold">Salida PiP</label>
+                  <div className="grid grid-cols-4 gap-1">
+                    {[null, '1', '2', '3'].map((id) => (
+                      <button
+                        key={id || 'prog'}
+                        onClick={() => onUpdatePiP?.(pip.id, { targetOutputId: id })}
+                        className={`py-1 rounded text-[8px] uppercase font-black tracking-tight border transition-all ${pip.targetOutputId === id ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-surface text-obs-muted border-white/5'}`}
+                      >
+                        {id ? `OUT ${id}` : 'PROG'}
+                      </button>
+                    ))}
+                  </div>
+               </div>
+            </div>
+          </CollapsibleSection>
+        </div>
+        <div className="p-3 border-t border-obs-border">
+          <button 
+            onClick={() => onUpdatePiP?.(pip.id, { isActive: !pip.isActive })}
+            className={`w-full py-2 rounded text-[11px] font-black uppercase tracking-widest transition-all ${pip.isActive ? 'bg-red-600 text-white animate-pulse' : 'bg-obs-accent text-white hover:bg-obs-accent/80'}`}
+          >
+            {pip.isActive ? 'QUITYAR DE PROGRAMA' : 'LANZAR A PROGRAMA'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (selectedItemType === 'preview') {
+    const preview = previews.find(p => p.id === selectedItem?.id);
+    if (!preview) return null;
+
+    return (
+      <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
+        <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+          <div className="flex items-center gap-2">
+            <MonitorIcon size={12} className="text-obs-accent" />
+            <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest text-[#00AAFF]">PROPIEDADES PREVIEW</span>
+          </div>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <div className="space-y-4">
+             <div className="flex flex-col gap-1">
+               <label className="text-[9px] text-obs-muted uppercase font-bold tracking-tighter">Nombre del Preview</label>
+               <input 
+                 type="text"
+                 value={preview.name}
+                 onChange={(e) => setPreviews(prevs => prevs.map(pr => pr.id === preview.id ? { ...pr, name: e.target.value } : pr))}
+                 className="bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] text-obs-text focus:border-obs-accent outline-none font-medium"
+               />
+             </div>
+
+             <CollapsibleSection title="Asignación de Salidas" defaultOpen={true}>
+               <div className="space-y-4">
+                 {outputs.length === 0 ? (
+                   <div className="p-4 bg-obs-accent/10 border border-obs-accent/30 rounded text-[10px] text-obs-accent text-center">
+                     Primero define pantallas en el menú de Programa
+                   </div>
+                 ) : (
+                   <div className="grid grid-cols-4 gap-2">
+                     {outputs.map(out => (
+                       <button 
+                         key={out.id}
+                         onClick={() => {
+                            setPreviews(prevs => prevs.map(pr => 
+                              pr.id === preview.id ? { 
+                                ...pr, 
+                                selectedOutputs: pr.selectedOutputs.includes(out.id) 
+                                  ? pr.selectedOutputs.filter((o: any) => o !== out.id)
+                                  : [...pr.selectedOutputs, out.id]
+                              } : pr
+                            ));
+                         }}
+                         className={`aspect-square rounded font-bold text-xs flex items-center justify-center transition-all border ${preview.selectedOutputs.includes(out.id) ? 'bg-[#00AAFF] text-white border-[#00AAFF] shadow-[0_0_8px_rgba(0,170,255,0.3)]' : 'bg-[#1a1a1a] text-obs-muted border-white/10 hover:border-white/30'}`}
+                       >
+                         {out.id}
+                       </button>
+                     ))}
+                   </div>
+                 )}
+                 <p className="text-[9px] text-obs-muted leading-tight mt-2 italic">
+                   Los números seleccionados indican a qué pantallas se enviará este contenido al pulsar TAKE.
+                 </p>
+               </div>
+             </CollapsibleSection>
+
+             <CollapsibleSection title="Estado Maestro" defaultOpen={true}>
+                <div className="space-y-3">
+                   <div className="flex items-center justify-between bg-[#1a1a1a] p-3 rounded border border-white/10">
+                     <div className="flex flex-col">
+                       <span className="text-[11px] font-bold text-white uppercase">Modo Preparado (LIVE)</span>
+                       <span className="text-[9px] text-obs-muted">Mantener activo para incluir en el TAKE</span>
+                     </div>
+                     <button 
+                       onClick={() => {
+                         setPreviews(prevs => prevs.map(p => 
+                           p.id === preview.id ? { ...p, isLive: !p.isLive } : p
+                         ));
+                       }}
+                       className={`w-12 h-6 rounded-full transition-all relative ${preview.isLive ? 'bg-red-600' : 'bg-gray-600'}`}
+                     >
+                       <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${preview.isLive ? 'left-7' : 'left-1'}`} />
+                     </button>
+                   </div>
+
+                   <div className="flex items-center justify-between bg-[#1a1a1a] p-3 rounded border border-white/10">
+                     <div className="flex flex-col">
+                       <span className="text-[11px] font-bold text-white uppercase">Ocultar Overlays</span>
+                       <span className="text-[9px] text-obs-muted">Ocultar textos de STANDBY y PREVIEW</span>
+                     </div>
+                     <button 
+                       onClick={() => {
+                         setPreviews(prevs => prevs.map(p => 
+                           p.id === preview.id ? { ...p, hideOverlays: !p.hideOverlays } : p
+                         ));
+                       }}
+                       className={`w-12 h-6 rounded-full transition-all relative ${preview.hideOverlays ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                     >
+                       <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${preview.hideOverlays ? 'left-7' : 'left-1'}`} />
+                     </button>
+                   </div>
+
+                   <div className="space-y-2 pt-2">
+                      <label className="text-[9px] text-obs-muted uppercase font-bold tracking-tighter">Color de Acento</label>
+                      <div className="flex gap-2 flex-wrap">
+                         {['#00AAFF', '#FF4444', '#44FF44', '#FFAA00', '#FF00FF', '#FFFFFF'].map(color => (
+                           <button 
+                             key={color}
+                             onClick={() => {
+                               setPreviews(prevs => prevs.map(p => 
+                                 p.id === preview.id ? { ...p, accentColor: color } : p
+                               ));
+                             }}
+                             className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 ${preview.accentColor === color ? 'border-white scale-110 shadow-lg' : 'border-transparent'}`}
+                             style={{ backgroundColor: color }}
+                           />
+                         ))}
+                      </div>
+                   </div>
+                </div>
+             </CollapsibleSection>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (selectedItemType === 'layer') {
+    const layer = (selectedItem as Layer);
+    return (
+      <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
+        <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+          <div className="flex items-center gap-2">
+            <Layers size={12} className="text-obs-accent" />
+            <div className="flex flex-col">
+              <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest leading-none">PROPIEDADES CAPA</span>
+              <span className="text-[9px] text-obs-accent font-bold mt-0.5">{layer.name}</span>
+            </div>
+          </div>
+          <button 
+            onClick={handleReset}
+            className="p-1.5 rounded bg-obs-border hover:bg-obs-accent hover:text-white transition-colors"
+            title="Restablecer Todo"
+          >
+            <RotateCcw size={12} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 custom-scrollbar">
+          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdateLayer(layer.id, { opacity: 1, rotation: 0, transition: 'fade' })}>
+            <div className="space-y-2">
+              <PropertyControl 
+                label="Opacidad"
+                value={layer.opacity * 100}
+                displayValue={`${Math.round(layer.opacity * 100)}%`}
+                min={0}
+                max={100}
+                step={1}
+                onChange={(val) => onUpdateLayer(layer.id, { opacity: val / 100 })}
+              />
+              <PropertyControl 
+                label="Rotación"
+                value={layer.rotation}
+                displayValue={`${layer.rotation}°`}
+                min={0}
+                max={360}
+                step={1}
+                onChange={(val) => onUpdateLayer(layer.id, { rotation: val })}
+              />
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] text-obs-muted uppercase font-bold">Transición Capa</label>
+                <div className="grid grid-cols-3 gap-1">
+                  {['cut', 'fade', 'wipe'].map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => onUpdateLayer(layer.id, { transition: t as any })}
+                      className={`py-1 rounded text-[8px] uppercase font-black tracking-tight border transition-all ${layer.transition === t ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-surface text-obs-muted border-white/5'}`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+                <span className="text-[9px] font-bold text-obs-muted uppercase">Loop Playlist</span>
+                <button 
+                  onClick={() => onUpdateLayer(layer.id, { loop: !(layer.loop !== false) })}
+                  className={`w-10 h-5 rounded-full transition-colors relative ${layer.loop !== false ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${layer.loop !== false ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          {clips.find(c => c.id === layer.activeClipId)?.type === 'document' && (
+            <CollapsibleSection title="CONTROLES DOCUMENTO" defaultOpen={true}>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between bg-black/30 p-4 rounded-lg border border-white/5">
+                  <button 
+                    onClick={() => {
+                      const clip = clips?.find(c => c.id === layer.activeClipId);
+                      if (clip && onUpdateClip) onUpdateClip(clip.id, { currentPage: Math.max(1, (clip.currentPage || 1) - 1) });
+                    }}
+                    className="p-3 bg-obs-surface hover:bg-obs-accent text-obs-text hover:text-white rounded-md transition-all shadow-lg active:scale-95"
+                    title="Anterior"
+                  >
+                    <ChevronLeft size={24} strokeWidth={3} />
+                  </button>
+                  
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-[10px] text-obs-muted font-black uppercase tracking-widest mb-1">PÁGINA</span>
+                    <div className="text-3xl font-mono font-black text-obs-accent tabular-nums bg-obs-bg px-4 py-1 rounded border border-white/5 shadow-inner flex items-baseline gap-1">
+                      {clips?.find(c => c.id === layer.activeClipId)?.currentPage || 1}
+                      {clips?.find(c => c.id === layer.activeClipId)?.totalPages && (
+                        <span className="text-sm text-obs-muted">/ {clips?.find(c => c.id === layer.activeClipId)?.totalPages}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => {
+                        const clip = clips?.find(c => c.id === layer.activeClipId);
+                        if (clip && onUpdateClip) onUpdateClip(clip.id, { currentPage: 1 });
+                      }}
+                      className="px-2 py-0.5 mt-1 bg-obs-surface hover:bg-obs-accent text-[9px] uppercase font-bold rounded transition-colors border border-white/5"
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                      const clip = clips?.find(c => c.id === layer.activeClipId);
+                      if (clip && onUpdateClip) onUpdateClip(clip.id, { currentPage: Math.min((clip.currentPage || 1) + 1, clip.totalPages || Infinity) });
+                    }}
+                    className="p-3 bg-obs-surface hover:bg-obs-accent text-obs-text hover:text-white rounded-md transition-all shadow-lg active:scale-95"
+                    title="Siguiente"
+                  >
+                    <ChevronRight size={24} strokeWidth={3} />
+                  </button>
+                </div>
+                
+                <div className="flex flex-col gap-2 p-3 bg-black/20 rounded border border-white/5 mt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-obs-text uppercase">Control por Teclado / Puntero USB</span>
+                    <button 
+                      onClick={() => {
+                        const clip = clips?.find(c => c.id === layer.activeClipId);
+                        if (clip && onUpdateClip) onUpdateClip(clip.id, { keyboardNavEnabled: !clip.keyboardNavEnabled });
+                      }}
+                      className={`w-8 h-4 rounded-full transition-colors relative ${clips?.find(c => c.id === layer.activeClipId)?.keyboardNavEnabled ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                    >
+                      <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${clips?.find(c => c.id === layer.activeClipId)?.keyboardNavEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+                  <p className="text-[8px] text-obs-muted leading-tight">
+                    Activa para hacer avanzar o retroceder el documento usando las flechas direccionales o un pasador de diapositivas USB (PageUp/PageDown).
+                  </p>
+                </div>
+
+                <p className="text-[9px] text-obs-muted text-center italic mt-2">
+                  Controla las diapositivas del PDF/PPT activo en esta capa.
+                </p>
+              </div>
+            </CollapsibleSection>
+          )}
+
+          <CollapsibleSection title="Direccionamiento" defaultOpen={true} onReset={() => onUpdateLayer(layer.id, { outputId: null })}>
+             <div className="space-y-2">
+               <div className="flex flex-col gap-1">
+                  <label className="text-[8px] text-obs-muted uppercase font-bold">Salida de la Capa</label>
+                  <div className="grid grid-cols-4 gap-1">
+                    <button
+                      onClick={() => onUpdateLayer(layer.id, { outputId: null })}
+                      className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center gap-0.5 ${!layer.outputId ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,170,255,0.4)]' : 'bg-obs-bg text-obs-muted border-white/5 hover:border-white/10'}`}
+                    >
+                      <span>PROGRAM</span>
+                    </button>
+                    {outputs.map((out) => {
+                      const screen = externalScreens.find(s => s.id === out.physicalScreenId);
+                      return (
+                        <button
+                          key={out.id}
+                          onClick={() => onUpdateLayer(layer.id, { outputId: out.id })}
+                          className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center leading-tight ${layer.outputId === out.id ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,170,255,0.4)]' : 'bg-obs-bg text-obs-muted border-white/5 hover:border-white/10'}`}
+                        >
+                          <span>OUT {out.id}</span>
+                          {screen && <span className="text-[6px] opacity-60 font-normal truncate max-w-full">({screen.name})</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[8px] text-obs-muted mt-1 italic">Define a qué monitor se enviarán los disparos de esta capa.</p>
+               </div>
+             </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Ajustes de Imagen" onReset={() => onUpdateLayer(layer.id, { brightness: 1, contrast: 1, saturation: 1 })}>
+            <div className="space-y-3">
+              {[
+                { label: 'Brillo', key: 'brightness' },
+                { label: 'Contraste', key: 'contrast' },
+                { label: 'Saturación', key: 'saturation' },
+              ].map((adj) => (
+                <PropertyControl 
+                  key={adj.key}
+                  label={adj.label}
+                  value={(layer as any)[adj.key] * 50}
+                  displayValue={Math.round((layer as any)[adj.key] * 50).toString()}
+                  min={0}
+                  max={100}
+                  step={1}
+                  onChange={(val) => onUpdateLayer(layer.id, { [adj.key]: val / 50 })}
+                />
+              ))}
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Balance de Color" onReset={() => onUpdateLayer(layer.id, { colorBalance: { r: 1, g: 1, b: 1 } })}>
+            <div className="space-y-3">
+              {['r', 'g', 'b'].map((chan) => (
+                <PropertyControl 
+                  key={chan}
+                  label={chan.toUpperCase()}
+                  value={layer.colorBalance[chan as keyof typeof layer.colorBalance] * 50}
+                  displayValue={Math.round(layer.colorBalance[chan as keyof typeof layer.colorBalance] * 50).toString()}
+                  min={0}
+                  max={100}
+                  step={1}
+                  onChange={(val) => onUpdateLayer(layer.id, { colorBalance: { ...layer.colorBalance, [chan]: val / 50 } })}
+                />
+              ))}
+            </div>
+          </CollapsibleSection>
+        </div>
+      </div>
+    );
+  }
+
+  if (selectedItemType === 'playlist') {
+    const playlist = (selectedItem as Playlist);
+    return (
+      <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
+        <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+          <div className="flex items-center gap-2">
+            <List size={12} className="text-obs-accent" />
+            <div className="flex flex-col">
+              <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest leading-none">PROPIEDADES PLAYLIST</span>
+              <span className="text-[9px] text-obs-accent font-bold mt-0.5">{playlist.name}</span>
+            </div>
+          </div>
+          <button 
+            onClick={handleReset}
+            className="p-1.5 rounded bg-obs-border hover:bg-obs-accent hover:text-white transition-colors"
+          >
+            <RotateCcw size={12} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 custom-scrollbar">
+          <CollapsibleSection title="Ajustes Generales" defaultOpen={true}>
+            <div className="space-y-2">
+              <PropertyControl 
+                label="Opacidad"
+                value={playlist.opacity * 100}
+                displayValue={`${Math.round(playlist.opacity * 100)}%`}
+                min={0}
+                max={100}
+                step={1}
+                onChange={(val) => onUpdate(playlist.id, { opacity: val / 100 })}
+              />
+               <PropertyControl 
+                label="Velocidad"
+                value={playlist.speed * 50}
+                displayValue={`${(playlist.speed).toFixed(2)}x`}
+                min={5}
+                max={100}
+                step={1}
+                onChange={(val) => onUpdate(playlist.id, { speed: val / 50 })}
+              />
+              <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+                <span className="text-[9px] font-bold text-obs-muted uppercase">Loop Playlist</span>
+                <button 
+                  onClick={() => onUpdate(playlist.id, { loop: !(playlist.loop !== false) })}
+                  className={`w-10 h-5 rounded-full transition-colors relative ${(playlist.loop !== false) ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${(playlist.loop !== false) ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Lista de Clips" defaultOpen={true}>
+            <div className="space-y-1">
+              {playlist.clips.map((c, i) => (
+                <div key={c.id} className={`flex items-center justify-between p-1.5 bg-black/20 rounded border border-white/5 ${playlist.currentClipIndex === i ? 'ring-1 ring-obs-accent ring-inset' : ''}`}>
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <span className="text-[8px] font-mono text-obs-muted">#{i + 1}</span>
+                    <span className="text-[10px] text-obs-text truncate">{c.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {c.type === 'image' && (
+                      <div className="flex items-center gap-1">
+                        <Clock size={8} className="text-obs-muted" />
+                        <input 
+                          type="number"
+                          value={c.duration || 5}
+                          onChange={(e) => {
+                            const newClips = [...playlist.clips];
+                            newClips[i] = { ...newClips[i], duration: parseInt(e.target.value) || 1 };
+                            onUpdate(playlist.id, { clips: newClips });
+                          }}
+                          className="w-8 bg-black/40 border border-white/10 rounded text-center text-[8px] text-obs-accent outline-none"
+                        />
+                        <span className="text-[7px] text-obs-muted">s</span>
+                      </div>
+                    )}
+                    <button 
+                      onClick={() => onUpdate(playlist.id, { clips: playlist.clips.filter((_, idx) => idx !== i) })}
+                      className="text-obs-muted hover:text-red-500 transition-colors"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {playlist.clips.length === 0 && (
+                <p className="text-[9px] text-obs-muted italic text-center p-4">Playlist vacía</p>
+              )}
+            </div>
+          </CollapsibleSection>
+        </div>
+      </div>
+    );
+  }
+
   if (selectedItemType === 'program') {
-    const selectedScreen = externalScreens.find(s => s.id === externalScreenSettings.selectedScreenId);
+    const selectedScreen = externalScreens.find(s => s.id === selectedScreenId);
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
     
     return (
@@ -1347,46 +2627,63 @@ const Inspector = React.memo(({
         <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
           <div className="flex items-center gap-2">
             <MonitorIcon size={12} className="text-obs-accent" />
-            <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest">Configuración Desktop</span>
+            <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest">PROPIEDADES SALIDA</span>
           </div>
           <button 
             onClick={handleReset}
             className="p-1.5 rounded bg-obs-border hover:bg-obs-accent hover:text-white transition-colors"
-            title="Restablecer Ajustes"
+            title="Restablecer Todo"
           >
             <RotateCcw size={12} />
           </button>
         </div>
-        
-        <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          {/* Installation Status / Guide */}
-          {!isStandalone && !isIframe && (
-            <div className="p-3 bg-blue-600/10 border border-blue-500/30 rounded-lg space-y-2">
-              <div className="flex items-center gap-2 text-blue-400">
-                <Settings size={14} />
-                <span className="text-[10px] font-black uppercase tracking-widest">Modo Escritorio Nativo</span>
-              </div>
-              <p className="text-[9px] text-blue-100/70 leading-relaxed">
-                Para una experiencia nativa sin barras de navegador (estilo Resolume):
-              </p>
-              <div className="bg-black/20 p-2 rounded text-[9px] text-white/90 font-mono">
-                Menú Chrome &gt; Guardar y compartir &gt; Instalar página como Aplicación
-              </div>
-              <p className="text-[8px] text-blue-300/50 italic mt-2 border-t border-blue-500/20 pt-2">
-                Nota: Para que sea una app .exe de escritorio instalable, este código se puede empaquetar con Electron muy fácilmente, manteniendo exactamente esta misma lógica de doble monitor.
-              </p>
-            </div>
-          )}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Destino de Salida</div>
-            <div className="space-y-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-[9px] text-obs-muted uppercase font-bold">Monitor Seleccionado</label>
-                <div className="flex gap-2">
+          <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-2 custom-scrollbar">
+          <CollapsibleSection title="Destino de Salida" defaultOpen={true}>
+            <div className="space-y-1.5">
+              {/* Screen Info Header */}
+              {selectedScreenId && (
+                <div className="bg-black/20 rounded-lg p-1.5 border border-white/5 space-y-1">
+                  <div className="aspect-[21/9] w-full bg-obs-surface rounded border border-obs-border overflow-hidden relative flex items-center justify-center">
+                    <div className="absolute inset-0 opacity-5 bg-[radial-gradient(circle,var(--color-obs-accent)_1px,transparent_1px)] bg-[size:8px_8px]" />
+                    <MonitorIcon size={16} className="text-obs-accent/20" />
+                    <div className="absolute bottom-1 right-1">
+                      <div className="px-1 py-0.5 rounded bg-obs-accent text-[6px] font-black text-white uppercase tracking-tighter">
+                        {selectedScreen?.width}x{selectedScreen?.height}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-1">
+                    <div className="col-span-2 bg-obs-bg/50 p-1 rounded border border-white/5">
+                      <div className="text-[6px] text-obs-muted uppercase font-bold">Monitor</div>
+                      <div className="text-[7.5px] text-obs-text truncate font-medium">
+                        {selectedScreen?.name || 'Genérico'}
+                      </div>
+                    </div>
+                    <div className="bg-obs-bg/50 p-1 rounded border border-white/5">
+                      <div className="text-[6px] text-obs-muted uppercase font-bold">FPS</div>
+                      <div className="text-[7.5px] text-obs-accent font-mono">
+                        {selectedScreen?.refreshRate ? `${selectedScreen.refreshRate.toFixed(1)}Hz` : '60Hz'}
+                      </div>
+                    </div>
+                    <div className="bg-obs-bg/50 p-1 rounded border border-white/5">
+                      <div className="text-[6px] text-obs-muted uppercase font-bold">Bit</div>
+                      <div className="text-[7.5px] text-obs-text">
+                        {selectedScreen?.colorDepth ? `${selectedScreen.colorDepth}b` : '8b'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[7px] text-obs-muted uppercase font-bold">Monitor</label>
+                <div className="flex gap-1">
                   <select 
-                    value={externalScreenSettings.selectedScreenId || ''}
-                    onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, selectedScreenId: e.target.value })}
-                    className="flex-1 bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] text-obs-text focus:border-obs-accent outline-none font-medium"
+                    value={selectedScreenId || ''}
+                    onChange={(e) => onSelectedScreenIdChange(e.target.value)}
+                    className="flex-1 bg-obs-bg border border-obs-border rounded px-1 py-0.5 text-[9px] text-obs-text focus:border-obs-accent outline-none font-medium"
                   >
                     <option value="" disabled>Seleccionar monitor...</option>
                     {externalScreens.map(s => (
@@ -1398,72 +2695,130 @@ const Inspector = React.memo(({
                   <button 
                     onClick={onDetectScreens}
                     title="Refrescar Pantallas"
-                    className={`p-2 border rounded transition-colors ${!hasDetailedScreens ? 'bg-obs-accent/20 border-obs-accent text-obs-accent animate-pulse' : 'bg-obs-bg border-obs-border text-obs-text hover:bg-obs-border'}`}
+                    className={`p-1.5 border rounded transition-colors ${!hasDetailedScreens ? 'bg-obs-accent/20 border-obs-accent text-obs-accent animate-pulse' : 'bg-obs-bg border-obs-border text-obs-text hover:bg-obs-border'}`}
                   >
-                    <RotateCcw size={12} />
+                    <RotateCcw size={10} />
                   </button>
                 </div>
               </div>
 
               {!hasDetailedScreens && (
-                <div className="p-3 bg-obs-accent/10 border border-obs-accent/30 rounded text-[9px] text-obs-accent leading-tight space-y-3">
+                <div className="p-2 bg-obs-accent/10 border border-obs-accent/30 rounded text-[8.5px] text-obs-accent leading-tight space-y-2">
                   {isIframe ? (
-                    <div className="space-y-3">
-                      <p className="font-bold text-white">⚠️ Múltiples monitores no disponibles en iFrame.</p>
+                    <div className="space-y-2">
+                      <p className="font-bold text-white">iFrame: Múltiples monitores no detectables.</p>
                       <button 
                         onClick={() => window.open(window.location.href, '_blank')}
-                        className="w-full py-2 bg-obs-accent text-white rounded font-bold uppercase text-[9px] hover:bg-obs-accent/80 transition-all flex items-center justify-center gap-2"
+                        className="w-full py-1.5 bg-obs-accent text-white rounded font-bold uppercase text-[8.5px] hover:bg-obs-accent/80 transition-all flex items-center justify-center gap-1.5"
                       >
-                        <ExternalLink size={12} />
+                        <ExternalLink size={10} />
                         Abrir Externo
                       </button>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <p className="font-bold">Habilita "Window Management" para usar el segundo monitor.</p>
-                    </div>
+                    <p className="font-medium">Habilita "Window Management" en Chrome.</p>
                   )}
                 </div>
               )}
 
-              <div className="flex justify-between text-[10px] text-obs-text bg-black/40 p-2.5 rounded border border-white/5">
-                <span className="text-obs-muted uppercase font-bold">Res. Target:</span>
-                <span className="font-mono text-obs-accent">{selectedScreen ? `${selectedScreen.width}x${selectedScreen.height}` : '---'}</span>
-              </div>
-
-              <div className="space-y-2">
-                <PropertyControl 
-                  label="Escala Ancho"
-                  value={externalScreenSettings.scalingW * 100}
-                  displayValue={`${Math.round(externalScreenSettings.scalingW * 100)}%`}
-                  min={50}
-                  max={200}
-                  step={1}
-                  onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, scalingW: val / 100 })}
-                  onInputChange={(val) => {
-                    const num = parseFloat(val) / 100;
-                    if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, scalingW: num });
-                  }}
-                />
-                <PropertyControl 
-                  label="Escala Alto"
-                  value={externalScreenSettings.scalingH * 100}
-                  displayValue={`${Math.round(externalScreenSettings.scalingH * 100)}%`}
-                  min={50}
-                  max={200}
-                  step={1}
-                  onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, scalingH: val / 100 })}
-                  onInputChange={(val) => {
-                    const num = parseFloat(val) / 100;
-                    if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, scalingH: num });
-                  }}
-                />
+              <div className="flex justify-between items-center text-[9px] text-obs-text bg-black/40 p-2 rounded border border-white/5">
+                <div className="flex flex-col">
+                  <span className="text-[7.5px] text-obs-muted uppercase font-bold">Res. Target</span>
+                  <span className="font-mono text-obs-accent leading-none mt-0.5">{selectedScreen ? `${selectedScreen.width}x${selectedScreen.height}` : '---'}</span>
+                </div>
+                <button 
+                  onClick={onLaunchOutput}
+                  className="px-2 py-1.5 bg-obs-accent hover:bg-obs-accent/80 text-white text-[8.5px] font-black uppercase tracking-widest rounded transition-all flex items-center gap-1.5"
+                >
+                  <MonitorIcon size={9} />
+                  Lanzar
+                </button>
               </div>
             </div>
           </div>
+          </CollapsibleSection>
 
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Ajustes de Imagen</div>
+          <CollapsibleSection 
+            title="Transiciones"
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: 'cut', transitionDuration: 1000 })}
+          >
+            <div className="space-y-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo de Transición</label>
+                <div className="grid grid-cols-4 gap-1">
+                  {['fade', 'wipe', 'slide', 'cut'].map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: type as any })}
+                      className={`py-1 rounded text-[9px] uppercase font-black tracking-tight border transition-all ${
+                        externalScreenSettings.transitionType === type 
+                          ? 'bg-obs-accent border-obs-accent text-white shadow-lg shadow-obs-accent/20' 
+                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
+                      }`}
+                    >
+                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <PropertyControl 
+                label="Duración"
+                value={externalScreenSettings.transitionDuration}
+                displayValue={`${externalScreenSettings.transitionDuration}ms`}
+                min={0}
+                max={5000}
+                step={100}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, transitionDuration: Math.round(val) })}
+              />
+              
+              <div className="p-2 bg-black/40 rounded border border-white/5 text-[8.5px] text-obs-muted leading-tight italic">
+                {externalScreenSettings.transitionType === 'fade' && "Fundido cruzado de opacidad."}
+                {externalScreenSettings.transitionType === 'wipe' && "Cortinilla lateral usando crossfader."}
+                {externalScreenSettings.transitionType === 'slide' && "Desplazamiento lateral usando crossfader."}
+                {externalScreenSettings.transitionType === 'cut' && "Corte instantáneo."}
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection 
+            title="Escala" 
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, scalingW: 1, scalingH: 1 })}
+          >
+            <div className="space-y-2">
+              <PropertyControl 
+                label="Escala Ancho"
+                value={externalScreenSettings.scalingW * 100}
+                displayValue={`${Math.round(externalScreenSettings.scalingW * 100)}%`}
+                min={50}
+                max={200}
+                step={1}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, scalingW: val / 100 })}
+                onInputChange={(val) => {
+                  const num = parseFloat(val) / 100;
+                  if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, scalingW: num });
+                }}
+              />
+              <PropertyControl 
+                label="Escala Alto"
+                value={externalScreenSettings.scalingH * 100}
+                displayValue={`${Math.round(externalScreenSettings.scalingH * 100)}%`}
+                min={50}
+                max={200}
+                step={1}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, scalingH: val / 100 })}
+                onInputChange={(val) => {
+                  const num = parseFloat(val) / 100;
+                  if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, scalingH: num });
+                }}
+              />
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection 
+            title="Ajustes de Imagen"
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, brightness: 1, contrast: 1, saturation: 1, opacity: 1 })}
+          >
             <div className="space-y-2">
               <PropertyControl 
                 label="Brillo"
@@ -1504,11 +2859,26 @@ const Inspector = React.memo(({
                   if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, saturation: num });
                 }}
               />
+              <PropertyControl 
+                label="Opacidad"
+                value={(externalScreenSettings.opacity ?? 1) * 100}
+                displayValue={`${Math.round((externalScreenSettings.opacity ?? 1) * 100)}%`}
+                min={0}
+                max={100}
+                step={1}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, opacity: val / 100 })}
+                onInputChange={(val) => {
+                  const num = parseFloat(val) / 100;
+                  if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, opacity: num });
+                }}
+              />
             </div>
-          </div>
+          </CollapsibleSection>
 
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Balance de Color (RGB)</div>
+          <CollapsibleSection 
+            title="Balance de Color (RGB)"
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, colorBalance: { r: 1, g: 1, b: 1 } })}
+          >
             <div className="space-y-2">
               {['r', 'g', 'b'].map(channel => (
                 <PropertyControl 
@@ -1533,15 +2903,201 @@ const Inspector = React.memo(({
                 />
               ))}
             </div>
-          </div>
+          </CollapsibleSection>
 
-          <button 
-            onClick={onLaunchOutput}
-            className="w-full py-3 bg-obs-accent hover:bg-obs-accent/80 text-white text-[12px] font-black uppercase tracking-[0.2em] rounded shadow-[0_0_15px_rgba(0,170,255,0.4)] transition-all flex items-center justify-center gap-2"
+          <CollapsibleSection 
+            title="Transformar"
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, x: 0, y: 0 })}
           >
-            <ExternalLink size={14} />
-            Lanzar Salida
-          </button>
+            <div className="space-y-2">
+              <PropertyControl 
+                label="Posición X"
+                value={externalScreenSettings.x}
+                displayValue={Math.round(externalScreenSettings.x).toString()}
+                min={-1920}
+                max={1920}
+                step={1}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, x: val })}
+                onInputChange={(val) => {
+                  const num = parseFloat(val);
+                  if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, x: num });
+                }}
+              />
+              <PropertyControl 
+                label="Posición Y"
+                value={externalScreenSettings.y}
+                displayValue={Math.round(externalScreenSettings.y).toString()}
+                min={-1080}
+                max={1080}
+                step={1}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, y: val })}
+                onInputChange={(val) => {
+                  const num = parseFloat(val);
+                  if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, y: num });
+                }}
+              />
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection 
+            title="Rotación"
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, rotation: 0 })}
+          >
+            <div className="space-y-2">
+              <PropertyControl 
+                label="Ángulo"
+                value={externalScreenSettings.rotation}
+                displayValue={`${Math.round(externalScreenSettings.rotation)}°`}
+                min={0}
+                max={360}
+                step={1}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, rotation: val })}
+                onInputChange={(val) => {
+                  const num = parseFloat(val);
+                  if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, rotation: num });
+                }}
+              />
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection 
+            title="FONDO (BACKGROUND)" 
+            defaultOpen={true}
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, backgroundImage: undefined, showBackground: false, bgScalingW: 100, bgScalingH: 100 })}
+          >
+            <div className="space-y-3">
+              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-white/5">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-obs-text uppercase">Mostrar Fondo</span>
+                  <span className="text-[8px] text-obs-muted">Activar imagen cuando no hay video</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => onSync?.()}
+                    title="Forzar Sincronización"
+                    className="p-1 px-2 bg-obs-border hover:bg-obs-accent text-[9px] text-white uppercase font-bold rounded transition-colors flex items-center gap-1"
+                  >
+                    <RotateCcw size={10} />
+                    Sync
+                  </button>
+                  <button 
+                    onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, showBackground: !externalScreenSettings.showBackground })}
+                    className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.showBackground ? 'bg-obs-accent' : 'bg-white/10'}`}
+                  >
+                    <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.showBackground ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5 focus-within:z-10 relative">
+                <div className="flex justify-between items-center">
+                  <label className="text-[9px] text-obs-muted uppercase font-bold">Imagen de Fondo</label>
+                  {(externalScreenSettings.bgScalingW !== 100 || externalScreenSettings.bgScalingH !== 100) && (
+                    <button 
+                      onClick={() => onUpdateExternalScreen({ 
+                        ...externalScreenSettings, 
+                        bgScalingW: 100,
+                        bgScalingH: 100
+                      })}
+                      className="text-[8px] text-obs-accent hover:text-white uppercase font-bold flex items-center gap-1"
+                    >
+                      <RotateCcw size={8} /> Restablecer Escala
+                    </button>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <div className="flex-1 bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[10px] text-obs-text truncate min-h-[28px]">
+                    {externalScreenSettings.backgroundImage ? "Imagen Seleccionada" : 'Ninguna imagen seleccionada'}
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.accept = 'image/*';
+                      input.onchange = (e) => {
+                        const file = (e.target as HTMLInputElement).files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            if (event.target?.result) {
+                              onUpdateExternalScreen({ 
+                                ...externalScreenSettings, 
+                                backgroundImage: event.target.result as string,
+                                showBackground: true 
+                              });
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      };
+                      input.click();
+                    }}
+                    className="px-3 bg-obs-accent hover:bg-obs-accent/80 text-white text-[9px] font-bold uppercase rounded transition-colors"
+                  >
+                    Elegir
+                  </button>
+                  {externalScreenSettings.backgroundImage && (
+                    <button 
+                      onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, backgroundImage: undefined, showBackground: false })}
+                      className="p-1.5 bg-red-500/20 hover:bg-red-500 text-red-500 hover:text-white rounded border border-red-500/30 transition-all"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              {externalScreenSettings.backgroundImage && (
+                <div className="aspect-video w-full rounded border border-obs-border overflow-hidden bg-black/40">
+                  <img 
+                    src={externalScreenSettings.backgroundImage} 
+                    className="w-full h-full object-contain" 
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              )}
+              <div className="space-y-4">
+                <PropertyControl 
+                  label="Escalar Ancho (%)"
+                  value={externalScreenSettings.bgScalingW ?? 100}
+                  displayValue={`${Math.round(externalScreenSettings.bgScalingW ?? 100)}%`}
+                  min={10}
+                  max={500}
+                  step={1}
+                  onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, bgScalingW: val })}
+                  onInputChange={(val) => {
+                    const num = parseInt(val);
+                    if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, bgScalingW: num });
+                  }}
+                />
+                <PropertyControl 
+                  label="Escalar Alto (%)"
+                  value={externalScreenSettings.bgScalingH ?? 100}
+                  displayValue={`${Math.round(externalScreenSettings.bgScalingH ?? 100)}%`}
+                  min={10}
+                  max={500}
+                  step={1}
+                  onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, bgScalingH: val })}
+                  onInputChange={(val) => {
+                    const num = parseInt(val);
+                    if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, bgScalingH: num });
+                  }}
+                />
+                <div className="pt-2 flex justify-end">
+                  <button 
+                    onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, bgScalingW: 100, bgScalingH: 100 })}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded bg-obs-border hover:bg-obs-accent hover:text-white text-[9px] font-medium text-obs-text transition-colors"
+                  >
+                    <RotateCcw size={10} />
+                    Restablecer Escala
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[8px] text-obs-muted leading-tight">
+                Esta imagen se mostrará automáticamente en la pantalla externa como fondo base.
+              </p>
+            </div>
+          </CollapsibleSection>
         </div>
       </div>
     );
@@ -1561,7 +3117,11 @@ const Inspector = React.memo(({
       <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
         <div className="flex items-center gap-2">
           <Settings size={12} className="text-obs-accent" />
-          <span className="text-[11px] font-semibold text-obs-text">Propiedades</span>
+          <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest">
+            {selectedItem.type === 'document' 
+              ? (selectedItem.name.toLowerCase().endsWith('.pdf') ? 'PROPIEDADES PDF' : 'PROPIEDADES PPT')
+              : selectedItem.type === 'video' ? 'PROPIEDADES VIDEO' : 'PROPIEDADES IMAGEN'}
+          </span>
         </div>
         <button 
           onClick={handleReset}
@@ -1573,24 +3133,159 @@ const Inspector = React.memo(({
       </div>
       
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        {/* Video Info Header */}
+        {selectedItemType === 'clip' && selectedItem && (
+          <div className="space-y-3 pb-4 border-b border-obs-border/50">
+            {(() => {
+              const clip = selectedItem as Clip;
+              return (
+                <>
+                  <div className="aspect-video w-full bg-black rounded border border-obs-border overflow-hidden relative group">
+                    {clip.type === 'video' ? (
+                      <video 
+                        src={clip.url} 
+                        className="w-full h-full object-contain" 
+                        muted 
+                        loop 
+                        autoPlay 
+                      />
+                    ) : clip.type === 'document' ? (
+                      <DocumentLayer clip={clip} onUpdateClip={onUpdateClip} />
+                    ) : (
+                      <img src={clip.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                    )}
+                    <div className="absolute top-2 left-2 bg-black/60 px-1.5 py-0.5 rounded text-[8px] font-bold text-obs-accent uppercase tracking-widest border border-obs-accent/30">
+                      Preview
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-obs-surface/50 p-2 rounded border border-obs-border/30">
+                      <div className="text-[8px] text-obs-muted uppercase font-bold mb-1">Nombre</div>
+                      <div className="text-[10px] text-obs-text truncate">{clip.name}</div>
+                    </div>
+                    <div className="bg-obs-surface/50 p-2 rounded border border-obs-border/30">
+                      <div className="text-[8px] text-obs-muted uppercase font-bold mb-1">Tipo</div>
+                      <div className="text-[10px] text-obs-text uppercase">
+                        {clip.type === 'video' ? 'Video HD' : clip.type === 'document' ? 'Documento' : 'Imagen'}
+                      </div>
+                    </div>
+                    <div className="bg-obs-surface/50 p-2 rounded border border-obs-border/30">
+                      <div className="text-[8px] text-obs-muted uppercase font-bold mb-1">Resolución</div>
+                      <div className="text-[10px] text-obs-text font-mono">
+                        {clip.width && clip.height ? `${clip.width}x${clip.height}` : '1920x1080'}
+                      </div>
+                    </div>
+                    <div className="bg-obs-surface/50 p-2 rounded border border-obs-border/30">
+                      <div className="text-[8px] text-obs-muted uppercase font-bold mb-1">Duración</div>
+                      <div className="text-[10px] text-obs-text font-mono">
+                        {clip.duration ? `${Math.floor(clip.duration / 60)}:${Math.floor(clip.duration % 60).toString().padStart(2, '0')}` : '00:00'}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        )}
+
         <div className="space-y-4">
-          {/* Composición */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Composición</div>
+          {/* VIDEO Section (Opacity) */}
+          <CollapsibleSection title="VIDEO">
             <div className="space-y-2">
               <PropertyControl 
-                label="Máster"
-                value={(selectedItem.master || 1) * 100}
-                displayValue={`${Math.round((selectedItem.master || 1) * 100)}%`}
+                label="Opacidad"
+                value={(selectedItem.opacity || 1) * 100}
+                displayValue={`${Math.round((selectedItem.opacity || 1) * 100)}%`}
                 min={0}
                 max={100}
                 step={1}
-                onChange={(val) => onUpdate(selectedItem.id, { master: val / 100 })}
+                onChange={(val) => onUpdate(selectedItem.id, { opacity: val / 100 })}
                 onInputChange={(val) => {
                   const num = parseFloat(val) / 100;
-                  if (!isNaN(num)) onUpdate(selectedItem.id, { master: num });
+                  if (!isNaN(num)) onUpdate(selectedItem.id, { opacity: num });
                 }}
               />
+            </div>
+          </CollapsibleSection>
+
+          {/* Document Controls */}
+          {selectedItem.type === 'document' && (
+            <CollapsibleSection title="CONTROLES DOCUMENTO" defaultOpen={true}>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between bg-black/30 p-4 rounded-lg border border-white/5">
+                  <button 
+                    onClick={() => {
+                       if (onUpdateClip) onUpdateClip(selectedItem.id, { currentPage: Math.max(1, (selectedItem.currentPage || 1) - 1) });
+                       else onUpdate(selectedItem.id, { currentPage: Math.max(1, (selectedItem.currentPage || 1) - 1) });
+                    }}
+                    className="p-3 bg-obs-surface hover:bg-obs-accent text-obs-text hover:text-white rounded-md transition-all shadow-lg active:scale-95"
+                    title="Anterior"
+                  >
+                    <ChevronLeft size={24} strokeWidth={3} />
+                  </button>
+                  
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="text-[10px] text-obs-muted font-black uppercase tracking-widest mb-1">PÁGINA</span>
+                    <div className="text-3xl font-mono font-black text-obs-accent tabular-nums bg-obs-bg px-4 py-1 rounded border border-white/5 shadow-inner flex items-baseline gap-1">
+                      {selectedItem.currentPage || 1}
+                      {selectedItem.totalPages && (
+                        <span className="text-sm text-obs-muted">/ {selectedItem.totalPages}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => {
+                         if (onUpdateClip) onUpdateClip(selectedItem.id, { currentPage: 1 });
+                         else onUpdate(selectedItem.id, { currentPage: 1 });
+                      }}
+                      className="px-2 py-0.5 mt-1 bg-obs-surface hover:bg-obs-accent text-[9px] uppercase font-bold rounded transition-colors border border-white/5"
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                        const targetPage = Math.min((selectedItem.currentPage || 1) + 1, selectedItem.totalPages || Infinity);
+                        if (onUpdateClip) onUpdateClip(selectedItem.id, { currentPage: targetPage });
+                        else onUpdate(selectedItem.id, { currentPage: targetPage });
+                    }}
+                    className="p-3 bg-obs-surface hover:bg-obs-accent text-obs-text hover:text-white rounded-md transition-all shadow-lg active:scale-95"
+                    title="Siguiente"
+                  >
+                    <ChevronRight size={24} strokeWidth={3} />
+                  </button>
+                </div>
+                
+                <div className="flex flex-col gap-2 p-3 bg-black/20 rounded border border-white/5 mt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-obs-text uppercase">Control por Teclado / Puntero USB</span>
+                    <button 
+                      onClick={() => {
+                         if (onUpdateClip) onUpdateClip(selectedItem.id, { keyboardNavEnabled: !selectedItem.keyboardNavEnabled });
+                         else onUpdate(selectedItem.id, { keyboardNavEnabled: !selectedItem.keyboardNavEnabled });
+                      }}
+                      className={`w-8 h-4 rounded-full transition-colors relative ${selectedItem.keyboardNavEnabled ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                    >
+                      <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${selectedItem.keyboardNavEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                    </button>
+                  </div>
+                  <p className="text-[8px] text-obs-muted leading-tight">
+                    Activa para hacer avanzar o retroceder el documento usando las flechas direccionales o un pasador de diapositivas USB (PageUp/PageDown).
+                  </p>
+                </div>
+
+                <div className="text-[8px] text-obs-muted text-center italic bg-black/20 p-2 rounded border border-white/5 mt-2">
+                  * Los PDFs locales usan el visor integrado. Las presentaciones Online requieren URLs públicas.
+                </div>
+              </div>
+            </CollapsibleSection>
+          )}
+
+          {/* VELOCIDAD Section */}
+          {selectedItem.type === 'video' && (
+            <CollapsibleSection title="VELOCIDAD">
+            <div className="space-y-2">
               <PropertyControl 
                 label="Velocidad"
                 value={(selectedItem.speed || 1) * 100}
@@ -1605,64 +3300,11 @@ const Inspector = React.memo(({
                 }}
               />
             </div>
-          </div>
-
-          {/* Audio */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Audio</div>
-            <div className="space-y-2">
-              <PropertyControl 
-                label="Volumen"
-                value={(selectedItem.volume || 0) * 100}
-                displayValue={`${Math.round((selectedItem.volume || 0) * 100)}`}
-                min={0}
-                max={100}
-                step={1}
-                onChange={(val) => onUpdate(selectedItem.id, { volume: val / 100 })}
-                onInputChange={(val) => {
-                  const num = parseFloat(val) / 100;
-                  if (!isNaN(num)) onUpdate(selectedItem.id, { volume: num });
-                }}
-              />
-              <PropertyControl 
-                label="Panorama"
-                value={((selectedItem.pan || 0) + 1) * 50}
-                displayValue={`${Math.round(((selectedItem.pan || 0) + 1) * 50)}`}
-                min={0}
-                max={100}
-                step={1}
-                onChange={(val) => onUpdate(selectedItem.id, { pan: (val / 50) - 1 })}
-                onInputChange={(val) => {
-                  const num = (parseFloat(val) / 50) - 1;
-                  if (!isNaN(num)) onUpdate(selectedItem.id, { pan: num });
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Vídeo */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Vídeo</div>
-            <div className="space-y-2">
-              <PropertyControl 
-                label="Opacidad"
-                value={(selectedItem.opacity || 1) * 100}
-                displayValue={`${Math.round((selectedItem.opacity || 1) * 100)}`}
-                min={0}
-                max={100}
-                step={1}
-                onChange={(val) => onUpdate(selectedItem.id, { opacity: val / 100 })}
-                onInputChange={(val) => {
-                  const num = parseFloat(val) / 100;
-                  if (!isNaN(num)) onUpdate(selectedItem.id, { opacity: num });
-                }}
-              />
-            </div>
-          </div>
+          </CollapsibleSection>
+          )}
 
           {/* Ajustes de Imagen */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Ajustes de Imagen</div>
+          <CollapsibleSection title="AJUSTES DE IMAGEN" defaultOpen={false}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Brillo"
@@ -1704,11 +3346,10 @@ const Inspector = React.memo(({
                 }}
               />
             </div>
-          </div>
+          </CollapsibleSection>
 
           {/* Balance de Color (RGB) */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Balance de Color (RGB)</div>
+          <CollapsibleSection title="BALANCE DE COLOR" defaultOpen={false}>
             <div className="space-y-2">
               {['r', 'g', 'b'].map(channel => (
                 <PropertyControl 
@@ -1731,11 +3372,10 @@ const Inspector = React.memo(({
                 />
               ))}
             </div>
-          </div>
+          </CollapsibleSection>
 
           {/* CrossFader */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">CrossFader</div>
+          <CollapsibleSection title="COSSFADER" defaultOpen={false}>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-[9px] text-obs-muted uppercase font-bold">Blend Mode</label>
@@ -1775,11 +3415,10 @@ const Inspector = React.memo(({
                 </select>
               </div>
             </div>
-          </div>
+          </CollapsibleSection>
 
           {/* Transformar */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Transformar</div>
+          <CollapsibleSection title="TRANSFORMAR" defaultOpen={false}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Posición X"
@@ -1808,11 +3447,10 @@ const Inspector = React.memo(({
                 }}
               />
             </div>
-          </div>
+          </CollapsibleSection>
 
           {/* Escala */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Escala</div>
+          <CollapsibleSection title="ESCALA" defaultOpen={false}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Escala Ancho"
@@ -1841,14 +3479,13 @@ const Inspector = React.memo(({
                 }}
               />
             </div>
-          </div>
+          </CollapsibleSection>
 
           {/* Rotación */}
-          <div className="bg-obs-surface p-3 rounded border border-obs-border space-y-4">
-            <div className="text-[10px] font-bold uppercase text-obs-muted border-b border-obs-border pb-2">Rotación</div>
+          <CollapsibleSection title="ROTACIÓN" defaultOpen={false}>
             <div className="space-y-2">
               <PropertyControl 
-                label="Rotación"
+                label="Rotación Z"
                 value={selectedItem.transform.rotation}
                 displayValue={`${Math.round(selectedItem.transform.rotation)}°`}
                 min={0}
@@ -1874,41 +3511,65 @@ const Inspector = React.memo(({
                 }}
               />
             </div>
-          </div>
+          </CollapsibleSection>
         </div>
       </div>
     </div>
   );
 });
 
-const Library = React.memo(({ onAddClip, isDarkMode }: { onAddClip: (files: File[]) => void, isDarkMode: boolean }) => {
-  const [libraryFiles, setLibraryFiles] = useState<{ name: string, type: string, url: string, file: File }[]>([]);
-  const [selectedLibraryUrls, setSelectedLibraryUrls] = useState<Set<string>>(new Set());
-  const [folders, setFolders] = useState<{ name: string, active: boolean }[]>([
-    { name: 'Todos', active: true },
-    { name: 'Videos', active: false },
-    { name: 'Imágenes', active: false },
-    { name: 'Generadores', active: false }
+interface LibraryProps {
+  onAddClip: (files: File[]) => void;
+  isDarkMode: boolean;
+  libraryFiles: { name: string, type: string, url: string, file: File }[];
+  setLibraryFiles: React.Dispatch<React.SetStateAction<{ name: string, type: string, url: string, file: File }[]>>;
+  selectedLibraryUrls: Set<string>;
+  setSelectedLibraryUrls: React.Dispatch<React.SetStateAction<Set<string>>>;
+}
+
+const Library = React.memo(({ 
+  onAddClip, 
+  isDarkMode, 
+  libraryFiles, 
+  setLibraryFiles, 
+  selectedLibraryUrls, 
+  setSelectedLibraryUrls 
+}: LibraryProps) => {
+  const [folders, setFolders] = useState<{ id: string, name: string, active: boolean }[]>([
+    { id: 'video', name: 'VIDEOS', active: true },
+    { id: 'image', name: 'IMAGES', active: false },
+    { id: 'pdf', name: 'PDF', active: false }
   ]);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const libraryInputRef = useRef<HTMLInputElement>(null);
 
+  const activeFolder = folders.find(f => f.active)?.id || 'video';
+
   const handleLibraryLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-    const newFiles = Array.from(files).map(f => ({
-      name: f.name,
-      type: f.type,
-      url: URL.createObjectURL(f),
-      file: f
-    }));
+    const newFiles = Array.from(files).map(f => {
+      let type: string = f.type;
+      if (f.name.toLowerCase().endsWith('.pdf')) type = 'application/pdf';
+      
+      return {
+        name: f.name,
+        type: type,
+        url: URL.createObjectURL(f),
+        file: f
+      };
+    });
     setLibraryFiles(prev => [...prev, ...newFiles]);
   };
 
-  const filteredFiles = libraryFiles.filter(f => 
-    f.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredFiles = libraryFiles.filter(f => {
+    const matchesSearch = f.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesFolder = (activeFolder === 'video' && f.type.startsWith('video')) ||
+                         (activeFolder === 'image' && f.type.startsWith('image')) ||
+                         (activeFolder === 'pdf' && f.type.includes('pdf'));
+    return matchesSearch && matchesFolder;
+  });
 
   const toggleSelection = (url: string, multi: boolean) => {
     setSelectedLibraryUrls(prev => {
@@ -1927,16 +3588,9 @@ const Library = React.memo(({ onAddClip, isDarkMode }: { onAddClip: (files: File
       <div className="p-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
         <div className="flex items-center gap-2">
           <FolderOpen size={14} className="text-obs-accent" />
-          <span className="text-[10px] text-obs-muted uppercase font-bold tracking-wider">Gestión de Contenidos</span>
+          <span className="text-[10px] text-obs-text uppercase font-black tracking-wider">GESTIÓN DE CONTENIDOS</span>
         </div>
         <div className="flex items-center gap-1">
-          <button 
-            onClick={() => setViewMode(viewMode === 'list' ? 'grid' : 'list')}
-            className="p-1 text-obs-muted hover:text-obs-text transition-colors"
-            title={viewMode === 'list' ? 'Vista Cuadrícula' : 'Vista Lista'}
-          >
-            {viewMode === 'list' ? <Grid size={12} /> : <List size={12} />}
-          </button>
           <button 
             onClick={() => libraryInputRef.current?.click()}
             className="p-1 text-obs-accent hover:scale-110 transition-transform"
@@ -1949,49 +3603,26 @@ const Library = React.memo(({ onAddClip, isDarkMode }: { onAddClip: (files: File
           type="file" 
           ref={libraryInputRef} 
           className="hidden" 
-          accept="video/*,image/*" 
+          accept="video/*,image/*,application/pdf" 
           multiple 
           onChange={handleLibraryLoad}
         />
       </div>
 
-      {/* Folder Simulation */}
-      <div className="flex gap-1 p-1 bg-obs-surface/50 border-b border-obs-border overflow-x-auto scrollbar-hide">
-        {folders.map(f => (
-          <button 
-            key={f.name}
-            onClick={() => setFolders(prev => prev.map(folder => ({ ...folder, active: folder.name === f.name })))}
-            className={`px-2 py-1 rounded text-[9px] font-bold transition-colors whitespace-nowrap ${f.active ? 'bg-obs-accent text-white' : 'text-obs-muted hover:bg-obs-surface'}`}
+      <div className="grid grid-cols-4 border-b border-obs-border bg-black/40">
+        {folders.map(folder => (
+          <button
+            key={folder.id}
+            onClick={() => setFolders(prev => prev.map(f => ({ ...f, active: f.id === folder.id })))}
+            className={`py-2 text-[8px] font-black uppercase transition-colors border-b-2 ${folder.active ? 'text-obs-accent border-obs-accent bg-obs-accent/5' : 'text-obs-muted border-transparent hover:text-white'}`}
           >
-            {f.name}
+            {folder.name}
           </button>
         ))}
-        <button 
-          onClick={() => {
-            const name = prompt('Nombre de la carpeta:');
-            if (name) setFolders([...folders, { name, active: false }]);
-          }}
-          className="px-2 py-1 rounded text-[9px] font-bold bg-obs-surface text-obs-accent hover:bg-obs-accent hover:text-white transition-colors whitespace-nowrap"
-        >
-          + Carpeta
-        </button>
-      </div>
-
-      <div className="p-2 border-b border-obs-border bg-obs-surface">
-        <div className="relative">
-          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-obs-muted" />
-          <input 
-            type="text" 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Buscar..." 
-            className="w-full bg-obs-bg border border-obs-border rounded px-7 py-1 text-[10px] text-obs-text focus:outline-none focus:border-obs-accent"
-          />
-        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 min-h-0">
-        {filteredFiles.length === 0 ? (
+        {libraryFiles.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-obs-muted gap-2 opacity-30">
             <Film size={32} strokeWidth={1} />
             <span className="text-[9px] uppercase font-bold tracking-widest">Biblioteca Vacía</span>
@@ -2018,15 +3649,19 @@ const Library = React.memo(({ onAddClip, isDarkMode }: { onAddClip: (files: File
                 onDoubleClick={() => onAddClip([file.file])}
                 className={`group relative flex flex-col rounded transition-colors cursor-pointer text-obs-text border ${selectedLibraryUrls.has(file.url) ? 'bg-obs-accent/10 border-obs-accent' : 'hover:bg-obs-surface border-transparent'}`}
               >
-                <div className={`${viewMode === 'grid' ? 'aspect-video w-full' : 'w-12 h-8'} bg-black rounded-sm overflow-hidden flex-shrink-0 relative`}>
+                <div className={`${viewMode === 'grid' ? 'aspect-video w-full' : 'w-12 h-8'} bg-black rounded-sm overflow-hidden flex-shrink-0 relative flex items-center justify-center`}>
                   {file.type.startsWith('video') ? (
                     <video src={file.url} className="w-full h-full object-cover opacity-80" muted />
+                  ) : file.type.includes('pdf') ? (
+                    <div className="w-full h-full relative group bg-black overflow-hidden flex items-center justify-center pointer-events-none">
+                      <PDFRenderer url={file.url} pageNumber={1} />
+                    </div>
                   ) : (
                     <img src={file.url} className="w-full h-full object-cover opacity-80" referrerPolicy="no-referrer" />
                   )}
                   {viewMode === 'grid' && (
                     <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
-                      <div className="text-[7px] truncate text-white uppercase font-bold">{file.type.split('/')[1]}</div>
+                      <div className="text-[7px] truncate text-white uppercase font-bold">{file.type.split('/')[1] || 'DOC'}</div>
                     </div>
                   )}
                 </div>
@@ -2047,51 +3682,6 @@ const Library = React.memo(({ onAddClip, isDarkMode }: { onAddClip: (files: File
             ))}
           </div>
         )}
-      </div>
-
-      {/* Library Preview Window */}
-      <div className="h-48 border-t border-obs-border bg-black flex flex-col">
-        <div className="px-2 py-1 bg-obs-surface border-b border-obs-border flex justify-between items-center">
-          <span className="text-[9px] font-bold text-obs-muted uppercase">Vista Previa</span>
-          {selectedLibraryUrls.size === 1 && (
-            <span className="text-[8px] text-obs-accent truncate max-w-[120px]">
-              {libraryFiles.find(f => selectedLibraryUrls.has(f.url))?.name}
-            </span>
-          )}
-          {selectedLibraryUrls.size > 1 && (
-            <span className="text-[8px] text-obs-accent truncate max-w-[120px]">
-              {selectedLibraryUrls.size} archivos seleccionados
-            </span>
-          )}
-        </div>
-        <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-[#050505]">
-          {selectedLibraryUrls.size === 1 ? (() => {
-            const selectedFile = libraryFiles.find(f => selectedLibraryUrls.has(f.url));
-            if (!selectedFile) return null;
-            return selectedFile.type.startsWith('video') ? (
-              <video 
-                key={selectedFile.url}
-                src={selectedFile.url} 
-                className="w-full h-full object-contain" 
-                autoPlay 
-                muted 
-                loop 
-              />
-            ) : (
-              <img src={selectedFile.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
-            );
-          })() : selectedLibraryUrls.size > 1 ? (
-            <div className="text-obs-muted opacity-20 flex flex-col items-center gap-1">
-              <Layers size={24} strokeWidth={1} />
-              <span className="text-[8px] uppercase font-bold tracking-widest">{selectedLibraryUrls.size} archivos seleccionados</span>
-            </div>
-          ) : (
-            <div className="text-obs-muted opacity-20 flex flex-col items-center gap-1">
-              <Eye size={24} strokeWidth={1} />
-              <span className="text-[8px] uppercase font-bold tracking-widest">Selecciona un archivo</span>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -2152,7 +3742,16 @@ const PlaylistsSection = React.memo(({
   isDarkMode: boolean,
   isHorizontal?: boolean
 }) => {
-  const selectedPlaylist = playlists.find(p => p.id === selectedPlaylistId);
+  const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (selectedPlaylistId) {
+      setLocalSelectedId(selectedPlaylistId);
+    }
+  }, [selectedPlaylistId]);
+
+  const activeId = localSelectedId || playlists[0]?.id;
+  const selectedPlaylist = playlists.find(p => p.id === activeId);
 
   return (
     <div className={`h-full flex ${isHorizontal ? 'flex-row' : 'flex-col'} bg-obs-bg`}>
@@ -2184,9 +3783,12 @@ const PlaylistsSection = React.memo(({
                 }}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => onDropOnPlaylist(e, playlist.id)}
-                onClick={() => onSelectPlaylist(playlist)}
+                onClick={() => {
+                  setLocalSelectedId(playlist.id);
+                  onSelectPlaylist(playlist);
+                }}
                 className={`px-3 py-2 rounded cursor-pointer transition-all border ${
-                  selectedPlaylistId === playlist.id 
+                  activeId === playlist.id 
                     ? 'bg-obs-accent border-obs-accent text-white shadow-lg shadow-obs-accent/20' 
                     : 'bg-obs-surface border-obs-border text-obs-text hover:border-obs-muted'
                 }`}
@@ -2199,7 +3801,7 @@ const PlaylistsSection = React.memo(({
                         e.stopPropagation();
                         onSetEditingPlaylist(playlist.id);
                       }}
-                      className={`p-2 rounded hover:bg-black/20 transition-colors ${selectedPlaylistId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
+                      className={`p-2 rounded hover:bg-black/20 transition-colors ${activeId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
                     >
                       <Settings size={18} />
                     </button>
@@ -2225,6 +3827,10 @@ const PlaylistsSection = React.memo(({
                   >
                     {clip.type === 'video' ? (
                       <video src={clip.url} className="w-full h-full object-cover" muted />
+                    ) : clip.type === 'document' || clip.name.toLowerCase().endsWith('.pdf') ? (
+                      <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none">
+                        <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />
+                      </div>
                     ) : (
                       <img src={clip.thumbnail} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                     )}
@@ -2277,9 +3883,12 @@ const PlaylistsSection = React.memo(({
               }}
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => onDropOnPlaylist(e, playlist.id)}
-              onClick={() => onSelectPlaylist(playlist)}
+              onClick={() => {
+                setLocalSelectedId(playlist.id);
+                onSelectPlaylist(playlist);
+              }}
               className={`px-3 py-1.5 rounded cursor-pointer transition-colors text-[11px] font-medium flex justify-between items-center ${
-                selectedPlaylistId === playlist.id 
+                activeId === playlist.id 
                   ? 'bg-obs-accent text-white' 
                   : 'text-obs-text hover:bg-obs-surface'
               }`}
@@ -2291,11 +3900,11 @@ const PlaylistsSection = React.memo(({
                     e.stopPropagation();
                     onSetEditingPlaylist(playlist.id);
                   }}
-                  className={`p-1 rounded hover:bg-black/20 transition-colors ${selectedPlaylistId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
+                  className={`p-1 rounded hover:bg-black/20 transition-colors ${activeId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
                 >
                   <Settings size={16} />
                 </button>
-                <span className={`text-[8px] px-1 rounded ${selectedPlaylistId === playlist.id ? 'bg-white/20' : 'bg-obs-surface text-obs-muted'}`}>
+                <span className={`text-[8px] px-1 rounded ${activeId === playlist.id ? 'bg-white/20' : 'bg-obs-surface text-obs-muted'}`}>
                   {playlist.clips.length}
                 </span>
               </div>
@@ -2350,7 +3959,7 @@ const GridSection = React.memo(({
           <span className="text-[9px] uppercase font-bold tracking-widest">Agrega fuentes a esta baraja</span>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
           {deckClips[currentDeck].map(clip => (
             <ClipCard 
               key={clip.id} 
@@ -2378,8 +3987,8 @@ const TransitionsSection = React.memo(({
   duration: number, 
   onDurationChange: (val: number) => void, 
   onTake: (type?: 'fade' | 'wipe' | 'slide' | 'cut') => void,
-  transitionType: 'fade' | 'wipe' | 'slide',
-  onTransitionTypeChange: (type: 'fade' | 'wipe' | 'slide') => void
+  transitionType: 'fade' | 'wipe' | 'slide' | 'cut',
+  onTransitionTypeChange: (type: 'fade' | 'wipe' | 'slide' | 'cut') => void
 }) => (
   <div className="flex flex-col h-full bg-obs-bg border-r border-obs-border">
     <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-surface">
@@ -2399,6 +4008,7 @@ const TransitionsSection = React.memo(({
           <option value="fade">Desvanecimiento</option>
           <option value="wipe">Barrido</option>
           <option value="slide">Deslizar</option>
+          <option value="cut">Corte</option>
         </select>
       </div>
       <div className="space-y-2">
@@ -2434,6 +4044,594 @@ const TransitionsSection = React.memo(({
   </div>
 ));
 
+const ProgramSection = React.memo(({ 
+  progress,
+  activeClip,
+  isPlaylist,
+  isLive,
+  externalScreens
+}: { 
+  progress: { current: number, total: number },
+  activeClip: Clip | null,
+  isPlaylist: boolean,
+  isLive: boolean,
+  externalScreens: Screen[]
+}) => {
+  const percent = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+  const timeRemaining = progress.total - progress.current;
+  
+  const activeScreensList = externalScreens.filter(s => s.isActive);
+
+  return (
+    <div className="flex flex-col h-full bg-obs-bg">
+      <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+        <div className="flex items-center gap-2">
+          <MonitorIcon size={12} className="text-obs-accent" />
+          <span className="text-[10px] font-bold uppercase tracking-wider text-obs-muted">Info Programa</span>
+        </div>
+        {isLive && (
+          <div className="flex items-center gap-1">
+            <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+            <span className="text-[8px] font-bold text-red-500 uppercase tracking-widest">En Vivo</span>
+          </div>
+        )}
+      </div>
+      
+      <div className="flex-1 p-2 flex flex-col gap-2 overflow-y-auto">
+        {/* Clip Info */}
+        <div className="p-2 bg-obs-surface rounded border border-obs-border">
+          <div className="flex justify-between items-start mb-1">
+            <div className="flex flex-col">
+              <span className="text-[8px] font-black text-obs-muted uppercase tracking-widest mb-0.5">Ahora Reproduciendo</span>
+              <span className="text-[11px] font-bold text-obs-text truncate max-w-[140px]">
+                {activeClip ? activeClip.name : 'Ningún clip'}
+              </span>
+            </div>
+            <div className="px-2 py-0.5 bg-black/40 rounded text-[8px] font-bold text-obs-accent border border-white/5 uppercase">
+              {isPlaylist ? 'Playlist' : 'Clip único'}
+            </div>
+          </div>
+
+          {/* Visualization Bar */}
+          <div className="mt-2 space-y-1">
+            {activeClip?.type === 'document' || activeClip?.name.toLowerCase().endsWith('.pdf') ? (
+              <>
+                <div className="flex justify-between text-[8px] font-mono font-bold">
+                  <span className="text-obs-accent">Pág. {activeClip.currentPage || 1}</span>
+                  <span className="text-obs-muted">
+                    {activeClip.totalPages ? `Quedan ${activeClip.totalPages - (activeClip.currentPage || 1)}` : 'Documento'}
+                  </span>
+                </div>
+                <div className="h-2.5 bg-black/60 rounded-full overflow-hidden border border-white/5 p-0.5">
+                  <motion.div 
+                    initial={false}
+                    animate={{ width: `${activeClip.totalPages ? ((activeClip.currentPage || 1) / activeClip.totalPages) * 100 : 100}%` }}
+                    className="h-full bg-gradient-to-r from-obs-accent to-blue-400 rounded-full shadow-[0_0_10px_rgba(0,170,255,0.4)]"
+                  />
+                </div>
+                <div className="flex justify-between text-[7px] font-bold text-obs-muted uppercase tracking-tighter">
+                  <span>Inicio</span>
+                  <span className="text-right">
+                    {activeClip.totalPages ? `Total Págs: ${activeClip.totalPages}` : ''}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between text-[8px] font-mono font-bold">
+                  <span className="text-obs-accent">{formatTime(progress.current)}</span>
+                  <span className="text-obs-muted">-{formatTime(timeRemaining > 0 ? timeRemaining : 0)}</span>
+                </div>
+                <div className="h-2.5 bg-black/60 rounded-full overflow-hidden border border-white/5 p-0.5">
+                  <motion.div 
+                    initial={false}
+                    animate={{ width: `${percent}%` }}
+                    className="h-full bg-gradient-to-r from-obs-accent to-blue-400 rounded-full shadow-[0_0_10px_rgba(0,170,255,0.4)]"
+                  />
+                </div>
+                <div className="flex justify-between text-[7px] font-bold text-obs-muted uppercase tracking-tighter">
+                  <span>Inicio</span>
+                  <span className="text-right">Duración Total: {formatTime(progress.total)}</span>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Screens Info */}
+        <div className="space-y-1">
+          <span className="text-[8px] font-black text-obs-muted uppercase tracking-widest px-1">Pantallas de Salida</span>
+          <div className="grid grid-cols-1 gap-1">
+            {activeScreensList.length > 0 ? activeScreensList.map(screen => (
+              <div key={screen.id} className="flex items-center gap-2 p-1.5 bg-obs-surface/50 rounded border border-white/5">
+                <Radio size={10} className="text-green-500" />
+                <span className="text-[9px] font-bold text-obs-text uppercase truncate">ID: {screen.name}</span>
+              </div>
+            )) : (
+              <div className="flex items-center gap-2 p-1 bg-obs-surface/50 rounded border border-dashed border-obs-border opacity-50">
+                <AlertTriangle size={10} className="text-obs-muted" />
+                <span className="text-[9px] font-bold text-obs-muted uppercase">No hay salidas activas</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const LayersSection = React.memo(({ 
+  layers, 
+  activeColumnTrigger,
+  activeLayerTriggers,
+  setActiveColumnTrigger,
+  setActiveLayerTriggers,
+  onAddLayer, 
+  onRemoveLayer,
+  onTriggerClip, 
+  onTriggerColumn,
+  onStopColumn,
+  onDropOnLayer,
+  onDragStartSlot,
+  layerOutputs,
+  onSetLayerOutput,
+  onUpdateLayer,
+  onUpdateClip,
+  outputs,
+  externalScreens,
+  clips,
+  isDarkMode 
+}: { 
+  layers: Layer[], 
+  activeColumnTrigger: number | null,
+  activeLayerTriggers: Record<string, boolean>,
+  setActiveColumnTrigger: (val: number | null) => void,
+  setActiveLayerTriggers: React.Dispatch<React.SetStateAction<Record<string, boolean>>>,
+  onAddLayer: () => void, 
+  onRemoveLayer: (layerId: string) => void,
+  onTriggerClip: (layerId: string, slotIdx: number, mode?: 'single' | 'sequence') => void,
+  onTriggerColumn: (slotIdx: number) => void,
+  onStopColumn: (slotIdx: number) => void,
+  onDropOnLayer: (e: React.DragEvent, layerId: string, slotIdx: number) => void,
+  onDragStartSlot: (e: React.DragEvent, clip: Clip) => void,
+  layerOutputs: Record<string, string | null>,
+  onSetLayerOutput: (layerId: string, outputId: string | null) => void,
+  onUpdateLayer: (layerId: string, updates: Partial<Layer>) => void,
+  onUpdateClip: (clipId: string, updates: Partial<Clip>) => void,
+  outputs: any[],
+  externalScreens: Screen[],
+  clips: Clip[],
+  isDarkMode: boolean 
+}) => {
+  const [activeOutputMenu, setActiveOutputMenu] = useState<string | null>(null);
+  const columnsCount = layers[0]?.slots.length || 0;
+
+  return (
+    <div className="flex flex-col bg-obs-bg border-b border-obs-border">
+      <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+        <div className="flex items-center gap-2">
+          <Grid size={12} className="text-obs-accent" />
+          <span className="text-[10px] font-bold uppercase tracking-wider text-obs-muted">Capas (Control de Salidas Directo)</span>
+        </div>
+        <button 
+          onClick={onAddLayer}
+          className="p-1 text-obs-accent hover:scale-110 transition-transform"
+          title="Agregar Capa"
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+      <div className="p-2 space-y-3 overflow-visible pb-40">
+        {/* Column Triggers Header */}
+        <div className="flex gap-2 items-end mb-1 sticky top-0 bg-obs-bg z-10 pb-2 border-b border-white/5">
+          <div className="w-32 shrink-0 px-2 py-1 text-[8px] font-black text-obs-muted uppercase flex items-center gap-1.5">
+            <Zap size={10} className="text-obs-accent" />
+            TRIGGERS
+          </div>
+          <div className="flex-1 flex gap-1">
+             {Array.from({ length: columnsCount }).map((_, colIdx) => {
+               const isActive = activeColumnTrigger === colIdx;
+               return (
+                 <div key={colIdx} className="w-32 shrink-0 flex flex-col gap-0.5">
+                    <button 
+                      onClick={() => onTriggerColumn(colIdx)}
+                      className={`w-full py-1.5 rounded-[2px] text-[8px] font-black uppercase tracking-tighter transition-all shadow-lg active:scale-95 ${isActive ? 'bg-obs-accent text-white shadow-[0_0_12px_rgba(0,170,255,0.5)] opacity-100 ring-1 ring-white/20' : 'bg-obs-accent/30 text-white/40 hover:bg-obs-accent/50 opacity-60'}`}
+                    >
+                      PLAY {colIdx + 1}
+                    </button>
+                    <button 
+                      onClick={() => onStopColumn(colIdx)}
+                      className={`w-full py-0.5 rounded-[2px] text-[6.5px] font-black uppercase tracking-tighter border transition-all shadow active:scale-95 ${activeColumnTrigger === null ? 'bg-obs-accent/10 text-obs-muted/20 border-white/5' : isActive ? 'bg-red-500 text-white border-red-400 shadow-[0_0_10px_rgba(239,68,68,0.5)] opacity-100' : 'bg-red-950/30 text-red-500/40 hover:bg-red-800/60 border-red-500/10 opacity-60'}`}
+                    >
+                      STOP
+                    </button>
+                 </div>
+               );
+             })}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {layers.map((layer, lIdx) => (
+            <div key={layer.id} className="flex gap-2 items-center group/row">
+              <div 
+                onClick={() => onUpdateLayer(layer.id, {})}
+                className={`w-32 h-16 px-2 py-1.5 border rounded flex flex-col justify-between group relative overflow-visible shrink-0 cursor-pointer transition-all ${
+                  layer.activeClipId ? 'bg-obs-surface' : 'bg-black/10'
+                } ${layers.find(l => l.activeClipId === l.slots.find(s => s?.id === layer.activeClipId)?.id) ? 'border-obs-accent ring-1 ring-obs-accent/20' : 'border-obs-border'}`}
+              >
+                <div className="flex justify-between items-center w-full min-h-[14px]">
+                  <div className="flex items-center gap-1 overflow-hidden">
+                    <span className="text-[7px] font-bold text-obs-muted">#{lIdx + 1}</span>
+                    <span className="text-[8px] font-black text-obs-text group-hover:text-obs-accent transition-colors truncate uppercase tracking-tighter">{layer.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {layer.activeClipId && clips.find(c => c.id === layer.activeClipId)?.type === 'document' && (
+                      <div className="flex items-center bg-black/40 rounded px-1 group shadow-sm border border-white/5">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const clip = clips.find(c => c.id === layer.activeClipId);
+                            if (clip) onUpdateClip(clip.id, { currentPage: Math.max(1, (clip.currentPage || 1) - 1) });
+                          }}
+                          className="hover:text-obs-accent p-0.5"
+                        >
+                          <ChevronLeft size={10} strokeWidth={3} />
+                        </button>
+                        <span className="text-[8px] font-mono font-bold text-obs-accent min-w-[12px] text-center">
+                          {(() => {
+                            const clip = clips.find(c => c.id === layer.activeClipId);
+                            if (!clip) return null;
+                            return `${clip.currentPage || 1}${clip.totalPages ? `/${clip.totalPages}` : ''}`;
+                          })()}
+                        </span>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const clip = clips.find(c => c.id === layer.activeClipId);
+                            if (clip) onUpdateClip(clip.id, { currentPage: Math.min((clip.currentPage || 1) + 1, clip.totalPages || Infinity) });
+                          }}
+                          className="hover:text-obs-accent p-0.5"
+                        >
+                          <ChevronRight size={10} strokeWidth={3} />
+                        </button>
+                      </div>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onRemoveLayer(layer.id); }}
+                      className="text-red-500 hover:text-white hover:bg-red-500 p-0.5 rounded transition-colors opacity-0 group-hover:opacity-100"
+                      title="Eliminar capa"
+                    >
+                      <Trash2 size={8} />
+                    </button>
+                  </div>
+                </div>
+              
+              <div className="relative w-full">
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(activeOutputMenu === layer.id ? null : layer.id); }}
+                  className={`w-full py-1 rounded-[2px] text-[7px] font-black uppercase tracking-tighter transition-all flex items-center justify-center gap-1 border ${layerOutputs[layer.id] ? 'bg-obs-accent text-white border-obs-accent shadow-[0_4px_10px_rgba(0,170,255,0.4)]' : 'bg-black/40 text-obs-muted border-white/10 hover:border-obs-accent hover:text-obs-accent hover:border-obs-accent/50'}`}
+                >
+                  <MonitorIcon size={7} />
+                  <span>{layerOutputs[layer.id] ? `OUT ${layerOutputs[layer.id]}` : 'PROGRAM'}</span>
+                   <ChevronDown size={7} className={`transition-transform ${activeOutputMenu === layer.id ? 'rotate-180' : ''}`} />
+                </button>
+                
+                {activeOutputMenu === layer.id && (
+                  <div className="absolute top-full left-0 w-full min-w-[120px] bg-obs-surface border border-obs-border rounded-md shadow-[0_4px_20px_rgba(0,0,0,0.8)] z-[300] mt-1 overflow-hidden">
+                    <div className="px-2 py-1 bg-black/40 border-b border-white/5 flex justify-between items-center">
+                      <span className="text-[7px] font-black text-obs-muted uppercase tracking-widest">Salida</span>
+                      <button onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(null); }} className="text-obs-muted hover:text-white transition-colors">
+                        <X size={8} />
+                      </button>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto custom-scrollbar">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSetLayerOutput(layer.id, null);
+                          onUpdateLayer(layer.id, { outputId: null });
+                          setActiveOutputMenu(null);
+                        }}
+                        className={`w-full py-2 px-3 text-[8px] font-black text-left uppercase hover:bg-obs-accent hover:text-white transition-colors border-b border-white/5 flex items-center justify-between ${!layerOutputs[layer.id] ? 'bg-obs-accent/20 text-obs-accent' : 'text-obs-muted'}`}
+                      >
+                         <span>PROGRAM</span>
+                         {!layerOutputs[layer.id] && <Check size={8} />}
+                      </button>
+                      {outputs.map(out => {
+                        const screen = externalScreens.find(s => s.id === out.physicalScreenId);
+                        const isSelected = layerOutputs[layer.id] === out.id;
+                        return (
+                          <button
+                            key={out.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSetLayerOutput(layer.id, out.id);
+                              onUpdateLayer(layer.id, { outputId: out.id });
+                              setActiveOutputMenu(null);
+                            }}
+                            className={`w-full py-2 px-3 text-[8px] font-black text-left uppercase hover:bg-obs-accent hover:text-white transition-colors border-b border-white/5 last:border-0 flex items-center justify-between ${isSelected ? 'bg-obs-accent/20 text-obs-accent' : 'text-obs-muted'}`}
+                          >
+                             <div className="flex flex-col">
+                               <span>OUT {out.id}</span>
+                               {screen && <span className="text-[6px] opacity-60 normal-case font-medium">{screen.name}</span>}
+                             </div>
+                             {isSelected && <Check size={8} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1 w-full justify-between">
+                <div className="flex gap-0.5">
+                  <button 
+                    title="Play Layer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const isStarting = !layer.isPlaying || activeLayerTriggers[layer.id] === false;
+                      setActiveColumnTrigger(null);
+                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: isStarting }));
+                      onUpdateLayer(layer.id, { isPlaying: isStarting, playbackMode: 'sequence' });
+                      if (isStarting) {
+                        const currentIdx = layer.activeSlotIndex !== null ? layer.activeSlotIndex : 
+                                         (layer.activeClipId ? layer.slots.findIndex(s => s?.id === layer.activeClipId) : -1);
+                        const targetIdx = currentIdx !== -1 ? currentIdx : layer.slots.findIndex(s => s !== null);
+                        if (targetIdx !== -1) onTriggerClip(layer.id, targetIdx, 'sequence');
+                      }
+                    }}
+                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${activeLayerTriggers[layer.id] ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,170,255,0.4)]' : 'bg-obs-accent/20 text-obs-accent/50 hover:bg-obs-accent/40 border-obs-accent/20'}`}
+                  >
+                    <Play size={5} fill="currentColor" />
+                  </button>
+                  <button 
+                    title="Stop Layer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: false }));
+                      onUpdateLayer(layer.id, { isPlaying: false, activeClipId: null, activeSlotIndex: null });
+                    }}
+                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${!layer.isPlaying && activeLayerTriggers[layer.id] === false ? 'bg-red-500 text-white border-red-400 shadow-[0_0_8px_rgba(239,68,68,0.4)]' : 'bg-obs-bg/50 text-obs-muted border-white/5 hover:bg-red-500/20'}`}
+                  >
+                    <Square size={5} fill="currentColor" />
+                  </button>
+                </div>
+                
+                <div className="flex gap-0.5">
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { isVisible: !layer.isVisible }); }}
+                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${layer.isVisible ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-bg/50 text-obs-muted border-white/5 hover:bg-obs-accent/20'}`}
+                    title={layer.isVisible ? "Ocultar capa" : "Mostrar capa"}
+                  >
+                    <Eye size={7} />
+                  </button>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { muted: !layer.muted }); }}
+                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${!layer.muted ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-bg/50 text-obs-muted border-white/5 hover:bg-obs-accent/20'}`}
+                    title={layer.muted ? "Activar audio" : "Silenciar"}
+                  >
+                    <Volume2 size={7} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 flex gap-1 pb-1 overflow-x-auto custom-scrollbar">
+              {layer.slots.map((slot, idx) => (
+                <div 
+                  key={idx}
+                  draggable={!!slot}
+                  onDragStart={(e) => slot && onDragStartSlot(e, slot)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => onDropOnLayer(e, layer.id, idx)}
+                  onClick={() => onTriggerClip(layer.id, idx)}
+                  className={`flex-shrink-0 w-32 h-16 rounded border-2 cursor-pointer transition-all relative group overflow-hidden ${
+                    slot ? 'bg-obs-surface' : 'bg-black/20 border-dashed border-obs-border hover:border-obs-muted'
+                  } ${layer.activeClipId === slot?.id && slot ? 'border-obs-accent shadow-[0_0_10px_rgba(0,170,255,0.3)]' : 'border-obs-border'}`}
+                >
+                  {slot ? (
+                    <>
+                      {slot.type === 'video' ? (
+                        <video src={slot.url} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" muted />
+                      ) : slot.type === 'document' || slot.name.toLowerCase().endsWith('.pdf') ? (
+                        <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none opacity-60 group-hover:opacity-100">
+                          <PDFRenderer url={slot.url} pageNumber={slot.currentPage || 1} />
+                        </div>
+                      ) : (
+                        <img src={slot.thumbnail} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" />
+                      )}
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                        <span className="text-[7px] text-white truncate block">{slot.name}</span>
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const newSlots = [...layer.slots];
+                          newSlots[idx] = null;
+                          onUpdateLayer(layer.id, { slots: newSlots });
+                        }}
+                        className="absolute top-0.5 right-0.5 p-0.5 bg-black/60 rounded text-red-500 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 hover:text-white"
+                      >
+                         <X size={10} />
+                      </button>
+                    </>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center opacity-10 group-hover:opacity-30 transition-opacity">
+                      <Plus size={16} />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+});
+
+const PiPSection = React.memo(({ 
+  layers, 
+  clips,
+  onUpdateLayer, 
+  onAddPiP,
+  onSelectPiP,
+  selectedPiPId,
+  isDarkMode 
+}: { 
+  layers: PiPLayer[], 
+  clips: Clip[],
+  onUpdateLayer: (id: string, updates: Partial<PiPLayer>) => void,
+  onAddPiP: () => void,
+  onSelectPiP: (pip: PiPLayer) => void,
+  selectedPiPId: string | null,
+  isDarkMode: boolean 
+}) => {
+  return (
+    <div className="flex flex-col w-48 bg-obs-surface border border-obs-border rounded-lg overflow-hidden shrink-0" style={{ maxHeight: '300px' }}>
+      <div className="px-2 py-1.5 border-b border-obs-border bg-black/20 flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Layers size={12} className="text-obs-accent" />
+          <span className="text-[10px] font-black uppercase tracking-wider text-obs-text">PiP Panels</span>
+        </div>
+        <button className="p-1 text-obs-muted hover:text-white transition-colors">
+          <Settings size={10} />
+        </button>
+      </div>
+      
+      <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar px-1">
+        {layers.map(layer => (
+          <div key={layer.id} className={`p-2 rounded border transition-all ${layer.isActive ? 'bg-obs-accent/10 border-obs-accent' : 'bg-black/20 border-white/5 hover:border-white/10'}`}>
+            <div className="flex justify-between items-center mb-2">
+              <span className={`text-[9px] font-bold uppercase ${layer.isActive ? 'text-obs-accent' : 'text-obs-muted'}`}>{layer.name}</span>
+              <div className="flex gap-1">
+                <button 
+                  onClick={() => onUpdateLayer(layer.id, { isActive: !layer.isActive })}
+                  className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest transition-all ${layer.isActive ? 'bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.3)]' : 'bg-obs-accent text-white hover:bg-obs-accent/80'}`}
+                >
+                  {layer.isActive ? 'OFF' : 'LIVE'}
+                </button>
+              </div>
+            </div>
+            
+            <div className="space-y-1.5">
+               <div className="flex flex-col gap-0.5">
+                  <label className="text-[8px] text-obs-muted font-bold uppercase">Source</label>
+                  <select 
+                    value={layer.clipId || ''}
+                    onChange={(e) => onUpdateLayer(layer.id, { clipId: e.target.value || null })}
+                    className="w-full bg-black/40 border border-white/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
+                  >
+                    <option value="">No Source</option>
+                    {clips.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+               </div>
+
+               <div className="grid grid-cols-2 gap-1.5">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[7.5px] text-obs-muted font-bold uppercase">PosX</label>
+                    <input 
+                      type="number" 
+                      value={layer.x} 
+                      onChange={(e) => onUpdateLayer(layer.id, { x: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[7.5px] text-obs-muted font-bold uppercase">PosY</label>
+                    <input 
+                      type="number" 
+                      value={layer.y} 
+                      onChange={(e) => onUpdateLayer(layer.id, { y: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                    />
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-2 gap-1.5">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[7.5px] text-obs-muted font-bold uppercase">Ancho</label>
+                    <input 
+                      type="number" 
+                      value={layer.width} 
+                      onChange={(e) => onUpdateLayer(layer.id, { width: parseInt(e.target.value) || 100 })}
+                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[7.5px] text-obs-muted font-bold uppercase">Alto</label>
+                    <input 
+                      type="number" 
+                      value={layer.height} 
+                      onChange={(e) => onUpdateLayer(layer.id, { height: parseInt(e.target.value) || 100 })}
+                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                    />
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-2 gap-1.5">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[7.5px] text-obs-muted font-bold uppercase">Opacidad</label>
+                    <input 
+                      type="number" 
+                      step="0.05"
+                      min="0"
+                      max="1"
+                      value={layer.opacity} 
+                      onChange={(e) => onUpdateLayer(layer.id, { opacity: parseFloat(e.target.value) || 0 })}
+                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[7.5px] text-obs-muted font-bold uppercase">Target</label>
+                    <select 
+                      value={layer.targetOutputId || ''}
+                      onChange={(e) => onUpdateLayer(layer.id, { targetOutputId: e.target.value || null })}
+                      className="w-full bg-black border border-white/10 rounded px-1 py-0.5 text-[8.5px] text-white font-bold outline-none"
+                    >
+                      <option value="" className="bg-obs-surface text-white">Prog</option>
+                      <option value="1" className="bg-obs-surface text-white">Out 1</option>
+                      <option value="2" className="bg-obs-surface text-white">Out 2</option>
+                      <option value="3" className="bg-obs-surface text-white">Out 3</option>
+                    </select>
+                  </div>
+               </div>
+
+               <div className="grid grid-cols-2 gap-1.5 pt-1">
+                  <button 
+                    onClick={() => onUpdateLayer(layer.id, { showInPreview: !layer.showInPreview })}
+                    className={`py-1 rounded text-[7px] font-black uppercase tracking-tighter transition-all border ${layer.showInPreview ? 'bg-obs-accent text-white border-obs-accent' : 'bg-black/20 text-obs-muted border-white/5'}`}
+                  >
+                    PREVIEW {layer.showInPreview ? 'ON' : 'OFF'}
+                  </button>
+                  <button 
+                    onClick={() => onUpdateLayer(layer.id, { showFrame: !layer.showFrame })}
+                    className={`py-1 rounded text-[7px] font-black uppercase tracking-tighter transition-all border ${layer.showFrame !== false ? 'bg-obs-accent text-white border-obs-accent' : 'bg-black/20 text-obs-muted border-white/5'}`}
+                  >
+                    FRAME {layer.showFrame !== false ? 'ON' : 'OFF'}
+                  </button>
+               </div>
+            </div>
+          </div>
+        ))}
+
+        <button 
+          onClick={onAddPiP}
+          className="w-full py-1.5 border border-dashed border-obs-border rounded text-[9px] text-obs-muted hover:text-white hover:border-obs-muted transition-all uppercase font-bold flex items-center justify-center gap-1.5"
+        >
+          <Plus size={10} />
+          Create PiP Window
+        </button>
+      </div>
+    </div>
+  );
+});
+
 const MixerSection = React.memo(({ 
   previewLevel, 
   programLevel, 
@@ -2460,77 +4658,97 @@ const MixerSection = React.memo(({
   onMasterVolumeChange: (v: number) => void,
   onUsbInVolumeChange: (v: number) => void,
   onUsbOutVolumeChange: (v: number) => void
-}) => (
-  <div className="flex flex-col h-full bg-obs-bg border-r border-obs-border">
-    <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-surface">
-      <div className="flex items-center gap-2">
-        <Volume2 size={12} className="text-obs-accent" />
-        <span className="text-[10px] font-bold uppercase tracking-wider text-obs-muted">Mezclador de Audio</span>
-      </div>
-      <button className="p-1 text-obs-muted hover:text-obs-text transition-colors">
-        <Settings size={12} />
-      </button>
-    </div>
-    <div className="flex-1 p-3 flex gap-4 overflow-x-auto justify-start">
-      {[
-        { name: 'Master', level: programLevel, volume: masterVolume, onChange: onMasterVolumeChange },
-        { name: 'Programa', level: programLevel, volume: programVolume, onChange: onProgramVolumeChange },
-        { name: 'USB IN', level: 0, volume: usbInVolume, onChange: onUsbInVolumeChange },
-        { name: 'USB Out', level: 0, volume: usbOutVolume, onChange: onUsbOutVolumeChange }
-      ].map((source, i) => (
-        <div key={source.name} className="flex gap-2 h-full items-end min-w-[60px]">
-          {/* VU Meter */}
-          <div className="w-1.5 h-full max-h-[120px] bg-black/40 rounded-sm border border-white/5 relative overflow-hidden flex flex-col justify-end">
-            <div 
-              className="w-full bg-green-500/50 border-t border-green-400 transition-all duration-75" 
-              style={{ 
-                height: `${source.level * 100}%`,
-                boxShadow: '0 0-10px rgba(34, 197, 94, 0.3)' 
-              }}
-            />
-          </div>
-          
-          {/* Fader */}
-          <div className="flex flex-col items-center gap-1.5 h-full">
-            <div 
-              className="w-4 h-full max-h-[120px] relative bg-black/60 rounded-sm border border-white/5 cursor-ns-resize overflow-hidden group"
-              onMouseDown={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const updateValue = (clientY: number) => {
-                  const y = Math.max(0, Math.min(clientY - rect.top, rect.height));
-                  const percent = 1 - (y / rect.height);
-                  const newValue = Math.max(0, Math.min(1, percent));
-                  source.onChange(newValue);
-                };
-                const handleMove = (moveEvent: MouseEvent) => updateValue(moveEvent.clientY);
-                const handleUp = () => {
-                  window.removeEventListener('mousemove', handleMove);
-                  window.removeEventListener('mouseup', handleUp);
-                };
-                window.addEventListener('mousemove', handleMove);
-                window.addEventListener('mouseup', handleUp);
-                updateValue(e.clientY);
-              }}
-            >
-              <div 
-                className="absolute inset-x-0 bottom-0 bg-obs-accent/30 transition-all duration-75"
-                style={{ height: `${source.volume * 100}%` }}
-              />
-              <div 
-                className="absolute inset-x-0 bg-obs-accent h-1 shadow-[0_0_10px_rgba(0,170,255,0.8)] transition-all duration-75"
-                style={{ bottom: `calc(${source.volume * 100}% - 2px)` }}
-              />
-            </div>
-            <div className="flex flex-col items-center">
-              <span className="text-[7px] text-obs-muted uppercase font-bold tracking-tighter leading-none mb-0.5">{source.name}</span>
-              <span className="text-[8px] font-mono text-obs-accent leading-none">{(source.volume * 100).toFixed(0)}%</span>
-            </div>
-          </div>
+}) => {
+  const faderBgStyle = { 
+    backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px)', 
+    backgroundSize: '100% 10%' 
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-obs-bg border-r border-obs-border">
+      <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+        <div className="flex items-center gap-2">
+          <Volume2 size={12} className="text-obs-accent" />
+          <span className="text-[10px] font-bold uppercase tracking-wider text-obs-muted">Mezclador de Audio</span>
         </div>
-      ))}
+        <button className="p-1 text-obs-muted hover:text-obs-text transition-colors">
+          <Settings size={12} />
+        </button>
+      </div>
+      <div className="flex-1 p-3 flex gap-4 overflow-x-auto justify-start select-none">
+        {[
+          { name: 'Master', level: programLevel, volume: masterVolume, onChange: onMasterVolumeChange },
+          { name: 'Programa', level: programLevel, volume: programVolume, onChange: onProgramVolumeChange },
+          { name: 'USB IN', level: 0, volume: usbInVolume, onChange: onUsbInVolumeChange },
+          { name: 'USB Out', level: 0, volume: usbOutVolume, onChange: onUsbOutVolumeChange }
+        ].map((source, i) => (
+          <div key={source.name} className="flex gap-2 h-full items-end min-w-[60px]">
+            {/* VU Meter */}
+            <div className="w-1.5 h-full max-h-[120px] bg-black/40 rounded-sm border border-white/5 relative overflow-hidden flex flex-col justify-end">
+              <div 
+                className="w-full bg-green-500/50 border-t border-green-400 transition-all duration-75" 
+                style={{ 
+                  height: `${source.level * 100}%`,
+                  boxShadow: '0 0-10px rgba(34, 197, 94, 0.3)' 
+                }}
+              />
+            </div>
+            
+            {/* Fader */}
+            <div className="flex flex-col items-center gap-1.5 h-full">
+              <div 
+                className="w-5 h-full max-h-[120px] relative bg-black/60 rounded-sm border border-white/5 cursor-ns-resize overflow-hidden group"
+                style={faderBgStyle}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  const target = e.currentTarget;
+                  const rect = target.getBoundingClientRect();
+                  
+                  const updateValue = (clientY: number) => {
+                    const y = Math.max(0, Math.min(clientY - rect.top, rect.height));
+                    const percent = 1 - (y / rect.height);
+                    const newValue = Math.max(0, Math.min(1, percent));
+                    source.onChange(newValue);
+                  };
+
+                  const onMouseMove = (moveEvent: MouseEvent) => {
+                    updateValue(moveEvent.clientY);
+                  };
+
+                  const onMouseUp = () => {
+                    window.removeEventListener('mousemove', onMouseMove);
+                    window.removeEventListener('mouseup', onMouseUp);
+                    document.body.style.cursor = '';
+                    document.documentElement.classList.remove('select-none');
+                  };
+
+                  window.addEventListener('mousemove', onMouseMove);
+                  window.addEventListener('mouseup', onMouseUp);
+                  document.body.style.cursor = 'ns-resize';
+                  document.documentElement.classList.add('select-none');
+                  updateValue(e.clientY);
+                }}
+              >
+                <div 
+                  className="absolute inset-x-0 bottom-0 bg-obs-accent/20 transition-all duration-75"
+                  style={{ height: `${source.volume * 100}%` }}
+                />
+                <div 
+                  className="absolute inset-x-0 bg-obs-accent h-1 shadow-[0_0_10px_rgba(0,170,255,0.8)] transition-all duration-75"
+                  style={{ bottom: `calc(${source.volume * 100}% - 1px)` }}
+                />
+              </div>
+              <div className="flex flex-col items-center min-w-[40px]">
+                <span className="text-[7px] text-obs-muted uppercase font-bold tracking-tighter leading-none mb-0.5">{source.name}</span>
+                <span className="text-[8px] font-mono text-obs-accent leading-none font-bold">{volToDb(source.volume)}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
-  </div>
-));
+  );
+});
 
 // --- Main App ---
 
@@ -2541,13 +4759,19 @@ export default function App() {
     { id: 'playlist-2', name: 'Playlist 2', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
   ]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<'clip' | 'playlist' | 'program' | null>(null);
-  const [previewVolume, setPreviewVolume] = useState(1);
-  const [programVolume, setProgramVolume] = useState(1);
-  const [masterVolume, setMasterVolume] = useState(1);
-  const [usbInVolume, setUsbInVolume] = useState(0.8);
-  const [usbOutVolume, setUsbOutVolume] = useState(0.8);
-  const [externalScreenSettings, setExternalScreenSettings] = useState<ExternalScreenSettings>({
+  const [selectedItemType, setSelectedItemType] = useState<'clip' | 'playlist' | 'program' | 'preview' | 'layer' | 'pip' | 'pipManager' | null>(null);
+  const [previewVolume, setPreviewVolume] = useState(0.5);
+  const [programVolume, setProgramVolume] = useState(0.5);
+  const [masterVolume, setMasterVolume] = useState(0.5);
+  const [usbInVolume, setUsbInVolume] = useState(0.5);
+  const [usbOutVolume, setUsbOutVolume] = useState(0.5);
+  const [selectedScreenId, setSelectedScreenId] = useState<string | null>(null);
+  const [allScreenSettings, setAllScreenSettings] = useState<Record<string, ExternalScreenSettings>>({});
+  const [programProgress, setProgramProgress] = useState({ current: 0, total: 0 });
+  const [previewProgress, setPreviewProgress] = useState({ current: 0, total: 0 });
+  const [timerMode, setTimerMode] = useState<'elapsed' | 'remaining'>('elapsed');
+
+  const DEFAULT_SCREEN_SETTINGS: ExternalScreenSettings = {
     resolution: '1920x1080',
     width: 1920,
     height: 1080,
@@ -2556,22 +4780,105 @@ export default function App() {
     brightness: 1,
     contrast: 1,
     saturation: 1,
+    opacity: 1,
+    x: 0,
+    y: 0,
+    rotation: 0,
     temperature: 6500,
     colorBalance: { r: 1, g: 1, b: 1 },
-    selectedScreenId: null
-  });
+    showBackground: false,
+    bgScalingW: 100,
+    bgScalingH: 100,
+    transitionType: 'cut',
+    transitionDuration: 1000
+  };
+
+  const getExternalScreenSettings = (screenId: string | null): ExternalScreenSettings => {
+    if (!screenId) return DEFAULT_SCREEN_SETTINGS;
+    return allScreenSettings[screenId] || DEFAULT_SCREEN_SETTINGS;
+  };
+
+  const externalScreenSettings = getExternalScreenSettings(selectedScreenId);
+  const DEFAULT_LAYER_PROPS: Omit<Layer, 'id' | 'name' | 'slots'> = {
+    isVisible: true,
+    opacity: 1,
+    muted: true,
+    activeClipId: null,
+    activeSlotIndex: null,
+    brightness: 1,
+    contrast: 1,
+    saturation: 1,
+    colorBalance: { r: 1, g: 1, b: 1 },
+    rotation: 0,
+    loop: true,
+    playbackMode: 'sequence',
+    transition: 'fade'
+  };
+
+  const [layers, setLayers] = useState<Layer[]>([
+    { id: 'layer-1', name: 'CAPA 1', slots: Array(8).fill(null), ...DEFAULT_LAYER_PROPS },
+    { id: 'layer-2', name: 'CAPA 2', slots: Array(8).fill(null), ...DEFAULT_LAYER_PROPS },
+  ]);
+
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
   const [programClipId, setProgramClipId] = useState<string | null>(null);
+  const [outputPrograms, setOutputPrograms] = useState<Record<string, string | null>>({});
+  const [outputTransitionTargets, setOutputTransitionTargets] = useState<Record<string, string | null>>({});
+  const [outputOffStates, setOutputOffStates] = useState<Record<string, boolean>>({});
+  const [showLayers, setShowLayers] = useState(true);
+  const [showPlaylists, setShowPlaylists] = useState(true);
+  const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [workMode, setWorkMode] = useState<'layers' | 'previews'>('layers');
   const [isPixelMapOpen, setIsPixelMapOpen] = useState(false);
   const [slices, setSlices] = useState([
     { id: 'slice-1', name: 'Main Screen', x: 0, y: 0, width: 1920, height: 1080, outputX: 0, outputY: 0, outputWidth: 1920, outputHeight: 1080 },
   ]);
+  
+  // -- NEW MULTI-PREVIEW & MULTI-OUTPUT STATE --
+  const [outputs, setOutputs] = useState<any[]>([{ id: '1', name: 'Salida 1', physicalScreenId: null }]);
+  const [activeOutputId, setActiveOutputId] = useState<string>('1');
+  const [layerOutputs, setLayerOutputs] = useState<Record<string, string | null>>({});
+  const [pipLayers, setPipLayers] = useState<PiPLayer[]>([
+    { id: 'pip-1', name: 'PIP 1', clipId: null, x: 50, y: 50, width: 400, height: 225, opacity: 1, isActive: false, targetOutputId: '1', showFrame: true, showInPreview: false },
+  ]);
+
+  const handleSelectPiP = (pip: PiPLayer) => {
+    setSelectedItemType('pip' as any);
+    setSelectedItemId(pip.id);
+  };
+
+  const addPiP = () => {
+    const newId = `pip-${Date.now()}`;
+    setPipLayers(prev => [...prev, {
+      id: newId,
+      name: `PIP ${prev.length + 1}`,
+      clipId: null,
+      x: 50, y: 50, width: 400, height: 225,
+      opacity: 1,
+      isActive: false,
+      targetOutputId: activeOutputId,
+      showFrame: false,
+      showInPreview: false
+    }]);
+  };
+  const [previews, setPreviews] = useState<any[]>([{ id: '1', name: 'Preview 1', selectedOutputs: [], isLive: false, clipId: null }]);
+  const [isOutputModalOpen, setIsOutputModalOpen] = useState(false);
+  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+  // --------------------------------------------
+
+  useEffect(() => {
+    const handleNav = () => setSelectedItemType('pipManager');
+    document.addEventListener('nav-to-pip-manager', handleNav);
+    return () => document.removeEventListener('nav-to-pip-manager', handleNav);
+  }, []);
+
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'audio' | 'info' | null>('audio');
+  const [libraryFiles, setLibraryFiles] = useState<{ name: string, type: string, url: string, file: File }[]>([]);
+  const [selectedLibraryUrls, setSelectedLibraryUrls] = useState<Set<string>>(new Set());
   const [crossfaderValue, setCrossfaderValue] = useState(0);
-  const [isLive, setIsLive] = useState(false);
-  const [isTransmitting, setIsTransmitting] = useState(false);
-  const [transitionDuration, setTransitionDuration] = useState(1000);
-  const [transitionType, setTransitionType] = useState<'fade' | 'wipe' | 'slide'>('fade');
+  const [isLive, setIsLive] = useState(true);
+  const [isTransmitting, setIsTransmitting] = useState(true);
   const [externalScreens, setExternalScreens] = useState<Screen[]>([]);
   const [hasDetailedScreens, setHasDetailedScreens] = useState(false);
   const [isIframe, setIsIframe] = useState(false);
@@ -2579,34 +4886,161 @@ export default function App() {
   const outputWindowRef = useRef<Window | null>(null);
   const outputChannel = useRef<BroadcastChannel | null>(null);
 
-  // Initialize BroadcastChannel
+  const handleProgramOff = () => {
+    const isCurrentlyOff = outputOffStates[activeOutputId];
+    
+    if (!isCurrentlyOff) {
+      // Step 1: Trigger fade out (fader/opacity handled by outputOffStates)
+      setOutputOffStates(prev => ({
+        ...prev,
+        [activeOutputId]: true
+      }));
+
+      // Step 2: After a longer fade (2.5s), fully clear the content
+      setTimeout(() => {
+        setOutputPrograms(prev => ({
+          ...prev,
+          [activeOutputId]: null
+        }));
+        setOutputTransitionTargets(prev => ({
+          ...prev,
+          [activeOutputId]: null
+        }));
+        // Also clear internal program state if this was the active output
+        if (activeOutputId === '1') {
+          setProgramClipId(null);
+        }
+        setOutputOffStates(prev => ({
+          ...prev,
+          [activeOutputId]: false
+        }));
+      }, 2500); 
+    } else {
+      // Toggle back on (though technically it won't have content until next TAKE)
+      setOutputOffStates(prev => ({
+        ...prev,
+        [activeOutputId]: false
+      }));
+    }
+  };
+
+  // Initialize BroadcastChannel and Sync logic
   useEffect(() => {
     outputChannel.current = new BroadcastChannel('lumina-output');
     
+    // Handle requests from output windows
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'REQUEST_SYNC') {
+        outputChannel.current?.postMessage({
+          type: 'SYNC_STATE',
+          payload: {
+            programClipId,
+            previewClipId,
+            outputPrograms,
+            outputTransitionTargets,
+            outputOffStates,
+            outputs,
+            clips,
+            crossfaderValue,
+            allScreenSettings,
+            isLive,
+            isTransmitting,
+            isProgramOff: outputOffStates[activeOutputId] || false,
+            programVolume,
+            masterVolume,
+            transitionType: externalScreenSettings.transitionType,
+            layers,
+            layerOutputs,
+            pipLayers
+          }
+        });
+      }
+      if (event.data.type === 'CLIP_ENDED') {
+        const { outputId, clipId } = event.data.payload;
+        const clip = clips.find((c: any) => c.id === clipId);
+        const playlist = playlists.find((p: any) => p.id === clip?.playlistId || p.clips.some((c: any) => c.id === clipId));
+        if (playlist && playlist.clips.length > 0) {
+           const currentIndex = playlist.clips.findIndex((c: any) => c.id === clipId);
+           const nextIndex = (currentIndex + 1) % playlist.clips.length;
+           const nextClip = playlist.clips[nextIndex];
+           
+           if (outputId) {
+             setOutputPrograms(prev => ({ ...prev, [outputId]: nextClip.id }));
+             if (outputId === activeOutputId) {
+                setProgramClipId(nextClip.id);
+             }
+           }
+        }
+      }
+      if (event.data.type === 'LAYER_CLIP_ENDED') {
+        const { layerId } = event.data.payload;
+        handleLayerEnded(layerId);
+      }
+    };
+    
+    outputChannel.current.addEventListener('message', handleMessage);
+    
     return () => {
+      outputChannel.current?.removeEventListener('message', handleMessage);
       outputChannel.current?.close();
     };
-  }, []);
+  }, [
+    programClipId, 
+    previewClipId, 
+    outputTransitionTargets, 
+    outputPrograms, 
+    outputOffStates, 
+    outputs, 
+    clips, 
+    crossfaderValue, 
+    allScreenSettings, 
+    isLive, 
+    isTransmitting, 
+    activeOutputId, 
+    programVolume, 
+    masterVolume, 
+    externalScreenSettings.transitionType,
+    layers,
+    layerOutputs,
+    pipLayers,
+    playlists
+  ]);
+  // Throttle state mirroring to 30fps max to avoid locking the UI during smooth slider inputs
+  const syncTimeoutRef = useRef<any>(null);
 
-  // Sync state to output window
   useEffect(() => {
     if (outputChannel.current) {
-      outputChannel.current.postMessage({
-        type: 'SYNC_STATE',
-        payload: {
-          programClipId,
-          previewClipId,
-          clips,
-          crossfaderValue,
-          externalScreenSettings,
-          isLive,
-          isTransmitting,
-          programVolume,
-          transitionType
-        }
-      });
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = setTimeout(() => {
+        outputChannel.current?.postMessage({
+          type: 'SYNC_STATE',
+          payload: {
+            programClipId,
+            previewClipId,
+            outputPrograms,
+            outputTransitionTargets,
+            outputOffStates,
+            outputs,
+            clips,
+            crossfaderValue,
+            allScreenSettings,
+            isLive,
+            isTransmitting,
+            isProgramOff: outputOffStates[activeOutputId] || false,
+            programVolume,
+            masterVolume,
+            transitionType: externalScreenSettings.transitionType,
+            layers,
+            layerOutputs,
+            pipLayers
+          }
+        });
+      }, 30);
     }
-  }, [programClipId, previewClipId, clips, crossfaderValue, externalScreenSettings, isLive, isTransmitting, programVolume, transitionType]);
+    return () => {
+       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    }
+  }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, layers, layerOutputs, pipLayers]);
 
   // Screen Detection Logic
   const detectScreens = async (requestPermission = false) => {
@@ -2615,84 +5049,100 @@ export default function App() {
       
       // Intentar detección nativa vía Bridge Python (Puerto 3001)
       try {
-        const response = await fetch('http://localhost:3001/monitors');
-        if (response.ok) {
+        const response = await fetch('http://localhost:3001/monitors').catch(() => null);
+        if (response && response.ok) {
           const nativeScreens = await response.json();
           if (nativeScreens && nativeScreens.length > 0) {
             console.log("Pantallas detectadas vía Native Bridge:", nativeScreens);
             setExternalScreens(nativeScreens);
             setHasDetailedScreens(true);
-            if (!externalScreenSettings.selectedScreenId) {
-              setExternalScreenSettings(prev => ({ ...prev, selectedScreenId: nativeScreens[0].id }));
+            if (!selectedScreenId) {
+              setSelectedScreenId(nativeScreens[0].id);
             }
-            return; // Éxito con detección nativa
+            return;
           }
         }
-      } catch (e) {
-        console.log("Native Bridge no disponible, usando APIs de navegador");
-      }
+      } catch (e) {}
 
       // Check if in iframe
       setIsIframe(window.self !== window.top);
 
-      // Check permission status if API exists
-      if ('permissions' in navigator) {
-        try {
-          // @ts-ignore
-          const status = await navigator.permissions.query({ name: 'window-management' });
-          setPermissionStatus(status.state);
-          status.onchange = () => setPermissionStatus(status.state);
-        } catch (e) {
-          // Fallback to 'window-placement' if 'window-management' is not supported
-          try {
-            // @ts-ignore
-            const status = await navigator.permissions.query({ name: 'window-placement' });
-            setPermissionStatus(status.state);
-            status.onchange = () => setPermissionStatus(status.state);
-          } catch (e2) {}
-        }
-      }
-
+      // Window Management API
       if ('getScreenDetails' in window) {
         // @ts-ignore
         const details = await window.getScreenDetails();
         console.log("Pantallas detectadas (detalladas):", details.screens);
-        const screens = details.screens.map((s: any, index: number) => ({
-          id: s.id || `screen-${index}`,
-          name: s.label || `Pantalla ${index + 1}`,
-          isActive: true,
-          width: s.width,
-          height: s.height,
-          left: s.left,
-          top: s.top,
-          isPrimary: s.isPrimary
-        }));
+        
+        const screens = details.screens.map((s: any, index: number) => {
+          // Physical resolution is logical resolution * devicePixelRatio
+          const dpr = s.devicePixelRatio || window.devicePixelRatio || 1;
+          
+          // Map colorDepth (e.g. 24 -> 8, 30 -> 10)
+          let depth = s.colorDepth || window.screen.colorDepth;
+          if (depth >= 30) depth = 10;
+          else if (depth >= 24) depth = 8;
+          else depth = 8;
+
+          return {
+            id: s.id || `screen-${index}`,
+            name: s.label || `Pantalla ${index + 1}`,
+            isActive: true,
+            width: Math.round(s.width * dpr),
+            height: Math.round(s.height * dpr),
+            left: s.left,
+            top: s.top,
+            isPrimary: s.isPrimary,
+            refreshRate: s.refreshRate || 60,
+            colorDepth: depth
+          };
+        });
+        
         setExternalScreens(screens);
         setHasDetailedScreens(true);
-        if (!externalScreenSettings.selectedScreenId && screens.length > 0) {
-          setExternalScreenSettings(prev => ({ ...prev, selectedScreenId: screens[0].id }));
+
+        // Auto-populate outputs based on detected screens if outputs are default
+        if (screens.length > 0 && (outputs.length <= 1 && !outputs[0].physicalScreenId)) {
+          const autoOutputs = screens.map((s: any, idx: number) => ({
+            id: `${idx + 1}`,
+            name: `Salida ${idx + 1}`,
+            physicalScreenId: s.id
+          }));
+          setOutputs(autoOutputs);
+        }
+
+        if (!selectedScreenId && screens.length > 0) {
+          setSelectedScreenId(screens[0].id);
         }
       } else {
         throw new Error("API no soportada");
       }
     } catch (err) {
-      console.warn("Error detectando pantallas detalladas, usando fallback:", err);
+      console.warn("Error en detección detallada, usando fallback:", err);
       setHasDetailedScreens(false);
-      // Fallback to basic screen info
+      
+      // Fallback a información básica de pantalla con corrección de DPR
+      const dpr = window.devicePixelRatio || 1;
+      let depth = window.screen.colorDepth;
+      if (depth >= 30) depth = 10;
+      else if (depth >= 24) depth = 8;
+      else depth = 8;
+
       const fallback = [{
         id: 'primary',
-        name: 'Pantalla Principal',
+        name: 'Pantalla Principal (Windows)',
         isActive: true,
-        width: window.screen.width,
-        height: window.screen.height,
+        width: Math.round(window.screen.width * dpr),
+        height: Math.round(window.screen.height * dpr),
         isPrimary: true,
         left: 0,
-        top: 0
+        top: 0,
+        refreshRate: 60,
+        colorDepth: depth
       }];
-      console.log("Usando fallback de pantalla:", fallback);
+      
       setExternalScreens(fallback);
-      if (!externalScreenSettings.selectedScreenId) {
-        setExternalScreenSettings(prev => ({ ...prev, selectedScreenId: 'primary' }));
+      if (!selectedScreenId) {
+        setSelectedScreenId('primary');
       }
     }
   };
@@ -2710,55 +5160,76 @@ export default function App() {
     }
   }, []);
 
+  const handleUpdateExternalScreen = (updates: any) => {
+    if (!selectedScreenId) return;
+    setAllScreenSettings(prev => ({
+      ...prev,
+      [selectedScreenId]: {
+        ...(prev[selectedScreenId] || DEFAULT_SCREEN_SETTINGS),
+        ...updates
+      }
+    }));
+  };
+
   const handleLaunchOutput = () => {
-    const selectedScreen = externalScreens.find(s => s.id === externalScreenSettings.selectedScreenId);
+    const selectedScreen = externalScreens.find(s => s.id === selectedScreenId);
     
     // Construct the URL
     const url = new URL(window.location.href);
     url.searchParams.set('mode', 'output');
+    if (selectedScreenId) {
+      url.searchParams.set('screenId', selectedScreenId);
+    }
     
     // Features for a clean output window
-    // Scrollbars=no and status=no are important for a "clean" look
     let features = 'menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no,popup=yes';
     
     // Use the screen's coordinates and dimensions if available
     if (selectedScreen && hasDetailedScreens) {
       features += `,left=${selectedScreen.left},top=${selectedScreen.top},width=${selectedScreen.width},height=${selectedScreen.height}`;
     } else {
-      // Default to a reasonable size and position
       features += `,width=1280,height=720,left=100,top=100`;
     }
 
     // Try to open the output window
-    try {
-      const win = window.open(url.toString(), 'LuminaOutput', features);
-      outputWindowRef.current = win;
+    const windowName = `LuminaOutput_${selectedScreenId || 'default'}`;
+    
+      try {
+        const win = window.open(url.toString(), windowName, features);
+        outputWindowRef.current = win;
 
-      if (win) {
-        win.focus();
-        
-        // Ensure transmission is ON when launching output manually
-        setIsTransmitting(true);
-        
-        // Initial sync
-        setTimeout(() => {
-          outputChannel.current?.postMessage({
-            type: 'SYNC_STATE',
-            payload: {
-              programClipId,
-              previewClipId,
-              clips,
-              crossfaderValue,
-              externalScreenSettings,
-              isLive,
-              isTransmitting: true, // Force it to be active
-              programVolume,
-              transitionType
-            }
-          });
-        }, 500);
-      } else {
-        alert("El navegador bloqueó la ventana emergente. Por favor, permite ventanas emergentes para este sitio.");
+        if (win) {
+          win.focus();
+          setIsTransmitting(true);
+          setIsLive(true);
+          
+          setTimeout(() => {
+            outputChannel.current?.postMessage({
+              type: 'SYNC_STATE',
+              payload: {
+                programClipId,
+                previewClipId,
+                outputPrograms,
+                outputTransitionTargets,
+                outputOffStates,
+                outputs,
+                clips,
+                crossfaderValue,
+                allScreenSettings,
+                isLive: true,
+                isTransmitting: true,
+                isProgramOff: outputOffStates[activeOutputId] || false,
+                programVolume,
+                masterVolume,
+                transitionType: externalScreenSettings.transitionType,
+                layers,
+                layerOutputs,
+                pipLayers
+              }
+            });
+          }, 1500); 
+        } else {
+        alert("El navegador bloqueó la ventana emergente o falló al abrirla. Por favor, permite ventanas emergentes.");
       }
     } catch (err) {
       console.error("Error al lanzar salida:", err);
@@ -2766,6 +5237,132 @@ export default function App() {
   };
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
   const [currentDeck, setCurrentDeck] = useState('Deck 1');
+
+  const addLayer = () => {
+    const newId = `layer-${Date.now()}`;
+    setLayers(prev => [...prev, {
+      id: newId,
+      name: `Capa ${prev.length + 1}`,
+      slots: Array(8).fill(null),
+      activeClipId: null,
+      activeSlotIndex: null,
+      opacity: 1,
+      rotation: 0,
+      transition: 'fade',
+      isVisible: true,
+      muted: true,
+      loop: true,
+      isPlaying: false,
+      playbackMode: 'sequence',
+      colorBalance: { r: 1, g: 1, b: 1 },
+      brightness: 1,
+      contrast: 1,
+      saturation: 1
+    }]);
+  };
+
+  const removeLayer = (layerId: string) => {
+    setLayers(prev => prev.filter(l => l.id !== layerId));
+    setLayerOutputs(prev => {
+      const next = { ...prev };
+      delete next[layerId];
+      return next;
+    });
+  };
+
+  const [activeColumnTrigger, setActiveColumnTrigger] = useState<number | null>(null);
+  const [activeLayerTriggers, setActiveLayerTriggers] = useState<Record<string, boolean>>({});
+
+  const handleLayerEnded = (layerId: string) => {
+    setLayers(prev => prev.map(layer => {
+      if (layer.id !== layerId) return layer;
+      
+      // Mode Single: Only loop the current clip indefinitely
+      if (layer.playbackMode === 'single') {
+        return layer; // VideoLayer handles video loop tag
+      }
+
+      // Mode Sequence: Find next clip in slots
+      const currentSlotIndex = layer.activeSlotIndex !== null ? layer.activeSlotIndex : layer.slots.findIndex(s => s?.id === layer.activeClipId);
+      const nextClipIndex = layer.slots.findIndex((s, idx) => idx > currentSlotIndex && s !== null);
+      
+      if (nextClipIndex !== -1) {
+        return { ...layer, activeClipId: layer.slots[nextClipIndex]!.id, activeSlotIndex: nextClipIndex };
+      } else if (layer.loop !== false) {
+        // Mode Sequence: Find first clip to loop back
+        const firstSlotIndex = layer.slots.findIndex(s => s !== null);
+        if (firstSlotIndex !== -1) {
+          return { ...layer, activeClipId: layer.slots[firstSlotIndex]!.id, activeSlotIndex: firstSlotIndex };
+        }
+        return { ...layer, activeClipId: null, activeSlotIndex: null, isPlaying: false };
+      } else {
+        // End of layer sequence (loop playlist off): Black
+        setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: false }));
+        return { ...layer, activeClipId: null, activeSlotIndex: null, isPlaying: false };
+      }
+    }));
+  };
+
+  const onTriggerLayerClip = (layerId: string, slotIdx: number, mode: 'single' | 'sequence' = 'single') => {
+    setActiveColumnTrigger(null);
+    setActiveLayerTriggers(prev => ({ ...prev, [layerId]: false }));
+    setLayers(prev => prev.map(l => {
+      if (l.id !== layerId) return l;
+      const clip = l.slots[slotIdx];
+      if (clip) {
+        return { ...l, activeClipId: clip.id, activeSlotIndex: slotIdx, isPlaying: true, playbackMode: mode };
+      }
+      return { ...l, activeClipId: null, activeSlotIndex: null, isPlaying: false };
+    }));
+  };
+
+  const handleColumnTrigger = (colIdx: number) => {
+    setActiveColumnTrigger(colIdx);
+    setActiveLayerTriggers({});
+    setLayers(prev => prev.map(layer => {
+      const clip = layer.slots[colIdx];
+      if (clip) {
+        return { ...layer, activeClipId: clip.id, activeSlotIndex: colIdx, isPlaying: true, playbackMode: 'single' };
+      }
+      return layer;
+    }));
+  };
+
+  const handleColumnStop = (colIdx: number) => {
+    setActiveColumnTrigger(null);
+    setLayers(prev => prev.map(layer => {
+      const clip = layer.slots[colIdx];
+      if (clip && layer.activeClipId === clip.id) {
+        return { ...layer, activeClipId: null, activeSlotIndex: null, isPlaying: false };
+      }
+      return layer;
+    }));
+  };
+
+  const handleDropOnLayer = (e: React.DragEvent, layerId: string, slotIdx: number) => {
+    e.preventDefault();
+    const clipId = e.dataTransfer.getData('clipId');
+    const clipData = e.dataTransfer.getData('clip');
+    
+    let clip: Clip | undefined;
+    if (clipData) {
+      try {
+        clip = JSON.parse(clipData);
+      } catch (err) {
+        console.error("Error parsing clip data:", err);
+      }
+    } else if (clipId) {
+      clip = clips.find(c => c.id === clipId);
+    }
+
+    if (clip) {
+      setLayers(prev => prev.map(l => l.id === layerId ? {
+        ...l,
+        slots: l.slots.map((s, i) => i === slotIdx ? clip : s)
+      } : l));
+    }
+  };
+
   const [previewPlaylistState, setPreviewPlaylistState] = useState<{ id: string, index: number } | null>(null);
   const [programPlaylistState, setProgramPlaylistState] = useState<{ id: string, index: number } | null>(null);
   const [deckClips, setDeckClips] = useState<Record<string, Clip[]>>({
@@ -2775,32 +5372,87 @@ export default function App() {
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleAddClips = (files: File[]) => {
-    const newClips: Clip[] = files.map((file, index) => ({
-      id: `clip-${Date.now()}-${index}`,
-      name: file.name,
-      thumbnail: URL.createObjectURL(file),
-      url: URL.createObjectURL(file),
-      type: file.type.startsWith('video') ? 'video' : 'image',
-      status: 'idle',
-      transform: { ...DEFAULT_TRANSFORM },
-      mask: 'none',
-      opacity: 1,
-      master: 1,
-      speed: 1,
-      volume: 1,
-      pan: 0,
-      blendMode: 'Alpha',
-      behavior: 'Cortar',
-      curve: 'Lineal',
-      filter: 'none',
-      brightness: 1,
-      contrast: 1,
-      saturation: 1,
-      colorBalance: { r: 1, g: 1, b: 1 },
-      isPlaying: true,
-      loop: true
-    }));
+  const getClipTypeFromFile = (type: string, name: string): 'video' | 'image' | 'document' => {
+    const isVideo = type.startsWith('video') || name.toLowerCase().endsWith('.mp4') || name.toLowerCase().endsWith('.mov') || name.toLowerCase().endsWith('.webm');
+    const isImage = type.startsWith('image') || name.toLowerCase().endsWith('.jpg') || name.toLowerCase().endsWith('.jpeg') || name.toLowerCase().endsWith('.png') || name.toLowerCase().endsWith('.webp');
+    const isDocument = type === 'application/pdf' || name.toLowerCase().endsWith('.pdf');
+    
+    if (isVideo) return 'video';
+    if (isDocument) return 'document';
+    return 'image';
+  };
+
+  const handleAddClips = async (files: File[]) => {
+    const newClipsPromises = files.map(async (file, index) => {
+      const url = URL.createObjectURL(file);
+      const clipType = getClipTypeFromFile(file.type, file.name);
+      const isVideo = clipType === 'video';
+      const isImage = clipType === 'image';
+      
+      let metadata = { duration: 0, width: 0, height: 0 };
+
+      if (isVideo) {
+        metadata = await new Promise((resolve) => {
+          const video = document.createElement('video');
+          video.src = url;
+          video.onloadedmetadata = () => {
+            resolve({
+              duration: video.duration,
+              width: video.videoWidth,
+              height: video.videoHeight
+            });
+          };
+          video.onerror = () => resolve({ duration: 0, width: 1920, height: 1080 });
+        });
+      } else if (isImage) {
+        metadata = await new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            resolve({
+              duration: 0,
+              width: img.width,
+              height: img.height
+            });
+          };
+          img.onerror = () => resolve({ duration: 0, width: 1920, height: 1080 });
+          img.src = url;
+        });
+      } else {
+        metadata = { duration: 0, width: 1920, height: 1080 };
+      }
+
+      return {
+        id: `clip-${Date.now()}-${index}`,
+        name: file.name,
+        thumbnail: isVideo ? '' : url,
+        url: url,
+        type: clipType,
+        status: 'idle',
+        currentPage: 1,
+        transform: { ...DEFAULT_TRANSFORM },
+        mask: 'none',
+        opacity: 1,
+        master: 1,
+        speed: 1,
+        volume: 1,
+        pan: 0,
+        blendMode: 'Alpha',
+        behavior: 'Cortar',
+        curve: 'Lineal',
+        filter: 'none',
+        brightness: 1,
+        contrast: 1,
+        saturation: 1,
+        colorBalance: { r: 1, g: 1, b: 1 },
+        isPlaying: true,
+        loop: true,
+        duration: metadata.duration,
+        width: metadata.width,
+        height: metadata.height
+      } as Clip;
+    });
+
+    const newClips = await Promise.all(newClipsPromises);
     setClips(prev => [...prev, ...newClips]);
     setDeckClips(prev => ({
       ...prev,
@@ -2811,24 +5463,75 @@ export default function App() {
   const [previewLevel, setPreviewLevel] = useState(0);
   const [programLevel, setProgramLevel] = useState(0);
 
+  const updateClip = (id: string, updates: Partial<Clip>) => {
+    setClips(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+    setDeckClips(prev => {
+      const newDecks = { ...prev };
+      Object.keys(newDecks).forEach(deck => {
+        if (newDecks[deck]) {
+          newDecks[deck] = newDecks[deck].map(c => c.id === id ? { ...c, ...updates } : c);
+        }
+      });
+      return newDecks;
+    });
+    setPlaylists(prev => prev.map(p => ({
+      ...p,
+      clips: p.clips.map(c => c.id === id ? { ...c, ...updates } : c)
+    })));
+    setLayers(prev => prev.map(l => ({
+      ...l,
+      slots: l.slots.map(s => s && s.id === id ? { ...s, ...updates } : s)
+    })));
+  };
+
   const handleUpdateItem = (id: string, updates: any) => {
     if (selectedItemType === 'clip') {
-      setClips(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
-      setDeckClips(prev => {
-        const newDecks = { ...prev };
-        Object.keys(newDecks).forEach(deck => {
-          newDecks[deck] = newDecks[deck].map(c => c.id === id ? { ...c, ...updates } : c);
-        });
-        return newDecks;
-      });
-      setPlaylists(prev => prev.map(p => ({
-        ...p,
-        clips: p.clips.map(c => c.id === id ? { ...c, ...updates } : c)
-      })));
+      updateClip(id, updates);
     } else if (selectedItemType === 'playlist') {
       setPlaylists(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
     }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+
+      const isNext = e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ' || e.key === 'n' || e.key === 'N';
+      const isPrev = e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === 'p' || e.key === 'P';
+      
+      if (isNext || isPrev) {
+         // Find actively playing layers that have a document clip
+         const activeClipIds = new Set<string>();
+         layers.forEach(layer => {
+           if (layer.isVisible && layer.activeClipId) activeClipIds.add(layer.activeClipId);
+         });
+         previews.forEach(preview => {
+           if (preview.clipId) activeClipIds.add(preview.clipId);
+         });
+
+         const navClips = clips.filter(c => 
+           (c.type === 'document' || c.name.toLowerCase().endsWith('.pdf')) && 
+           c.keyboardNavEnabled && 
+           activeClipIds.has(c.id)
+         );
+         
+         if (navClips.length > 0) {
+            e.preventDefault();
+            navClips.forEach(clip => {
+                 let newPage = (clip.currentPage || 1) + (isNext ? 1 : -1);
+                 newPage = Math.max(1, newPage);
+                 if (clip.totalPages) {
+                   newPage = Math.min(newPage, clip.totalPages);
+                 }
+                 updateClip(clip.id, { currentPage: newPage });
+            });
+         }
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [clips, layers, previews]);
 
   const handleSelectClip = (clip: Clip) => {
     setSelectedItemId(clip.id);
@@ -2846,39 +5549,125 @@ export default function App() {
   };
 
   const handlePreviewPlaylist = (playlist: Playlist) => {
-    if (playlist.clips.length > 0) {
+    if (playlist && playlist.clips && playlist.clips.length > 0) {
       setPreviewPlaylistState({ id: playlist.id, index: 0 });
       setPreviewClipId(playlist.clips[0].id);
     }
   };
 
   const handleTake = (type?: 'fade' | 'wipe' | 'slide' | 'cut') => {
-    const tType = type || transitionType;
+    const tType = type || externalScreenSettings.transitionType;
+    const tDuration = externalScreenSettings.transitionDuration;
     
-    if (previewClipId && crossfaderValue === 0) {
+    // Multi-take logic: Find all previews with assigned outputs
+    const livePreviews = previews.filter(p => p.selectedOutputs?.length > 0 && p.clipId);
+    
+    if (livePreviews.length > 0) {
+      setIsTransmitting(true); // Ensure transmission is active when taking
+      livePreviews.forEach(p => handleRewind(p.clipId));
+      
+      const targets: Record<string, string | null> = {};
+      livePreviews.forEach(lp => {
+        lp.selectedOutputs.forEach((outId: string) => {
+          targets[outId] = lp.clipId;
+        });
+      });
+      setOutputTransitionTargets(targets);
+
+      const applyAllToOutputs = () => {
+        setOutputPrograms(prev => {
+          const next = { ...prev };
+          Object.entries(targets).forEach(([outId, clipId]) => {
+            next[outId] = clipId;
+          });
+          return next;
+        });
+
+        // Update active program clip if it was affected
+        const activeEffectClipId = targets[activeOutputId];
+        if (activeEffectClipId) {
+          setProgramClipId(activeEffectClipId);
+        }
+        
+        // Reset transient transition targets
+        setOutputTransitionTargets({});
+      };
+
       if (tType === 'cut') {
-        setProgramClipId(previewClipId);
-        setProgramPlaylistState(previewPlaylistState);
+        applyAllToOutputs();
+        setCrossfaderValue(0); 
         return;
       }
 
-      // Start transition
       animate(0, 100, {
-        duration: transitionDuration / 1000,
-        ease: "easeInOut",
+        duration: tDuration / 1000,
+        ease: "linear",
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
-          // Perform swap
+          applyAllToOutputs();
+          setCrossfaderValue(0);
+        }
+      });
+    } else if (previewClipId && crossfaderValue === 0) {
+      // Fallback for single preview if nothing is set as 'Live'
+      handleRewind(previewClipId);
+      
+      if (tType === 'cut') {
+        setProgramClipId(previewClipId);
+        setOutputPrograms(prev => ({ ...prev, [activeOutputId]: previewClipId }));
+        setCrossfaderValue(0); 
+        return;
+      }
+
+      animate(0, 100, {
+        duration: tDuration / 1000,
+        ease: "linear",
+        onUpdate: (latest) => setCrossfaderValue(latest),
+        onComplete: () => {
           setProgramClipId(previewClipId);
-          setProgramPlaylistState(previewPlaylistState);
-          // Wait a tiny bit to ensure the new program layer is rendered before resetting crossfader
-          setTimeout(() => {
-            setCrossfaderValue(0);
-          }, 50);
+          setOutputPrograms(prev => ({ ...prev, [activeOutputId]: previewClipId }));
+          setCrossfaderValue(0);
         }
       });
     }
   };
+
+  const onDropOnMultiPreview = (previewId: string, e: React.DragEvent) => {
+    e.preventDefault();
+    const clipId = e.dataTransfer.getData('clipId');
+    const playlistId = e.dataTransfer.getData('playlistId');
+    const libraryFilesStr = e.dataTransfer.getData('libraryFiles');
+    
+    let targetClipId = null;
+
+    if (clipId) {
+      targetClipId = clipId;
+    } else if (playlistId) {
+      const playlist = playlists.find(p => p.id === playlistId);
+      if (playlist && playlist.clips.length > 0) {
+        targetClipId = playlist.clips[0].id;
+        setPreviewPlaylistState({ id: playlist.id, index: 0 });
+      }
+    } else if (libraryFilesStr) {
+      try {
+        const files = JSON.parse(libraryFilesStr);
+        if (files.length > 0) {
+           // We just use the first for preview
+           targetClipId = files[0].id;
+        }
+      } catch (err) {}
+    }
+
+    if (targetClipId) {
+      setPreviews(prevs => prevs.map(p => 
+        p.id === previewId ? { ...p, clipId: targetClipId } : p
+      ));
+      setPreviewClipId(targetClipId);
+      setSelectedItemId(targetClipId);
+      setSelectedItemType('clip');
+    }
+  };
+
 
   const handlePreviewNext = () => {
     if (previewPlaylistState) {
@@ -2892,13 +5681,25 @@ export default function App() {
   };
 
   const handleProgramNext = () => {
-    if (programPlaylistState) {
-      const playlist = playlists.find(p => p.id === programPlaylistState.id);
-      if (playlist && playlist.clips.length > 0) {
-        const nextIndex = (programPlaylistState.index + 1) % playlist.clips.length;
-        setProgramPlaylistState({ ...programPlaylistState, index: nextIndex });
-        setProgramClipId(playlist.clips[nextIndex].id);
+    const clip = clips.find(c => c.id === programClipId);
+    const playlist = playlists.find(p => p.id === (programPlaylistState?.id || clip?.playlistId) || p.clips.some(c => c.id === programClipId));
+    
+    if (playlist && playlist.clips.length > 0) {
+      const currentIndex = playlist.clips.findIndex(c => c.id === programClipId);
+      const isAtEnd = currentIndex === playlist.clips.length - 1;
+
+      if (isAtEnd && playlist.loop === false) {
+        // End of playlist and loop is explicitly disabled
+        handleStop();
+        setOutputPrograms(prev => ({ ...prev, [activeOutputId]: null }));
+        return;
       }
+
+      const nextIndex = (currentIndex + 1) % playlist.clips.length;
+      const nextClip = playlist.clips[nextIndex];
+      setProgramClipId(nextClip.id);
+      setProgramPlaylistState({ id: playlist.id, index: nextIndex });
+      setOutputPrograms(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
     }
   };
 
@@ -2981,8 +5782,9 @@ export default function App() {
         name: fileData.name,
         thumbnail: fileData.url,
         url: fileData.url,
-        type: (fileData.type.startsWith('video') ? 'video' : 'image') as 'video' | 'image',
+        type: getClipTypeFromFile(fileData.type, fileData.name),
         status: 'idle' as const,
+        currentPage: 1,
         transform: { ...DEFAULT_TRANSFORM },
         mask: 'none' as const,
         opacity: 1,
@@ -2999,7 +5801,7 @@ export default function App() {
         saturation: 1,
         colorBalance: { r: 1, g: 1, b: 1 },
         isPlaying: true,
-        loop: true
+        loop: false
       }));
     } else if (libraryFileData) {
       const fileData = JSON.parse(libraryFileData);
@@ -3008,8 +5810,9 @@ export default function App() {
         name: fileData.name,
         thumbnail: fileData.url,
         url: fileData.url,
-        type: (fileData.type.startsWith('video') ? 'video' : 'image') as 'video' | 'image',
+        type: getClipTypeFromFile(fileData.type, fileData.name),
         status: 'idle' as const,
+        currentPage: 1,
         transform: { ...DEFAULT_TRANSFORM },
         mask: 'none' as const,
         opacity: 1,
@@ -3026,7 +5829,7 @@ export default function App() {
         saturation: 1,
         colorBalance: { r: 1, g: 1, b: 1 },
         isPlaying: true,
-        loop: true
+        loop: false
       }];
     } else if (e.dataTransfer.files.length > 0) {
       // Handle OS files
@@ -3036,8 +5839,9 @@ export default function App() {
         name: f.name,
         thumbnail: URL.createObjectURL(f),
         url: URL.createObjectURL(f),
-        type: (f.type.startsWith('video') ? 'video' : 'image') as 'video' | 'image',
+        type: getClipTypeFromFile(f.type, f.name),
         status: 'idle' as const,
+        currentPage: 1,
         transform: { ...DEFAULT_TRANSFORM },
         mask: 'none' as const,
         opacity: 1,
@@ -3063,7 +5867,8 @@ export default function App() {
         ...clipToClone, 
         id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         status: 'idle' as const,
-        isPlaying: true
+        isPlaying: true,
+        loop: false
       }));
       
       setClips(prev => [...prev, ...newClips]);
@@ -3079,6 +5884,7 @@ export default function App() {
           clips: newClips,
           opacity: 1,
           isVisible: true,
+          loop: true,
           transform: { ...DEFAULT_TRANSFORM },
           mask: 'none',
           master: 1,
@@ -3109,6 +5915,7 @@ export default function App() {
         clips: [],
         opacity: 1,
         isVisible: true,
+        loop: true,
         transform: { ...DEFAULT_TRANSFORM },
         mask: 'none',
         master: 1,
@@ -3143,6 +5950,8 @@ export default function App() {
 
   const selectedItem = selectedItemType === 'clip' 
     ? clips.find(c => c.id === selectedItemId) || null
+    : selectedItemType === 'pip'
+    ? pipLayers.find(p => p.id === selectedItemId) || null
     : playlists.find(p => p.id === selectedItemId) || null;
   const previewClip = clips.find(c => c.id === previewClipId) || null;
   const programClip = clips.find(c => c.id === programClipId) || null;
@@ -3179,16 +5988,70 @@ export default function App() {
             <Zap size={14} className="text-obs-accent" />
             <span className="text-[11px] font-bold tracking-tight">LUMINA OBS</span>
           </div>
-          <nav className="flex gap-4">
-            {['Archivo', 'Editar', 'Vista', 'Perfil', 'Colección', 'Herramientas', 'Ayuda'].map(item => (
-              <button key={item} className="text-[10px] text-obs-text hover:bg-obs-border px-2 py-0.5 rounded transition-colors">{item}</button>
-            ))}
+          <nav className="flex gap-1 items-center">
+            <button className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize">Archivo</button>
+            
+            <div className="relative">
+              <button 
+                onClick={() => setIsEditMenuOpen(!isEditMenuOpen)}
+                className={`text-[10px] px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize flex items-center ${isEditMenuOpen ? 'bg-obs-accent text-white' : 'text-obs-text hover:bg-obs-border'}`}
+              >
+                Editar
+              </button>
+              <AnimatePresence>
+                {isEditMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsEditMenuOpen(false)} />
+                    <motion.div 
+                      initial={{ opacity: 0, y: -5, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -5, scale: 0.95 }}
+                      className="absolute left-0 top-full mt-1 w-56 bg-[#1a1a1a] border border-obs-border rounded shadow-2xl z-50 overflow-hidden"
+                    >
+                      <button 
+                        onClick={() => { 
+                          setIsOutputModalOpen(true);
+                          setIsEditMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-white/5"
+                      >
+                        <span>Salidas</span>
+                        <MonitorIcon size={12} />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setIsPreviewModalOpen(true);
+                          setIsEditMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-white/5"
+                      >
+                        <span>Preview</span>
+                        <Eye size={12} />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          window.open('ms-settings:display');
+                          setIsEditMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between"
+                      >
+                        <span>Configuración Windows</span>
+                        <ExternalLink size={12} />
+                      </button>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
             <button 
               onClick={() => setIsPixelMapOpen(true)}
-              className="text-[10px] text-obs-text hover:bg-obs-border px-2 py-0.5 rounded transition-colors"
+              className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize"
             >
               Output
             </button>
+
+            <button className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize">Ayuda</button>
           </nav>
         </div>
         <div className="flex items-center gap-4">
@@ -3203,171 +6066,564 @@ export default function App() {
 
       {/* Main Workspace */}
       <main className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar: Library */}
-        <div className="w-64 flex flex-col">
-          <Library onAddClip={handleAddClips} isDarkMode={isDarkMode} />
+        {/* Left Sidebar: Content Management */}
+        <div className="w-64 flex flex-col border-r border-obs-border bg-obs-bg overflow-hidden shadow-2xl z-20">
+          <div className="flex-1 flex flex-col min-h-0">
+            <Library 
+              onAddClip={handleAddClips} 
+              isDarkMode={isDarkMode} 
+              libraryFiles={libraryFiles}
+              setLibraryFiles={setLibraryFiles}
+              selectedLibraryUrls={selectedLibraryUrls}
+              setSelectedLibraryUrls={setSelectedLibraryUrls}
+            />
+          </div>
+
+          <div className="flex flex-col border-t border-obs-border">
+            {/* Gestión de Audio Tab */}
+            <div className="border-b border-obs-border">
+              <button 
+                onClick={() => setActiveSidebarTab(activeSidebarTab === 'audio' ? null : 'audio')}
+                className={`w-full flex items-center justify-between px-4 py-2 hover:bg-obs-surface transition-colors ${activeSidebarTab === 'audio' ? 'bg-obs-surface/50' : 'bg-obs-bg'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <Volume2 size={12} className={activeSidebarTab === 'audio' ? 'text-obs-accent' : 'text-obs-muted'} />
+                  <span className={`text-[9px] font-black uppercase tracking-wider ${activeSidebarTab === 'audio' ? 'text-obs-text' : 'text-obs-muted'}`}>GESTIÓN DE AUDIO</span>
+                </div>
+                <ChevronDown size={12} className={`text-obs-muted transition-transform duration-300 ${activeSidebarTab === 'audio' ? '' : '-rotate-90'}`} />
+              </button>
+              
+              <AnimatePresence initial={false}>
+                {activeSidebarTab === 'audio' && (
+                  <motion.div
+                    initial={{ height: 0 }}
+                    animate={{ height: 'auto' }}
+                    exit={{ height: 0 }}
+                    className="overflow-hidden bg-black/40"
+                  >
+                    <div className="p-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          { name: 'Master', volume: masterVolume, onChange: setMasterVolume, level: programLevel },
+                          { name: 'Prog', volume: programVolume, onChange: setProgramVolume, level: programLevel },
+                          { name: 'Prev', volume: previewVolume, onChange: setPreviewVolume, level: previewLevel },
+                          { name: 'USB', volume: usbInVolume, onChange: setUsbInVolume, level: 0 },
+                        ].map((source) => (
+                          <div key={source.name} className="bg-obs-surface p-1.5 rounded border border-white/5 flex flex-col gap-1">
+                            <div className="flex justify-between items-center px-0.5">
+                              <span className="text-[7px] font-black text-obs-muted uppercase">{source.name}</span>
+                              <span className="text-[7px] font-mono text-obs-accent">{volToDb(source.volume)}</span>
+                            </div>
+                            <div className="h-16 relative bg-black/40 rounded-sm overflow-hidden flex flex-col justify-end">
+                              <div className="absolute inset-x-0 bottom-0 bg-obs-accent/20" style={{ height: `${source.volume * 100}%` }} />
+                              <div className="absolute inset-x-0 bg-obs-accent h-0.5" style={{ bottom: `${source.volume * 100}%` }} />
+                              <input 
+                                type="range" 
+                                min="0" max="1" step="0.01"
+                                value={source.volume}
+                                onChange={(e) => source.onChange(parseFloat(e.target.value))}
+                                className="absolute inset-0 opacity-0 cursor-ns-resize"
+                                style={{ writingMode: 'vertical-lr', direction: 'rtl' }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* Info Programa Tab */}
+            <div className="border-b border-obs-border">
+              <button 
+                onClick={() => setActiveSidebarTab(activeSidebarTab === 'info' ? null : 'info')}
+                className={`w-full flex items-center justify-between px-4 py-2 hover:bg-obs-surface transition-colors ${activeSidebarTab === 'info' ? 'bg-obs-surface/50' : 'bg-obs-bg'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <MonitorIcon size={12} className={activeSidebarTab === 'info' ? 'text-obs-accent' : 'text-obs-muted'} />
+                  <span className={`text-[9px] font-black uppercase tracking-wider ${activeSidebarTab === 'info' ? 'text-obs-text' : 'text-obs-muted'}`}>INFO PROGRAMA</span>
+                </div>
+                <ChevronDown size={12} className={`text-obs-muted transition-transform duration-300 ${activeSidebarTab === 'info' ? '' : '-rotate-90'}`} />
+              </button>
+
+              <AnimatePresence initial={false}>
+                {activeSidebarTab === 'info' && (
+                  <motion.div
+                    initial={{ height: 0 }}
+                    animate={{ height: 'auto' }}
+                    exit={{ height: 0 }}
+                    className="overflow-hidden bg-black/40"
+                  >
+                    <div className="p-2 space-y-2">
+                       <div className="bg-obs-surface p-2 rounded border border-white/5 space-y-3">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">En el aire</span>
+                              {isLive && <span className="text-[7px] text-obs-accent font-black animate-pulse">● LIVE</span>}
+                            </div>
+                            <span className="text-[10px] text-obs-text font-black truncate leading-tight">
+                              {programClip ? programClip.name.toUpperCase() : (layers.find(l => l.activeClipId)?.name || 'SIN CONTENIDO').toUpperCase()}
+                            </span>
+                          </div>
+                          
+                          <div className="space-y-1">
+                            {(programClip?.type === 'document' || programClip?.name.toLowerCase().endsWith('.pdf')) ? (
+                              <>
+                                <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
+                                  <div 
+                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,170,255,0.3)]" 
+                                    style={{ width: `${(programClip.totalPages && programClip.totalPages > 0) ? ((programClip.currentPage || 1) / programClip.totalPages) * 100 : 100}%` }} 
+                                  />
+                                </div>
+                                <div className="flex justify-between font-mono text-[8px] text-obs-muted font-black">
+                                  <div className="flex items-center gap-1">
+                                    <span>Pág. {programClip.currentPage || 1}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span>{programClip.totalPages ? `de ${programClip.totalPages}` : ''}</span>
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
+                                  <div 
+                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,170,255,0.3)]" 
+                                    style={{ width: `${programProgress.total > 0 ? (programProgress.current / programProgress.total) * 100 : 0}%` }} 
+                                  />
+                                </div>
+                                <div className="flex justify-between font-mono text-[8px] text-obs-muted font-black">
+                                  <div className="flex items-center gap-1">
+                                    <Clock size={8} />
+                                    <span>{formatTime(programProgress.current)}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span>-{formatTime(Math.max(0, programProgress.total - programProgress.current))}</span>
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          <div className="pt-2 border-t border-white/5">
+                            <span className="text-[7px] text-obs-muted uppercase font-black mb-1 block">Salidas Activas</span>
+                            <div className="flex flex-wrap gap-1">
+                              {externalScreens.filter(s => s.isActive).length > 0 ? (
+                                externalScreens.filter(s => s.isActive).map(s => (
+                                  <div key={s.id} className="px-1.5 py-0.5 rounded-[2px] bg-obs-accent/20 border border-obs-accent/30 text-obs-accent text-[6px] font-black uppercase">
+                                    {s.name}
+                                  </div>
+                                ))
+                              ) : (
+                                <span className="text-[7px] text-white/20 italic">No hay salidas activas</span>
+                              )}
+                            </div>
+                          </div>
+                       </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* Vista Previa at bottom */}
+            <div className="bg-black flex flex-col h-48 min-h-[192px] max-h-[192px] basis-48 shrink-0 border-t border-obs-border">
+              <div className="px-3 py-1.5 bg-obs-surface border-b border-obs-border flex justify-between items-center">
+                <span className="text-[9px] font-black text-obs-muted uppercase tracking-wider">VISTA PREVIA</span>
+                <span className="text-[8px] text-obs-accent font-bold">
+                   {selectedLibraryUrls.size === 1 ? '1 ARCHIVO' : selectedLibraryUrls.size > 1 ? `${selectedLibraryUrls.size} ARCHIVOS` : 'VACÍO'}
+                </span>
+              </div>
+              <div className="flex-1 relative flex items-center justify-center bg-[#050505] overflow-hidden">
+                {selectedLibraryUrls.size === 1 ? (() => {
+                  const selectedFile = libraryFiles.find(f => selectedLibraryUrls.has(f.url));
+                  if (!selectedFile) return null;
+                  if (selectedFile.type.startsWith('video')) {
+                    return (
+                      <video 
+                        key={selectedFile.url}
+                        src={selectedFile.url} 
+                        className="w-full h-full object-contain" 
+                        autoPlay 
+                        muted 
+                        loop 
+                      />
+                    );
+                  } else if (selectedFile.type === 'document' || selectedFile.type?.includes('pdf')) {
+                    return <DocumentLayer clip={selectedFile} onUpdateClip={updateClip} />;
+                  } else {
+                    return <img src={selectedFile.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />;
+                  }
+                })() : (
+                  <div className="text-obs-muted opacity-10 flex flex-col items-center gap-1.5">
+                    <MonitorIcon size={32} strokeWidth={1} />
+                    <span className="text-[7px] uppercase font-black tracking-[0.3em]">Selecciona un archivo</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Center: Monitors & Controls */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Monitors Area */}
-          <div className="flex-1 p-4 flex gap-2 items-center justify-center min-h-0 bg-black/20">
-            <div className="flex-1 h-full max-w-2xl">
-              <Monitor 
-                title="Vista Previa" 
-                activeClip={previewClip} 
-                isDarkMode={isDarkMode} 
-                onDrop={onDropOnPreview}
-                onLevelChange={setPreviewLevel}
-                onEnded={handlePreviewNext}
-                isPlaylist={!!previewPlaylistState}
-                volume={previewVolume}
-                onClick={() => {
-                  if (previewClip) {
-                    setSelectedItemId(previewClip.id);
-                    setSelectedItemType('clip');
-                  }
-                }}
-              />
+          <div className="flex-none p-4 flex flex-col lg:flex-row gap-4 items-start justify-center bg-[#080808] border-b border-obs-border z-10 relative overflow-y-auto" style={{ maxHeight: '60vh' }}>
+            
+            <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-max w-full">
+              {previews.map(preview => (
+                <div key={`monitor-preview-${preview.id}`} className="flex flex-col gap-1.5 group/mon relative">
+                   <div className="flex justify-between items-end px-1">
+                     <span className="text-[9px] text-[#00AAFF] font-black uppercase tracking-[0.2em]">{preview.name}</span>
+                     {preview.selectedOutputs.length > 0 && (
+                        <div className="flex gap-0.5 items-center">
+                          <span className="text-[7px] text-obs-muted font-bold mr-1">TGT:</span>
+                          {preview.selectedOutputs.map(outId => (
+                            <span key={outId} className="w-3 h-3 flex items-center justify-center bg-[#00AAFF] text-white text-[7px] font-black rounded-sm shadow-sm">
+                              {outId}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                   </div>
+                   <div 
+                    className={`w-full aspect-video shadow-xl relative border rounded overflow-hidden cursor-pointer transition-all ${selectedItemType === 'preview' && selectedItemId === preview.id ? 'ring-2 ring-[#00AAFF] border-transparent' : 'border-white/10 hover:border-white/30'}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedItemType('preview');
+                      setSelectedItemId(preview.id);
+                    }}
+                    onDrop={(e) => onDropOnMultiPreview(preview.id, e)}
+                  >
+                    <Monitor 
+                      title={preview.name} 
+                      activeClip={preview.clipId ? clips.find(c => c.id === preview.clipId) || null : null} 
+                      isDarkMode={isDarkMode} 
+                      isTransmitting={isTransmitting}
+                      volume={0.5}
+                      clips={clips}
+                      previewClipId={preview.clipId}
+                      hideOverlays={preview.hideOverlays}
+                      onUpdateClip={updateClip}
+                      accentColor={preview.accentColor}
+                      pipLayers={pipLayers}
+                      activeOutputId={preview.selectedOutputs[0] || '1'}
+                      onLayerEnded={handleLayerEnded}
+                      onEnded={() => {
+                        if (preview.clipId) {
+                          const clip = clips.find(c => c.id === preview.clipId);
+                          const playlist = playlists.find(p => p.id === clip?.playlistId || p.clips.some(c => c.id === clip?.id));
+                          if (playlist && playlist.clips.length > 0) {
+                            const currentIndex = playlist.clips.findIndex(c => c.id === preview.clipId);
+                            const nextIndex = (currentIndex + 1) % playlist.clips.length;
+                            const nextClip = playlist.clips[nextIndex];
+                            setPreviews(prevs => prevs.map(p => p.id === preview.id ? { ...p, clipId: nextClip.id } : p));
+                          }
+                        }
+                      }}
+                    />
+                    
+                    {/* Delete button (hidden by default) */}
+                    {previews.length > 1 && (
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // Clear outputs that were assigned to this preview
+                          const deletedPreview = previews.find(p => p.id === preview.id);
+                          if (deletedPreview?.selectedOutputs?.length > 0) {
+                            setOutputPrograms(prev => {
+                              const next = { ...prev };
+                              deletedPreview.selectedOutputs.forEach((outId: string) => {
+                                next[outId] = null;
+                              });
+                              return next;
+                            });
+                          }
+                          setPreviews(prevs => prevs.filter(p => p.id !== preview.id));
+                          if (selectedItemId === preview.id) setSelectedItemId(null);
+                        }}
+                        className="absolute top-2 left-2 bg-black/60 hover:bg-red-600 text-white rounded p-1.5 opacity-0 group-hover/mon:opacity-100 transition-opacity z-30"
+                        title="Eliminar Preview"
+                      >
+                        <Minus size={12} />
+                      </button>
+                    )}
+
+                    {preview.isLive && (
+                      <div className="absolute top-1.5 right-1.5 bg-red-600/90 text-white text-[7px] font-black px-1.5 py-0.5 rounded-sm shadow-lg animate-pulse uppercase tracking-wider z-20 backdrop-blur-sm">
+                        Live
+                      </div>
+                    )}
+                   </div>
+                </div>
+              ))}
             </div>
             
-            {/* Central Transition Control */}
-            <div className="flex flex-col items-center gap-4 px-2">
-              <div className="flex flex-col gap-3">
-                <button 
-                  onClick={() => setIsLive(!isLive)}
-                  className={`w-20 py-3 rounded border-2 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center justify-center gap-1 ${isLive ? 'bg-red-600 border-red-400 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]' : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'}`}
-                >
-                  <Zap size={14} fill={isLive ? "currentColor" : "none"} />
-                  LIVE
-                </button>
+            {/* Right: Program Monitor & Controls */}
+            <div className="w-full lg:w-[360px] xl:w-[480px] 2xl:w-[570px] flex flex-col gap-1.5 flex-none shrink-0 group/prog">
+              <div className="flex justify-between items-end px-1">
+                 <span className="text-[9px] text-[#FF4444] font-black uppercase tracking-[0.2em]">
+                   PROGRAM SALIDA {activeOutputId}
+                   {outputs.find(o => o.id === activeOutputId)?.physicalScreenId && (
+                     <span className="text-obs-muted ml-2 font-medium">[{externalScreens.find(s => s.id === outputs.find(o => o.id === activeOutputId)?.physicalScreenId)?.name || 'Monitor'}]</span>
+                   )}
+                 </span>
+                 {isLive && <div className="text-[7px] font-black text-[#FF4444] animate-pulse flex items-center gap-1.5 uppercase tracking-tighter"><span className="w-1.5 h-1.5 rounded-full bg-[#FF4444]" /> ON AIR</div>}
+              </div>
+              <div className="flex gap-2 w-full">
+                {/* PiP Toggles */}
+                {pipLayers.length > 0 && (
+                  <div className="flex flex-col gap-1.5 shrink-0 justify-end w-8 py-0.5">
+                    {pipLayers.map((pip, idx) => (
+                      <button 
+                        key={pip.id}
+                        title={`Toggle ${pip.name}`}
+                        onClick={() => {
+                          setPipLayers(prev => prev.map(p => p.id === pip.id ? { ...p, isActive: !p.isActive } : p));
+                        }}
+                        className={`w-8 h-8 rounded border transition-colors flex items-center justify-center font-black text-[10px] shadow-lg ${pip.isActive ? 'bg-[#FF4444] text-white border-red-500 shadow-[0_0_8px_rgba(255,68,68,0.4)]' : 'bg-black/60 text-obs-muted border-white/10 hover:border-white/30'}`}
+                      >
+                        P{idx + 1}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 
-                <div className="flex flex-col gap-1.5">
+                {/* Program Monitor */}
+                <div className="w-full aspect-video shadow-2xl relative border border-white/10 rounded overflow-hidden cursor-pointer"
+                     onClick={() => {
+                       setSelectedItemType('program');
+                       setSelectedItemId('program-output');
+                     }}>
+                  <Monitor 
+                    title="" 
+                    isActive={isLive} 
+                    activeClip={programClip} 
+                    isDarkMode={isDarkMode} 
+                    clips={clips}
+                    programClipId={programClipId}
+                    previewClipId={previewClipId}
+                    targetClipId={outputTransitionTargets[activeOutputId]}
+                    hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
+                    crossfaderValue={crossfaderValue}
+                    isProgram={true}
+                    layers={layers}
+                    layerOutputs={layerOutputs}
+                    isTransmitting={isTransmitting}
+                    isProgramOff={outputOffStates[activeOutputId] || false}
+                    settings={externalScreenSettings}
+                    masterVolume={masterVolume}
+                    onEnded={handleProgramNext}
+                    onLayerEnded={handleLayerEnded}
+                    onTogglePlay={handleTogglePlay}
+                    onToggleLoop={handleToggleLoop}
+                    onRewind={handleRewind}
+                    onSkip={handleSkip}
+                    onProgressUpdate={(current, total) => setProgramProgress({ current, total })}
+                    onLevelChange={setProgramLevel}
+                    onUpdateClip={updateClip}
+                    isPlaylist={!!programPlaylistState}
+                    volume={programVolume}
+                    brightness={externalScreenSettings.brightness}
+                    contrast={externalScreenSettings.contrast}
+                    saturation={externalScreenSettings.saturation}
+                    opacity={externalScreenSettings.opacity}
+                    x={externalScreenSettings.x}
+                    y={externalScreenSettings.y}
+                    rotation={externalScreenSettings.rotation}
+                    scalingW={externalScreenSettings.scalingW}
+                    scalingH={externalScreenSettings.scalingH}
+                    transitionType={externalScreenSettings.transitionType}
+                    colorBalance={externalScreenSettings.colorBalance}
+                    pipLayers={pipLayers}
+                    activeOutputId={activeOutputId}
+                  />
+                </div>
+              </div>
+
+              {/* Program Controls */}
+              <div className="flex justify-between items-center bg-[#1a1a1a] p-3 rounded-lg border border-white/5 shadow-inner">
+                <div className="flex gap-2 items-center">
+                  <button onClick={() => setIsOutputModalOpen(true)} className="w-8 h-8 flex items-center justify-center bg-[#2a2a2a] hover:bg-[#333] rounded text-[#00AAFF] transition-colors border border-white/10" title="Configurar Salidas">
+                    <Settings size={16} />
+                  </button>
+                  <button onClick={() => setSelectedItemType('pipManager')} className="w-8 h-8 flex items-center justify-center bg-[#2a2a2a] hover:bg-[#333] rounded text-obs-accent transition-colors border border-white/10" title="Gestor de PiPs">
+                    <Layers size={16} />
+                  </button>
+                  {outputs.map(out => (
+                    <button 
+                      key={`output-btn-${out.id}`}
+                      onClick={() => {
+                        setActiveOutputId(out.id);
+                        setProgramClipId(outputPrograms[out.id] || null);
+                        setSelectedScreenId(out.physicalScreenId || null);
+                        setSelectedItemType('program');
+                      }}
+                      className={`w-8 h-8 rounded font-bold text-sm flex items-center justify-center transition-all ${activeOutputId === out.id ? 'bg-[#00AAFF] text-white shadow-[0_0_10px_rgba(0,170,255,0.4)]' : 'bg-[#2a2a2a] text-obs-muted border border-white/10 hover:text-white'}`}
+                    >
+                      {out.id}
+                    </button>
+                  ))}
+                </div>
+                
+                <div className="flex gap-2">
                   <button 
-                    onClick={() => handleTake()}
-                    className="w-20 py-2 rounded border border-obs-border bg-obs-surface text-obs-text text-[9px] font-black uppercase tracking-widest transition-all active:scale-95 hover:border-obs-muted/50 flex items-center justify-center gap-1"
+                    onClick={handleProgramOff} 
+                    className={`w-16 py-2 rounded text-[10px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-white/10 ${outputOffStates[activeOutputId] ? 'bg-red-600 animate-pulse' : 'bg-[#2a2a2a] hover:bg-[#333]'}`}
                   >
-                    <Scissors size={12} />
+                    <Square size={14} className={outputOffStates[activeOutputId] ? '' : 'text-obs-muted'} />
+                    OFF
+                  </button>
+                  <button 
+                    onClick={() => handleTake()} 
+                    className="w-20 py-2 bg-[#2a2a2a] hover:bg-[#333] rounded text-[10px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-white/10"
+                  >
+                    <Scissors size={14} className="text-obs-accent" />
                     TAKE
                   </button>
                   <button 
-                    onClick={() => handleTake('cut')}
-                    className="w-20 py-2 rounded border border-obs-border bg-obs-surface text-obs-text text-[9px] font-black uppercase tracking-widest transition-all active:scale-95 hover:border-obs-muted/50 flex items-center justify-center gap-1"
+                    onClick={() => setIsTransmitting(!isTransmitting)} 
+                    className={`w-16 py-2 rounded text-[10px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 ${isTransmitting ? 'bg-red-600 border border-red-500 shadow-[0_0_10px_rgba(220,38,38,0.4)]' : 'bg-[#2a2a2a] border border-white/10 text-obs-muted hover:text-white'}`}
                   >
-                    <Zap size={12} />
-                    CUT
+                    <div className={`w-1.5 h-1.5 rounded-full ${isTransmitting ? 'bg-white animate-pulse' : 'bg-obs-muted'}`} />
+                    LIVE
                   </button>
                 </div>
-
-                <button 
-                  onClick={() => {
-                    if (!isTransmitting) {
-                      // Launch window if it's not open or was closed
-                      if (!outputWindowRef.current || outputWindowRef.current.closed) {
-                        handleLaunchOutput();
-                      } else {
-                        setIsTransmitting(true);
-                      }
-                    } else {
-                      setIsTransmitting(false);
-                    }
-                  }}
-                  className={`w-20 py-3 rounded border-2 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center justify-center gap-1 ${isTransmitting ? 'bg-blue-600 border-blue-400 text-white shadow-[0_0_15px_rgba(37,99,235,0.5)]' : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'}`}
-                >
-                  <Radio size={14} />
-                  TRANSMITIR
-                </button>
               </div>
-            </div>
-            
-            <div className="flex-1 h-full max-w-2xl">
-              <Monitor 
-                title="Programa" 
-                isActive={isLive} 
-                activeClip={programClip} 
-                isDarkMode={isDarkMode} 
-                previewClip={previewClip}
-                crossfaderValue={crossfaderValue}
-                isProgram={true}
-                onEnded={handleProgramNext}
-                onTogglePlay={handleTogglePlay}
-                onToggleLoop={handleToggleLoop}
-                onRewind={handleRewind}
-                onSkip={handleSkip}
-                onLevelChange={setProgramLevel}
-                isPlaylist={!!programPlaylistState}
-                volume={programVolume}
-                brightness={externalScreenSettings.brightness}
-                contrast={externalScreenSettings.contrast}
-                saturation={externalScreenSettings.saturation}
-                scalingW={externalScreenSettings.scalingW}
-                scalingH={externalScreenSettings.scalingH}
-                transitionType={transitionType}
-                colorBalance={externalScreenSettings.colorBalance}
-                onClick={() => {
-                  setSelectedItemType('program');
-                  setSelectedItemId('program-output');
-                }}
-              />
+
+              {/* Work Mode Selectors */}
+                <div className="flex gap-2">
+                  <div className="flex items-center bg-[#1a1a1a] rounded border border-white/5 px-2 gap-3 mr-1">
+                    <div className="flex flex-col items-center">
+                       <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">{timerMode}</span>
+                       <span className="text-[14px] font-mono font-bold text-obs-accent leading-none">
+                         {timerMode === 'elapsed' 
+                           ? formatTime(programProgress.current) 
+                           : formatTime(Math.max(0, programProgress.total - programProgress.current))}
+                       </span>
+                    </div>
+                    <button 
+                      onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
+                      className="p-1 rounded bg-[#2a2a2a] hover:bg-[#333] transition-colors"
+                      title="Cambiar modo de tiempo"
+                    >
+                      <RefreshCw size={10} className="text-obs-muted" />
+                    </button>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                      setWorkMode('layers');
+                      setShowLayers(true);
+                      setShowPlaylists(false);
+                    }}
+                    className={`flex-1 min-w-[100px] py-1.5 rounded text-[9px] font-black uppercase tracking-widest transition-all border ${workMode === 'layers' ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,170,255,0.4)] scale-100' : 'bg-[#1a1a1a] text-obs-muted border-white/5 hover:text-white hover:border-white/10 scale-95'}`}
+                  >
+                    Gestión Capas
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setWorkMode('previews');
+                      setShowLayers(false);
+                      setShowPlaylists(true);
+                    }}
+                    className={`flex-1 min-w-[100px] py-1.5 rounded text-[9px] font-black uppercase tracking-widest transition-all border ${workMode === 'previews' ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,170,255,0.4)] scale-100' : 'bg-[#1a1a1a] text-obs-muted border-white/5 hover:text-white hover:border-white/10 scale-95'}`}
+                  >
+                    Previews / Playlist
+                  </button>
+                </div>
             </div>
           </div>
 
-          {/* Playlists Horizontal Bar */}
-          <div className="h-32 border-t border-obs-border bg-obs-surface overflow-hidden p-2">
-            <div className="h-full border-2 border-dashed border-obs-accent/30 rounded-lg overflow-hidden relative group">
-              <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[8px] font-black uppercase tracking-[0.3em] text-obs-accent/50 pointer-events-none z-10">
-                DRAG AND DROP VIDEOS PLAY LIST
+          <div className="flex-1 flex flex-col bg-obs-bg overflow-hidden">
+            {/* Center Area: Previews/Working Area (if any) */}
+            <div className="flex-1 overflow-y-auto" />
+
+            {/* Pinned area for layers and playlists pegged to docks */}
+              <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-4 py-2 space-y-4">
+                <CollapsibleSection title="Gestión de Capas" defaultOpen={workMode === 'layers'} disabled={workMode !== 'layers'}>
+                  <div className={workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}>
+                    <LayersSection 
+                      layers={layers}
+                      activeColumnTrigger={activeColumnTrigger}
+                      activeLayerTriggers={activeLayerTriggers}
+                      setActiveColumnTrigger={setActiveColumnTrigger}
+                      setActiveLayerTriggers={setActiveLayerTriggers}
+                      onAddLayer={addLayer}
+                      onRemoveLayer={removeLayer}
+                      layerOutputs={layerOutputs}
+                      onSetLayerOutput={(lid, oid) => {
+                        setLayerOutputs(prev => ({ ...prev, [lid]: oid }));
+                        setLayers(prev => prev.map(l => l.id === lid ? { ...l, outputId: oid } : l));
+                      }}
+                      onUpdateLayer={(lid, updates) => {
+                        setLayers(prev => {
+                          const newLayers = prev.map(l => l.id === lid ? { ...l, ...updates } : l);
+                          return newLayers;
+                        });
+                        if (updates.outputId !== undefined) {
+                          setLayerOutputs(prev => ({ ...prev, [lid]: (updates.outputId as string | null) }));
+                        }
+                        setSelectedItemId(lid);
+                        setSelectedItemType('layer' as any);
+                      }}
+                      onUpdateClip={updateClip}
+                      onTriggerClip={(layerId, slotIdx, mode) => {
+                        onTriggerLayerClip(layerId, slotIdx, mode);
+                      }}
+                      onTriggerColumn={handleColumnTrigger}
+                      onStopColumn={handleColumnStop}
+                      onDropOnLayer={handleDropOnLayer}
+                      onDragStartSlot={(e, clip) => {
+                         e.dataTransfer.setData('clip', JSON.stringify(clip));
+                      }}
+                      outputs={outputs}
+                      externalScreens={externalScreens}
+                      clips={clips}
+                      isDarkMode={isDarkMode}
+                    />
+                </div>
+              </CollapsibleSection>
+
+              <CollapsibleSection title="Playlists" defaultOpen={workMode === 'previews'} disabled={workMode !== 'previews'}>
+                <div className={`h-32 overflow-hidden p-2 ${workMode === 'previews' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
+                  <div className="h-full border-2 border-dashed border-obs-accent/30 rounded-lg overflow-hidden relative group">
+                  <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[8px] font-black uppercase tracking-[0.3em] text-obs-accent/50 pointer-events-none z-10 transition-opacity group-hover:opacity-20">
+                    DRAG AND DROP VIDEOS PLAY LIST
+                  </div>
+                  <PlaylistsSection 
+                    playlists={playlists}
+                    onAddPlaylist={addPlaylist}
+                    onDropOnPlaylist={onDropOnPlaylist}
+                    onSelectPlaylist={(p) => {
+                      setSelectedItemType('playlist');
+                      setSelectedItemId(p.id);
+                    }}
+                    onSetEditingPlaylist={setEditingPlaylistId}
+                    selectedPlaylistId={selectedItemType === 'playlist' ? selectedItemId : null}
+                    isDarkMode={isDarkMode}
+                    isHorizontal={true}
+                  />
+                </div>
               </div>
-              <PlaylistsSection 
-                playlists={playlists}
-                onAddPlaylist={addPlaylist}
-                onDropOnPlaylist={onDropOnPlaylist}
-                onSelectPlaylist={handleSelectPlaylist}
-                onSetEditingPlaylist={setEditingPlaylistId}
-                selectedPlaylistId={selectedItemId}
-                isDarkMode={isDarkMode}
-                isHorizontal={true}
-              />
-            </div>
+            </CollapsibleSection>
           </div>
 
-          {/* Bottom Docks Area */}
-          <div className="h-44 flex border-t border-obs-border overflow-hidden">
-            <div className="flex-1 border-r border-obs-border h-full">
-              <GridSection 
-                currentDeck={currentDeck}
-                onSetDeck={setCurrentDeck}
-                deckClips={deckClips}
-                onSelectClip={handleSelectClip}
-                onDragStart={onDragStart}
-                isDarkMode={isDarkMode}
-                selectedClipId={selectedItemId}
-              />
-            </div>
-            <div className="w-80 border-r border-obs-border">
-              <MixerSection 
-                previewLevel={previewLevel} 
-                programLevel={programLevel} 
-                previewVolume={previewVolume}
-                programVolume={programVolume}
-                masterVolume={masterVolume}
-                usbInVolume={usbInVolume}
-                usbOutVolume={usbOutVolume}
-                onPreviewVolumeChange={setPreviewVolume}
-                onProgramVolumeChange={setProgramVolume}
-                onMasterVolumeChange={setMasterVolume}
-                onUsbInVolumeChange={setUsbInVolume}
-                onUsbOutVolumeChange={setUsbOutVolume}
-              />
-            </div>
-            <div className="w-64 border-r border-obs-border h-full">
-              <TransitionsSection 
-                duration={transitionDuration}
-                onDurationChange={setTransitionDuration}
-                onTake={handleTake}
-                transitionType={transitionType}
-                onTransitionTypeChange={setTransitionType}
-              />
+            {/* Bottom Docks Area - Fixed at bottom */}
+            <div className="h-44 flex border-t border-obs-border overflow-hidden shrink-0 bg-obs-bg">
+              <div className="flex-1 h-full">
+                <GridSection 
+                  currentDeck={currentDeck}
+                  onSetDeck={setCurrentDeck}
+                  deckClips={deckClips}
+                  onSelectClip={handleSelectClip}
+                  onDragStart={onDragStart}
+                  isDarkMode={isDarkMode}
+                  selectedClipId={selectedItemId}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -3375,20 +6631,258 @@ export default function App() {
         {/* Right Sidebar: Inspector */}
         <div className="w-72 flex flex-col border-l border-obs-border">
           <Inspector 
-            selectedItem={selectedItem} 
+            selectedItem={
+              selectedItemType === 'preview' 
+                ? previews.find(p => p.id === selectedItemId) 
+                : selectedItemType === 'layer' 
+                  ? layers.find(l => l.id === selectedItemId)
+                  : selectedItemType === 'pip'
+                    ? pipLayers.find(p => p.id === selectedItemId)
+                    : selectedItemType === 'pipManager'
+                      ? pipLayers
+                      : selectedItem
+            } 
             selectedItemType={selectedItemType}
             externalScreenSettings={externalScreenSettings}
             externalScreens={externalScreens}
             hasDetailedScreens={hasDetailedScreens}
             isIframe={isIframe}
+            previews={previews}
+            setPreviews={setPreviews}
+            outputs={outputs}
             onUpdate={handleUpdateItem} 
-            onUpdateExternalScreen={setExternalScreenSettings}
+            onUpdateExternalScreen={handleUpdateExternalScreen}
+            selectedScreenId={selectedScreenId}
+            onSelectedScreenIdChange={setSelectedScreenId}
             onLaunchOutput={handleLaunchOutput}
             onDetectScreens={() => detectScreens(true)}
+            onUpdateLayer={(lid, updates) => {
+              setLayers(prev => prev.map(l => l.id === lid ? { ...l, ...updates } : l));
+              if (updates.outputId !== undefined) {
+                setLayerOutputs(prev => ({ ...prev, [lid]: (updates.outputId as string | null) }));
+              }
+            }}
+            onUpdatePiP={(pid, updates) => {
+              setPipLayers(prev => prev.map(p => p.id === pid ? { ...p, ...updates } : p));
+            }}
+            onAddPiP={addPiP}
+            onSelectPiP={handleSelectPiP}
+            onUpdateClip={updateClip}
+            clips={clips}
+            onSync={() => {
+              if (outputChannel.current) {
+                outputChannel.current.postMessage({
+                  type: 'SYNC_STATE',
+                  payload: {
+                    programClipId,
+                    previewClipId,
+                    outputPrograms,
+                    outputTransitionTargets,
+                    outputs,
+                    clips,
+                    crossfaderValue,
+                    allScreenSettings,
+                    isLive,
+                    isTransmitting,
+                    programVolume,
+                    masterVolume,
+                    transitionType: externalScreenSettings.transitionType,
+                    layers,
+                    layerOutputs,
+                    pipLayers
+                  }
+                });
+              }
+            }}
             isDarkMode={isDarkMode} 
           />
         </div>
       </main>
+
+      {/* Multi-Output creation modal */}
+      <AnimatePresence>
+        {isOutputModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-obs-bg border border-obs-border rounded-lg shadow-2xl w-[400px] flex flex-col overflow-hidden"
+            >
+              <div className="px-4 py-3 border-b border-obs-border bg-obs-surface flex justify-between items-center">
+                <span className="font-bold text-sm">Gestionar Salidas (Outputs)</span>
+                <button onClick={() => setIsOutputModalOpen(false)} className="text-obs-muted hover:text-white">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="p-4 flex flex-col gap-4">
+                <button 
+                  onClick={() => {
+                    if (externalScreens.length > 0 && outputs.length >= externalScreens.length) {
+                      alert(`No puedes crear más salidas que pantallas físicas detectadas (${externalScreens.length}).`);
+                      return;
+                    }
+                    const newId = String(Date.now());
+                    setOutputs([...outputs, { id: String(outputs.length + 1), name: `Salida ${outputs.length + 1}`, physicalScreenId: null, internalId: newId }]);
+                  }}
+                  className="w-full py-2 bg-obs-accent hover:bg-obs-accent-hover text-white rounded font-bold text-sm disabled:opacity-50"
+                  disabled={externalScreens.length > 0 && outputs.length >= externalScreens.length}
+                >
+                  + Agregar Nueva Salida
+                </button>
+                <div className="flex flex-col gap-3">
+                  {outputs.map(out => (
+                     <div key={`output-manage-item-${out.internalId || out.id}`} className="flex flex-col gap-2 bg-[#1a1a1a] p-3 rounded border border-white/10">
+                       <div className="flex justify-between items-center">
+                         <span className="font-bold">Salida {out.id}</span>
+                         <button onClick={() => {
+                           if(outputs.length > 1) setOutputs(outputs.filter(o => o.id !== out.id));
+                         }} className="text-red-400 hover:text-red-300">
+                           <Trash2 size={14} />
+                         </button>
+                       </div>
+                       <div className="flex flex-col gap-1">
+                         <span className="text-[10px] text-obs-muted uppercase font-bold">Pantalla Física</span>
+                         <select 
+                           value={out.physicalScreenId || ''} 
+                           onChange={(e) => {
+                             const screenId = e.target.value;
+                             setOutputs(outputs.map(o => o.id === out.id ? { ...o, physicalScreenId: screenId || null } : o));
+                             if (activeOutputId === out.id) {
+                               setSelectedScreenId(screenId || null);
+                               setSelectedItemType('program');
+                             }
+                           }}
+                           className="bg-black border border-obs-border rounded px-2 py-1 text-xs text-white outline-none focus:border-obs-accent"
+                         >
+                           <option value="">No asignada</option>
+                           {externalScreens.map(screen => (
+                             <option key={screen.id} value={screen.id}>
+                               {screen.name || `Monitor ${screen.id}`}
+                             </option>
+                           ))}
+                         </select>
+                       </div>
+                     </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Preview Modal */}
+      <AnimatePresence>
+        {isPreviewModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-obs-bg border border-obs-border rounded-lg shadow-2xl w-[500px] flex flex-col overflow-hidden"
+            >
+              <div className="px-4 py-3 border-b border-obs-border bg-obs-surface flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <Eye size={16} className="text-obs-accent" />
+                  <span className="font-bold text-sm uppercase tracking-widest">Configuración de Previews</span>
+                </div>
+                <button onClick={() => setIsPreviewModalOpen(false)} className="text-obs-muted hover:text-white transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-4 flex flex-col gap-4 bg-obs-bg">
+                <button 
+                  onClick={() => {
+                     const nextId = String(Math.max(0, ...previews.map(p => parseInt(p.id))) + 1);
+                     setPreviews([...previews, { 
+                       id: nextId, 
+                       name: `Preview ${nextId}`, 
+                       clipId: null, 
+                       volume: 0.5, 
+                       isLive: false,
+                       assignedOutputs: outputs.map(o => o.id),
+                       selectedOutputs: [],
+                       hideOverlay: false,
+                       overlayColor: '#00AAFF'
+                     }]);
+                  }}
+                  className="w-full py-2.5 bg-obs-accent hover:bg-obs-accent-hover text-white rounded font-black text-[10px] uppercase tracking-widest shadow-lg shadow-obs-accent/20 transition-all active:scale-95"
+                >
+                  + Agregar Nuevo Preview
+                </button>
+                <div className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                  {previews.map(p => (
+                     <div key={`preview-manage-item-${p.id}`} className="flex flex-col gap-3 bg-[#1a1a1a] p-4 rounded-lg border border-white/5 shadow-inner">
+                       <div className="flex justify-between items-center bg-black/30 p-2 rounded border border-white/5">
+                         <div className="flex flex-col gap-0.5">
+                           <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Nombre del Monitor</span>
+                           <input 
+                             type="text" 
+                             value={p.name} 
+                             onChange={(e) => setPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, name: e.target.value } : pr))}
+                             className="bg-transparent border-none px-0 py-0.5 text-sm font-bold w-48 focus:text-obs-accent outline-none text-white transition-colors"
+                           />
+                         </div>
+                         <button onClick={() => setPreviews(previews.filter(pr => pr.id !== p.id))} className="w-8 h-8 flex items-center justify-center bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded transition-all">
+                           <Trash2 size={14} />
+                         </button>
+                       </div>
+                       
+                       <div className="grid grid-cols-2 gap-4">
+                         <div className="space-y-1.5">
+                           <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Salidas Disponibles</span>
+                           <div className="flex gap-1.5 flex-wrap">
+                             {outputs.map(out => (
+                                <button 
+                                  key={out.id}
+                                  onClick={() => {
+                                    setPreviews(prevs => prevs.map(pr => 
+                                      pr.id === p.id ? { 
+                                        ...pr, 
+                                        assignedOutputs: (pr.assignedOutputs || []).includes(out.id) 
+                                          ? pr.assignedOutputs.filter((o: string) => o !== out.id) 
+                                          : [...(pr.assignedOutputs || []), out.id]
+                                      } : pr
+                                    ));
+                                  }}
+                                  className={`w-7 h-7 rounded text-[10px] font-black transition-all border ${p.assignedOutputs?.includes(out.id) ? 'bg-[#00AAFF] border-[#00AAFF] text-white shadow-[0_0_8px_rgba(0,170,255,0.4)]' : 'bg-black/40 border-white/10 text-obs-muted hover:border-white/30'}`}
+                                >
+                                  {out.id}
+                                </button>
+                             ))}
+                           </div>
+                         </div>
+                         
+                         <div className="space-y-2">
+                           <div className="flex items-center justify-between">
+                             <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Mostrar Textos</span>
+                             <button 
+                               onClick={() => setPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, hideOverlay: !pr.hideOverlay } : pr))}
+                               className={`w-8 h-4 rounded-full relative transition-colors ${p.hideOverlay ? 'bg-red-500' : 'bg-green-500'}`}
+                             >
+                               <div className={`absolute top-0.5 bottom-0.5 w-3 bg-white rounded-full transition-all ${p.hideOverlay ? 'right-0.5' : 'left-0.5'}`} />
+                             </button>
+                           </div>
+                           <div className="flex items-center justify-between">
+                             <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Color Accent</span>
+                             <input 
+                               type="color" 
+                               value={p.overlayColor || '#00AAFF'} 
+                               onChange={(e) => setPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, overlayColor: e.target.value } : pr))}
+                               className="w-10 h-5 bg-transparent border-none cursor-pointer"
+                             />
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {editingPlaylistId && (
@@ -3434,6 +6928,10 @@ export default function App() {
                       <div className="w-24 aspect-video rounded overflow-hidden border border-obs-border bg-black/40">
                         {clip.type === 'video' ? (
                           <video src={clip.url} className="w-full h-full object-cover" muted />
+                        ) : clip.type === 'document' || clip.name.toLowerCase().endsWith('.pdf') ? (
+                          <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none">
+                            <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />
+                          </div>
                         ) : (
                           <img src={clip.thumbnail} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         )}

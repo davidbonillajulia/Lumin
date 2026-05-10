@@ -1,0 +1,264 @@
+202:const formatTime = (seconds: number) => {
+209:const volToDb = (vol: number) => {
+235:}) => {
+264:              onClick={(e) => {
+273:              onClick={(e) => {
+289:        onMouseDown={(e) => {
+295:          const updateValue = (clientX: number) => {
+302:          const onMouseMove = (moveEvent: MouseEvent) => {
+306:          const onMouseUp = () => {
+337:const CollapsibleSection = ({ title, children, defaultOpen = false, disabled = false, onReset }: { title: string, children: React.ReactNode, defaultOpen?: boolean, disabled?: boolean, onReset?: () => void }) => {
+340:  useEffect(() => {
+348:          onClick={() => {
+359:            onClick={(e) => {
+424:const VUMeter = ({ label, position, level = 0 }: { label: string, position: 'left' | 'right', level?: number }) => {
+428:        {Array.from({ length: 15 }).map((_, i) => {
+454:const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isActive: boolean, volume: number = 1, connectToDestination: boolean = true) => {
+462:  useEffect(() => {
+480:    const initAudio = () => {
+505:        const updateLevel = () => {
+530:    return () => {
+633:}) => {
+641:  useEffect(() => {
+647:  useEffect(() => {
+651:    const updateTime = () => {
+659:    video.addEventListener('ended', onEnded || (() => {}));
+661:    return () => {
+664:      video.removeEventListener('ended', onEnded || (() => {}));
+669:  useEffect(() => {
+681:  useEffect(() => {
+691:        video.play().catch(() => {});
+707:  const busBClip = useMemo(() => {
+730:  const audioOpacityA = useMemo(() => {
+738:  const audioOpacityB = useMemo(() => {
+746:  const wipeTransform = useMemo(() => {
+853:                  {layers.filter(l => l.isVisible && (layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id])).map((l, index) => {
+965:                  onLoadedMetadata={() => {
+967:                    const interval = setInterval(() => {
+1046:}) => {
+1054:  const updateActiveSlice = (updates: any) => {
+1058:  const addSlice = () => {
+1069:  const deleteSlice = (id: string, e: React.MouseEvent) => {
+1291:const DocumentLayer = ({ clip, onUpdateClip }: { clip: any, onUpdateClip?: (id: string, updates: any) => void }) => {
+1301:          onLoadSuccess={(totalPages) => {
+1336:}) => {
+1341:  useEffect(() => {
+1349:  useEffect(() => {
+1353:  useEffect(() => {
+1356:      const handleTimeUpdate = () => {
+1363:      const handleEnded = () => {
+1375:        const handleReady = () => {
+1382:            video.play().catch(() => {});
+1389:          video.play().catch(() => {});
+1395:      return () => {
+1403:  useEffect(() => {
+1418:  useEffect(() => {
+1437:  const clipPath = useMemo(() => {
+1449:  const xOffsetPercentage = useMemo(() => {
+1521:const OutputView = React.memo(() => {
+1529:  useEffect(() => {
+1536:    const handleMessage = (event: MessageEvent) => {
+1548:    return () => {
+1556:  useEffect(() => {
+1558:      const tryFullscreen = async () => {
+1598:        onClick={() => {
+1600:            document.documentElement.requestFullscreen().catch(() => {});
+1640:    const audioOpacityA = (() => {
+1646:    const audioOpacityB = (() => {
+1653:    const wipeTransformOut = (() => {
+1661:        onClick={() => {
+1663:            document.documentElement.requestFullscreen().catch(() => {});
+1691:                onClick={(e) => {
+1693:                  document.documentElement.requestFullscreen().catch(() => {});
+1749:                    onEnded={() => {
+1769:                    onEnded={() => {
+1776:                {state.layers && state.layers.filter((l: any) => l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
+1813:                          onEnded={() => {
+1923:}) => {
+1924:  const handleReset = () => {
+2063:              onClick={() => {
+2230:                         onClick={() => {
+2261:                       onClick={() => {
+2278:                       onClick={() => {
+2295:                             onClick={() => {
+2386:                    onClick={() => {
+2402:                      onClick={() => {
+2413:                    onClick={() => {
+2428:                      onClick={() => {
+2460:                    {outputs.map((out) => {
+2588:                          onChange={(e) => {
+2793:                onInputChange={(val) => {
+2806:                onInputChange={(val) => {
+2827:                onInputChange={(val) => {
+2840:                onInputChange={(val) => {
+2853:                onInputChange={(val) => {
+2866:                onInputChange={(val) => {
+2892:                  onInputChange={(val) => {
+2917:                onInputChange={(val) => {
+2930:                onInputChange={(val) => {
+2951:                onInputChange={(val) => {
+3009:                    onClick={() => {
+3013:                      input.onchange = (e) => {
+3017:                          reader.onload = (event) => {
+3063:                  onInputChange={(val) => {
+3076:                  onInputChange={(val) => {
+3135:            {(() => {
+3200:                onInputChange={(val) => {
+3214:                    onClick={() => {
+3230:                      onClick={() => {
+3241:                    onClick={() => {
+3256:                      onClick={() => {
+3289:                onInputChange={(val) => {
+3309:                onInputChange={(val) => {
+3322:                onInputChange={(val) => {
+3335:                onInputChange={(val) => {
+3358:                  onInputChange={(val) => {
+3423:                onInputChange={(val) => {
+3436:                onInputChange={(val) => {
+3455:                onInputChange={(val) => {
+3468:                onInputChange={(val) => {
+3487:                onInputChange={(val) => {
+3500:                onInputChange={(val) => {
+3529:}: LibraryProps) => {
+3541:  const handleLibraryLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
+3544:    const newFiles = Array.from(files).map(f => {
+3558:  const filteredFiles = libraryFiles.filter(f => {
+3566:  const toggleSelection = (url: string, multi: boolean) => {
+3567:    setSelectedLibraryUrls(prev => {
+3628:                onDragStart={(e) => {
+3736:}) => {
+3739:  useEffect(() => {
+3773:                onDragStart={(e) => {
+3778:                onClick={() => {
+3792:                      onClick={(e) => {
+3849:                onDrop={(e) => {
+3873:              onDragStart={(e) => {
+3878:              onClick={() => {
+3891:                  onClick={(e) => {
+4051:}) => {
+4171:}) => {
+4198:             {Array.from({ length: columnsCount }).map((_, colIdx) => {
+4238:                          onClick={(e) => {
+4251:                          onClick={(e) => {
+4263:                      onClick={(e) => { e.stopPropagation(); onRemoveLayer(layer.id); }}
+4274:                  onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(activeOutputMenu === layer.id ? null : layer.id); }}
+4286:                      <button onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(null); }} className="text-obs-muted hover:text-white transition-colors">
+4292:                        onClick={(e) => {
+4303:                      {outputs.map(out => {
+4309:                            onClick={(e) => {
+4334:                    onClick={(e) => {
+4353:                    onClick={(e) => {
+4366:                    onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { isVisible: !layer.isVisible }); }}
+4373:                    onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { muted: !layer.muted }); }}
+4411:                        onClick={(e) => {
+4454:}) => {
+4623:}) => {
+4664:                onMouseDown={(e) => {
+4669:                  const updateValue = (clientY: number) => {
+4676:                  const onMouseMove = (moveEvent: MouseEvent) => {
+4680:                  const onMouseUp = () => {
+4758:  const getExternalScreenSettings = (screenId: string | null): ExternalScreenSettings => {
+4808:  const handleSelectPiP = (pip: PiPLayer) => {
+4813:  const addPiP = () => {
+4832:  useEffect(() => {
+4851:  const handleProgramOff = () => {
+4862:      setTimeout(() => {
+4890:  useEffect(() => {
+4894:    const handleMessage = (event: MessageEvent) => {
+4945:    return () => {
+4973:  useEffect(() => {
+4976:      syncTimeoutRef.current = setTimeout(() => {
+5002:    return () => {
+5008:  const detectScreens = async (requestPermission = false) => {
+5038:        const screens = details.screens.map((s: any, index: number) => {
+5112:  useEffect(() => {
+5119:      window.getScreenDetails().then(details => {
+5121:      }).catch(() => {});
+5125:  const handleUpdateExternalScreen = (updates: any) => {
+5136:  const handleLaunchOutput = () => {
+5168:          setTimeout(() => {
+5203:  const addLayer = () => {
+5226:  const removeLayer = (layerId: string) => {
+5228:    setLayerOutputs(prev => {
+5238:  const handleLayerEnded = (layerId: string) => {
+5239:    setLayers(prev => prev.map(layer => {
+5268:  const onTriggerLayerClip = (layerId: string, slotIdx: number, mode: 'single' | 'sequence' = 'single') => {
+5271:    setLayers(prev => prev.map(l => {
+5281:  const handleColumnTrigger = (colIdx: number) => {
+5284:    setLayers(prev => prev.map(layer => {
+5293:  const handleColumnStop = (colIdx: number) => {
+5295:    setLayers(prev => prev.map(layer => {
+5304:  const handleDropOnLayer = (e: React.DragEvent, layerId: string, slotIdx: number) => {
+5337:  const getClipTypeFromFile = (type: string, name: string): 'video' | 'image' | 'document' => {
+5347:  const handleAddClips = async (files: File[]) => {
+5348:    const newClipsPromises = files.map(async (file, index) => {
+5357:        metadata = await new Promise((resolve) => {
+5360:          video.onloadedmetadata = () => {
+5370:        metadata = await new Promise((resolve) => {
+5372:          img.onload = () => {
+5428:  const updateClip = (id: string, updates: Partial<Clip>) => {
+5430:    setDeckClips(prev => {
+5432:      Object.keys(newDecks).forEach(deck => {
+5449:  const handleUpdateItem = (id: string, updates: any) => {
+5457:  useEffect(() => {
+5458:    const handleKeyDown = (e: KeyboardEvent) => {
+5467:         layers.forEach(layer => {
+5470:         previews.forEach(preview => {
+5482:            navClips.forEach(clip => {
+5495:  const handleSelectClip = (clip: Clip) => {
+5500:  const handleSelectPlaylist = (playlist: Playlist) => {
+5505:  const handlePreviewClip = (clip: Clip) => {
+5510:  const handlePreviewPlaylist = (playlist: Playlist) => {
+5517:  const handleTake = (type?: 'fade' | 'wipe' | 'slide' | 'cut') => {
+5529:      livePreviews.forEach(lp => {
+5530:        lp.selectedOutputs.forEach((outId: string) => {
+5536:      const applyAllToOutputs = () => {
+5537:        setOutputPrograms(prev => {
+5539:          Object.entries(targets).forEach(([outId, clipId]) => {
+5565:        onComplete: () => {
+5585:        onComplete: () => {
+5594:  const onDropOnMultiPreview = (previewId: string, e: React.DragEvent) => {
+5631:  const handlePreviewNext = () => {
+5642:  const handleProgramNext = () => {
+5665:  const handleStop = () => {
+5671:  const handleTogglePlay = (id: string) => {
+5678:  const handleToggleLoop = (id: string) => {
+5685:  const handleRewind = (id: string) => {
+5689:  const handleSkip = (id: string, amount: number) => {
+5702:  const handleReset = () => {
+5708:  const onDragStart = (e: React.DragEvent, clip: Clip) => {
+5712:  const onDropOnPreview = (e: React.DragEvent) => {
+5726:  const onDropOnPlaylist = (e: React.DragEvent, playlistId?: string) => {
+5869:  const addPlaylist = () => {
+5897:  const addExternalScreen = () => {
+5906:  const toggleScreen = (id: string) => {
+5971:                        onClick={() => { 
+5981:                        onClick={() => {
+5991:                        onClick={() => {
+6178:                {selectedLibraryUrls.size === 1 ? (() => {
+6231:                    onClick={(e) => {
+6252:                      onEnded={() => {
+6269:                        onClick={(e) => {
+6274:                            setOutputPrograms(prev => {
+6276:                              deletedPreview.selectedOutputs.forEach((outId: string) => {
+6321:                        onClick={() => {
+6334:                     onClick={() => {
+6396:                      onClick={() => {
+6455:                    onClick={() => {
+6465:                    onClick={() => {
+6495:                      onSetLayerOutput={(lid, oid) => {
+6499:                      onUpdateLayer={(lid, updates) => {
+6500:                        setLayers(prev => {
+6511:                      onTriggerClip={(layerId, slotIdx, mode) => {
+6517:                      onDragStartSlot={(e, clip) => {
+6538:                    onSelectPlaylist={(p) => {
+6597:            onUpdateLayer={(lid, updates) => {
+6603:            onUpdatePiP={(pid, updates) => {
+6610:            onSync={() => {
+6658:                  onClick={() => {
+6676:                         <button onClick={() => {
+6686:                           onChange={(e) => {
+6734:                  onClick={() => {
+6777:                                  onClick={() => {
+6852:                  onReorder={(newClips) => {
+6882:                        onClick={() => {
