@@ -5434,7 +5434,11 @@ export default function App() {
 
   const handleAddClips = async (files: File[]) => {
     const newClipsPromises = files.map(async (file, index) => {
-      const url = URL.createObjectURL(file);
+      // En Electron, usamos la ruta real del archivo para que sea persistente entre ventanas
+      const url = (window.electron && (file as any).path) 
+        ? `file://${(file as any).path.replace(/\\/g, '/')}` 
+        : URL.createObjectURL(file);
+        
       const clipType = getClipTypeFromFile(file.type, file.name);
       const isVideo = clipType === 'video';
       const isImage = clipType === 'image';
@@ -6220,7 +6224,7 @@ export default function App() {
                           </div>
                           
                           <div className="space-y-1">
-                            {(programClip?.totalPages || programClip?.type === 'document' || programClip?.type === 'pdf' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
+                            {(programClip?.totalPages || programClip?.type === 'document' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
                               <>
                                 <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
                                   <div 
@@ -6621,6 +6625,10 @@ export default function App() {
                         setSelectedItemType('layer' as any);
                       }}
                       onUpdateClip={updateClip}
+                      onSelectLayer={(lid) => {
+                        setSelectedItemId(lid);
+                        setSelectedItemType('layer' as any);
+                      }}
                       onTriggerClip={(layerId, slotIdx, mode) => {
                         setSelectedItemId(layerId);
                         setSelectedItemType('layer' as any);

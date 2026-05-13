@@ -31,6 +31,7 @@ if (!gotTheLock) {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, 'preload.cjs'),
+        webSecurity: false, // Allow loading local files
       },
     });
 
@@ -94,6 +95,7 @@ if (!gotTheLock) {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, 'preload.cjs'),
+        webSecurity: false, // Allow loading local files
       },
     });
 

@@ -1,6 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+
+// Try to use the worker in a way that works both in Dev and Production
+const pdfWorkerUrl = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString();
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -16,14 +21,25 @@ export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, p
 
     const loadPdf = async () => {
       try {
-        loadingTask = pdfjsLib.getDocument(url);
+        console.log("Loading PDF from URL:", url);
+        // Using an object for parameters to include cMap settings for better font support
+        loadingTask = pdfjsLib.getDocument({
+          url,
+          cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/cmaps/',
+          cMapPacked: true,
+          disableRange: true,
+          disableStream: true,
+        });
+        
         const pdf = await loadingTask.promise;
+        console.log("PDF loaded successfully. Pages:", pdf.numPages);
+        
         if (!isCancelled) {
           setPdfDoc(pdf);
           if (onLoadSuccess) onLoadSuccess(pdf.numPages);
         }
       } catch (e: any) {
-        console.error("PDF Load Error:", e);
+        console.error("PDF Load Error details:", e);
       }
     };
 
