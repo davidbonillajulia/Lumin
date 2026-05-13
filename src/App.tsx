@@ -135,6 +135,16 @@ interface Screen {
   colorDepth?: number;
 }
 
+declare global {
+  interface Window {
+    electron: {
+      getScreens: () => Promise<any[]>;
+      launchOutput: (data: { screenId: string, url: string }) => void;
+      isElectron: boolean;
+    }
+  }
+}
+
 interface Layer {
   id: string;
   name: string;
@@ -1530,9 +1540,9 @@ const OutputView = React.memo(() => {
 
   useEffect(() => {
     console.log("OutputView: Montado.");
-    document.title = "LUMINA OUTPUT"; 
+    document.title = "LUMIN OUTPUT"; 
     
-    const channel = new BroadcastChannel('lumina-output');
+    const channel = new BroadcastChannel('lumin-output');
     channelRef.current = channel;
     
     const handleMessage = (event: MessageEvent) => {
@@ -1612,7 +1622,7 @@ const OutputView = React.memo(() => {
     
     const { programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates, outputs, clips, allScreenSettings, crossfaderValue, isLive, isTransmitting, programVolume, masterVolume, transitionType } = state;
     
-    // Find if this screen is mapped to a specific Lumina Output
+    // Find if this screen is mapped to a specific Lumin Output
     const mappedOutput = outputs?.find((o: any) => o.physicalScreenId === screenId);
     const mappedProgramClipId = (mappedOutput && outputPrograms) ? outputPrograms[mappedOutput.id] : programClipId;
     const mappedTargetClipId = (mappedOutput && outputTransitionTargets) ? outputTransitionTargets[mappedOutput.id] : previewClipId;
@@ -4224,7 +4234,7 @@ const LayersSection = React.memo(({
           <Plus size={14} />
         </button>
       </div>
-      <div className="p-2 space-y-3 overflow-visible pb-40">
+      <div className="p-2 space-y-3 overflow-visible">
         {/* Column Triggers Header */}
         <div className="flex gap-2 items-end mb-1 sticky top-0 bg-obs-bg z-10 pb-2 border-b border-white/5">
           <div className="w-32 shrink-0 px-2 py-1 text-[8px] font-black text-obs-muted uppercase flex items-center gap-1.5">
@@ -4932,7 +4942,7 @@ export default function App() {
 
   // Initialize BroadcastChannel and Sync logic
   useEffect(() => {
-    outputChannel.current = new BroadcastChannel('lumina-output');
+    outputChannel.current = new BroadcastChannel('lumin-output');
     
     // Handle requests from output windows
     const handleMessage = (event: MessageEvent) => {
@@ -5053,6 +5063,29 @@ export default function App() {
     try {
       console.log("Detectando pantallas...");
       
+      // PRIORIDAD 1: Electron (Nativo Desktop)
+      if (window.electron && window.electron.getScreens) {
+        try {
+          const electronScreens = await window.electron.getScreens();
+          if (electronScreens && electronScreens.length > 0) {
+            console.log("Pantallas detectadas vía Electron:", electronScreens);
+            const formatted = electronScreens.map(s => ({
+              ...s,
+              isActive: true,
+              colorDepth: 8 // Default for UI simplicity
+            }));
+            setExternalScreens(formatted);
+            setHasDetailedScreens(true);
+            if (!selectedScreenId) {
+              setSelectedScreenId(formatted[0].id);
+            }
+            return;
+          }
+        } catch (e) {
+          console.error("Error detecting with electron:", e);
+        }
+      }
+
       // Intentar detección nativa vía Bridge Python (Puerto 3001)
       try {
         const response = await fetch('http://localhost:3001/monitors').catch(() => null);
@@ -5187,6 +5220,17 @@ export default function App() {
       url.searchParams.set('screenId', selectedScreenId);
     }
     
+    // Check if running in Electron
+    if (window.electron && window.electron.launchOutput) {
+      window.electron.launchOutput({
+        screenId: selectedScreenId || 'primary',
+        url: `/?mode=output${selectedScreenId ? `&screenId=${selectedScreenId}` : ''}`
+      });
+      setIsTransmitting(true);
+      setIsLive(true);
+      return;
+    }
+
     // Features for a clean output window
     let features = 'menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no,popup=yes';
     
@@ -5198,7 +5242,7 @@ export default function App() {
     }
 
     // Try to open the output window
-    const windowName = `LuminaOutput_${selectedScreenId || 'default'}`;
+    const windowName = `LuminOutput_${selectedScreenId || 'default'}`;
     
       try {
         const win = window.open(url.toString(), windowName, features);
@@ -5992,7 +6036,7 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <Zap size={14} className="text-obs-accent" />
-            <span className="text-[11px] font-bold tracking-tight">LUMINA OBS</span>
+            <span className="text-[11px] font-bold tracking-tight">LUMIN OBS</span>
           </div>
           <nav className="flex gap-1 items-center">
             <button className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize">Archivo</button>
@@ -6550,7 +6594,7 @@ export default function App() {
             {/* Pinned area for layers and playlists pegged to docks */}
               <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-4 py-2 space-y-4">
                 <CollapsibleSection title="Gestión de Capas" defaultOpen={workMode === 'layers'} disabled={workMode !== 'layers'}>
-                  <div className={`max-h-[260px] overflow-y-auto pr-1 ${workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
+                  <div className={`max-h-[300px] overflow-y-auto custom-scrollbar ${workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
                     <LayersSection 
                       layers={layers}
                       activeColumnTrigger={activeColumnTrigger}

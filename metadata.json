@@ -1,5 +1,5 @@
 {
-  "name": "Lumina Media Server",
+  "name": "Lumin",
   "description": "High-performance live video server with minimalist UI and GPU-accelerated pipeline.",
   "requestFramePermissions": ["window-management"]
 }
