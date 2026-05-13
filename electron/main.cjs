@@ -9,8 +9,8 @@ let mainWindow;
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    width: 1920,
+    height: 1080,
     title: 'Lumin Media Server',
     backgroundColor: '#000000',
     webPreferences: {
@@ -20,15 +20,11 @@ function createMainWindow() {
     },
   });
 
-  const url = isDev 
-    ? 'http://localhost:3000' 
-    : `file://${path.join(__dirname, '../dist/index.html')}`;
-  
-  mainWindow.loadURL(url);
-
   if (isDev) {
+    mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools();
   } else {
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     // Check for updates on startup in production
     autoUpdater.checkForUpdatesAndNotify();
   }

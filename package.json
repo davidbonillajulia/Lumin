@@ -32,6 +32,13 @@
       ],
       "icon": "public/icon.ico"
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Lumin"
+    },
     "publish": {
       "provider": "github",
       "owner": "user",
