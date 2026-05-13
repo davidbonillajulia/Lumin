@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Use a CDN worker for maximum compatibility in all environments, including Electron ASAR
-const pdfWorkerUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+// Use a reliable CDN worker matching the library version
+const pdfWorkerUrl = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, pageNumber: number, onLoadSuccess?: (totalPages: number) => void }) => {
@@ -17,14 +17,17 @@ export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, p
 
     const loadPdf = async () => {
       try {
-        console.log("Loading PDF from URL:", url);
+        console.log("Loading PDF from URL:", url, "using pdfjs version:", pdfjsLib.version);
+        
+        // Fetch the PDF data first (works for blob:, file:, and http: URLs)
+        const response = await fetch(url);
+        const data = await response.arrayBuffer();
+        
         // Using an object for parameters to include cMap settings for better font support
         loadingTask = pdfjsLib.getDocument({
-          url,
-          cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/cmaps/',
+          data,
+          cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
           cMapPacked: true,
-          disableRange: true,
-          disableStream: true,
         });
         
         const pdf = await loadingTask.promise;
