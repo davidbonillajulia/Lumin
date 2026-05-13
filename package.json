@@ -1,7 +1,7 @@
 {
   "name": "lumin",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Professional Media Server",
   "author": "Lumin Media",
   "type": "module",
@@ -30,14 +30,17 @@
         "portable",
         "nsis"
       ],
-      "icon": "public/icon.ico"
+      "icon": "public/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Lumin"
+      "shortcutName": "Lumin",
+      "guid": "5c90b39c-2c97-4e78-8386-3be3d44bc4c9",
+      "runAfterFinish": true
     },
     "publish": {
       "provider": "github",
