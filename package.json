@@ -39,7 +39,6 @@
     }
   },
   "dependencies": {
-    "electron-is-dev": "^3.0.1",
     "electron-updater": "^6.1.7",
     "@google/genai": "^1.29.0",
     "@react-three/drei": "^10.7.7",

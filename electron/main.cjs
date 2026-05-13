@@ -1,7 +1,9 @@
 const { app, BrowserWindow, screen, ipcMain } = require('electron');
 const path = require('path');
-const isDev = require('electron-is-dev');
 const { autoUpdater } = require('electron-updater');
+
+// Native check if running in development
+const isDev = !app.isPackaged;
 
 let mainWindow;
 
