@@ -1617,8 +1617,8 @@ const OutputView = React.memo(() => {
   }
   
   try {
-    const urlParams = new URLSearchParams(window.location.search);
-    const screenId = urlParams.get('screenId');
+    const params = new URLSearchParams(window.location.search || window.location.hash.substring(window.location.hash.indexOf('?') !== -1 ? window.location.hash.indexOf('?') : window.location.hash.length));
+    const screenId = params.get('screenId');
     
     const { programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates, outputs, clips, allScreenSettings, crossfaderValue, isLive, isTransmitting, programVolume, masterVolume, transitionType } = state;
     
@@ -6007,7 +6007,8 @@ export default function App() {
   const programClip = clips.find(c => c.id === programClipId) || null;
 
   // Check for output mode
-  const isOutputMode = new URLSearchParams(window.location.search).get('mode') === 'output';
+  const params = new URLSearchParams(window.location.search || window.location.hash.substring(window.location.hash.indexOf('?') !== -1 ? window.location.hash.indexOf('?') : window.location.hash.length));
+  const isOutputMode = params.get('mode') === 'output';
 
   if (isOutputMode) {
     return <OutputView />;
@@ -6594,7 +6595,7 @@ export default function App() {
             {/* Pinned area for layers and playlists pegged to docks */}
               <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-4 py-2 space-y-4">
                 <CollapsibleSection title="Gestión de Capas" defaultOpen={workMode === 'layers'} disabled={workMode !== 'layers'}>
-                  <div className={`max-h-[300px] overflow-y-auto custom-scrollbar ${workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
+                  <div className={`max-h-[300px] overflow-y-auto no-scrollbar ${workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
                     <LayersSection 
                       layers={layers}
                       activeColumnTrigger={activeColumnTrigger}

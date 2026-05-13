@@ -76,9 +76,13 @@ ipcMain.on('launch-output', (event, { screenId, url }) => {
 
   const fullUrl = isDev 
     ? `http://localhost:3000${url}` 
-    : `file://${path.join(__dirname, '../dist/index.html')}${url}`;
+    : `${path.join(__dirname, '../dist/index.html').replace(/\\/g, '/')}#${url}`;
 
-  outputWindow.loadURL(fullUrl);
+  if (isDev) {
+    outputWindow.loadURL(fullUrl);
+  } else {
+    outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url });
+  }
   
   outputWindows.set(screenId || 'primary', outputWindow);
 
