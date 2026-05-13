@@ -5436,7 +5436,7 @@ export default function App() {
     const newClipsPromises = files.map(async (file, index) => {
       // En Electron, usamos la ruta real del archivo para que sea persistente entre ventanas
       const url = (window.electron && (file as any).path) 
-        ? `file://${(file as any).path.replace(/\\/g, '/')}` 
+        ? `file:///${(file as any).path.replace(/\\/g, '/')}` 
         : URL.createObjectURL(file);
         
       const clipType = getClipTypeFromFile(file.type, file.name);

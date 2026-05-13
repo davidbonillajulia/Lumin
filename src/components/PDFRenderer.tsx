@@ -1,12 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Try to use the worker in a way that works both in Dev and Production
-const pdfWorkerUrl = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString();
-
+// Use a CDN worker for maximum compatibility in all environments, including Electron ASAR
+const pdfWorkerUrl = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, pageNumber: number, onLoadSuccess?: (totalPages: number) => void }) => {
