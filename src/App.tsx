@@ -33,6 +33,8 @@ import {
   RotateCcw,
   Repeat,
   Volume2,
+  VolumeX,
+  EyeOff,
   List,
   ChevronDown,
   ChevronRight,
@@ -218,7 +220,67 @@ const formatTime = (seconds: number) => {
   if (isNaN(seconds) || seconds < 0) seconds = 0;
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const cs = Math.floor((seconds % 1) * 100);
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${cs.toString().padStart(2, '0')}`;
+};
+
+const FluidTimeDisplay = ({ eventId, isRemaining, className }: { eventId: string, isRemaining?: boolean, className?: string }) => {
+  const spanRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    let animId: number;
+    let lastSysTime = performance.now();
+    let smoothedTime = 0;
+
+    const loop = () => {
+      const now = performance.now();
+      const dt = (now - lastSysTime) / 1000;
+      lastSysTime = now;
+
+      if (spanRef.current) {
+        let displayTime = 0;
+        const video = (window as any).__luminProgramVideo;
+        
+        if (video) {
+           const actualCurrent = video.currentTime || 0;
+           const actualTotal = video.duration || 0;
+           
+           if (!video.paused && !video.ended && video.readyState >= 2) {
+              const diff = actualCurrent - smoothedTime;
+              // If the video time jumped significantly (seeking or starting), snap to it
+              if (Math.abs(diff) > 0.3) {
+                 smoothedTime = actualCurrent;
+              } else {
+                 // Extrapolate forward with the clock
+                 smoothedTime += dt * video.playbackRate;
+                 // Prevent it from drifting too far above real time
+                 if (smoothedTime < actualCurrent) smoothedTime = actualCurrent;
+                 else if (smoothedTime > actualCurrent + 0.1) smoothedTime = actualCurrent + 0.1;
+              }
+           } else {
+              smoothedTime = actualCurrent;
+           }
+           
+           displayTime = isRemaining ? Math.max(0, actualTotal - Math.min(smoothedTime, actualTotal)) : Math.min(smoothedTime, actualTotal);
+        } else {
+           smoothedTime = 0;
+        }
+        
+        const text = (isRemaining ? '-' : '') + formatTime(displayTime);
+        if (spanRef.current.innerText !== text) {
+          spanRef.current.innerText = text;
+        }
+      }
+      animId = requestAnimationFrame(loop);
+    };
+    loop();
+
+    return () => {
+      cancelAnimationFrame(animId);
+    };
+  }, [eventId, isRemaining]);
+
+  return <span ref={spanRef} className={className}>{isRemaining ? '-' : ''}00:00:00</span>;
 };
 
 const volToDb = (vol: number) => {
@@ -238,7 +300,8 @@ const PropertyControl = ({
   max, 
   step = 0.01, 
   onChange, 
-  onInputChange 
+  onInputChange,
+  isAudioControl = false
 }: { 
   label: string, 
   value: number, 
@@ -247,13 +310,14 @@ const PropertyControl = ({
   max: number, 
   step?: number, 
   onChange: (val: number) => void,
-  onInputChange?: (val: string) => void
+  onInputChange?: (val: string) => void,
+  isAudioControl?: boolean
 }) => {
   const progress = ((value - min) / (max - min)) * 100;
   const sliderRef = useRef<HTMLDivElement>(null);
   
   // Determine if this is an audio control for dB display
-  const isAudio = label.toLowerCase().includes('volumen') || label.toLowerCase().includes('master') || label.toLowerCase().includes('mixer');
+  const isAudio = isAudioControl || label.toLowerCase().includes('volumen') || label.toLowerCase().includes('master') || label.toLowerCase().includes('mixer');
   const actualDisplayValue = isAudio ? volToDb(value) : displayValue;
 
   return (
@@ -1411,6 +1475,18 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     onEndedRef.current = onEnded;
   }, [onEnded]);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && isProgram) {
+      (window as any).__luminProgramVideo = video;
+      return () => {
+        if ((window as any).__luminProgramVideo === video) {
+          (window as any).__luminProgramVideo = null;
+        }
+      };
+    }
+  }, [isProgram]);
+
   const filterId = useMemo(() => `filter-${clip.id}-${Math.random().toString(36).substr(2, 9)}`, [clip.id]);
 
   const audioLevel = useAudioLevel(videoRef, clip.type === 'video', 1, isProgram);
@@ -1605,7 +1681,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
               <video 
                 ref={videoRef}
                 src={clip.url} 
-                className={`w-full h-full ${clip.fitToScale ? 'object-contain' : 'object-none'}`} 
+                className={`w-full h-full ${!isProgram || clip.fitToScale ? 'object-contain' : 'object-none'}`} 
                 autoPlay 
                 muted={true}
                 loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
@@ -1619,7 +1695,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
           ) : clip.type === 'document' ? (
             <DocumentLayer clip={clip} onUpdateClip={updateClip} />
           ) : (
-            <img src={clip.url} className={`w-full h-full ${clip.fitToScale ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
+            <img src={clip.url} className={`w-full h-full ${!isProgram || clip.fitToScale ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
           )}
         </motion.div>
     </>
@@ -2177,7 +2253,7 @@ const Inspector = React.memo(({
     );
   }
 
-  if (selectedItemType === 'pip') {
+  if (selectedItemType === 'pip' && selectedItem) {
     const pip = (selectedItem as PiPLayer);
     const outputSettings = (pip.targetOutputId && allScreenSettings[pip.targetOutputId]) || allScreenSettings['1'] || { width: 1920, height: 1080 };
     const maxW = outputSettings.width || 1920;
@@ -2459,7 +2535,7 @@ const Inspector = React.memo(({
     );
   }
 
-  if (selectedItemType === 'layer') {
+  if (selectedItemType === 'layer' && selectedItem) {
     const layer = (selectedItem as Layer);
     return (
       <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
@@ -2703,7 +2779,7 @@ const Inspector = React.memo(({
     );
   }
 
-  if (selectedItemType === 'playlist') {
+  if (selectedItemType === 'playlist' && selectedItem) {
     const playlist = (selectedItem as Playlist);
     return (
       <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
@@ -3298,6 +3374,7 @@ const Inspector = React.memo(({
     );
   }
 
+  // Final fallback (should only happen if type is not handled above)
   return (
     <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
       <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
@@ -3392,7 +3469,7 @@ const Inspector = React.memo(({
           </CollapsibleSection>
 
           {/* VIDEO Section (Opacity) */}
-          <CollapsibleSection title="VIDEO">
+          <CollapsibleSection title="VIDEO" onReset={() => onUpdate(selectedItem.id, { opacity: 1 })}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Opacidad"
@@ -3485,7 +3562,7 @@ const Inspector = React.memo(({
 
           {/* VELOCIDAD Section */}
           {selectedItem.type === 'video' && (
-            <CollapsibleSection title="VELOCIDAD">
+            <CollapsibleSection title="VELOCIDAD" onReset={() => onUpdate(selectedItem.id, { speed: 1 })}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Velocidad"
@@ -3505,7 +3582,7 @@ const Inspector = React.memo(({
           )}
 
           {/* Ajustes de Imagen */}
-          <CollapsibleSection title="AJUSTES DE IMAGEN" defaultOpen={false}>
+          <CollapsibleSection title="AJUSTES DE IMAGEN" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { brightness: 1, contrast: 1, saturation: 1 })}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Brillo"
@@ -3550,7 +3627,7 @@ const Inspector = React.memo(({
           </CollapsibleSection>
 
           {/* Balance de Color (RGB) */}
-          <CollapsibleSection title="BALANCE DE COLOR" defaultOpen={false}>
+          <CollapsibleSection title="BALANCE DE COLOR" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { colorBalance: { r: 1, g: 1, b: 1 } })}>
             <div className="space-y-2">
               {['r', 'g', 'b'].map(channel => (
                 <PropertyControl 
@@ -3576,7 +3653,7 @@ const Inspector = React.memo(({
           </CollapsibleSection>
 
           {/* CrossFader */}
-          <CollapsibleSection title="COSSFADER" defaultOpen={false}>
+          <CollapsibleSection title="CROSSFADER" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { blendMode: 'Alpha', curve: 'Lineal' })}>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-[9px] text-obs-muted uppercase font-bold">Blend Mode</label>
@@ -3619,7 +3696,7 @@ const Inspector = React.memo(({
           </CollapsibleSection>
 
           {/* Transformar */}
-          <CollapsibleSection title="TRANSFORMAR" defaultOpen={false}>
+          <CollapsibleSection title="TRANSFORMAR" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { transform: { ...selectedItem.transform, x: 0, y: 0 } })}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Posición X"
@@ -3651,7 +3728,7 @@ const Inspector = React.memo(({
           </CollapsibleSection>
 
           {/* Escala */}
-          <CollapsibleSection title="ESCALA" defaultOpen={false}>
+          <CollapsibleSection title="ESCALA" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { transform: { ...selectedItem.transform, scaleW: 1, scaleH: 1 } })}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Escala Ancho"
@@ -3683,7 +3760,7 @@ const Inspector = React.memo(({
           </CollapsibleSection>
 
           {/* Rotación */}
-          <CollapsibleSection title="ROTACIÓN" defaultOpen={false}>
+          <CollapsibleSection title="ROTACIÓN" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { transform: { ...selectedItem.transform, rotation: 0 } })}>
             <div className="space-y-2">
               <PropertyControl 
                 label="Rotación Z"
@@ -4160,16 +4237,17 @@ const GridSection = React.memo(({
           <span className="text-[9px] uppercase font-bold tracking-widest">Agrega fuentes a esta baraja</span>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
+        <div className="flex flex-wrap gap-2 content-start">
           {deckClips[currentDeck].map(clip => (
-            <ClipCard 
-              key={clip.id} 
-              clip={clip} 
-              onSelect={() => onSelectClip(clip)}
-              onDragStart={(e) => onDragStart(e, clip)}
-              isDarkMode={isDarkMode}
-              isSelected={selectedClipId === clip.id}
-            />
+            <div key={clip.id} className="w-[110px] shrink-0">
+              <ClipCard 
+                clip={clip} 
+                onSelect={() => onSelectClip(clip)}
+                onDragStart={(e) => onDragStart(e, clip)}
+                isDarkMode={isDarkMode}
+                isSelected={selectedClipId === clip.id}
+              />
+            </div>
           ))}
         </div>
       )}
@@ -4297,7 +4375,7 @@ const ProgramSection = React.memo(({
           <div className="mt-2 space-y-1">
             {activeClip?.type === 'document' || activeClip?.name.toLowerCase().endsWith('.pdf') ? (
               <>
-                <div className="flex justify-between text-[8px] font-mono font-bold">
+                <div className="flex justify-between text-[8px] font-mono font-normal">
                   <span className="text-obs-accent">Pág. {activeClip.currentPage || 1}</span>
                   <span className="text-obs-muted">
                     {activeClip.totalPages ? `Quedan ${activeClip.totalPages - (activeClip.currentPage || 1)}` : 'Documento'}
@@ -4319,7 +4397,7 @@ const ProgramSection = React.memo(({
               </>
             ) : (
               <>
-                <div className="flex justify-between text-[8px] font-mono font-bold">
+                <div className="flex justify-between text-[8px] font-mono font-normal">
                   <span className="text-obs-accent">{formatTime(progress.current)}</span>
                   <span className="text-obs-muted">-{formatTime(timeRemaining > 0 ? timeRemaining : 0)}</span>
                 </div>
@@ -4384,7 +4462,10 @@ const LayersSection = React.memo(({
   outputs,
   externalScreens,
   clips,
-  isDarkMode 
+  isDarkMode,
+  selectedItemId,
+  selectedItemType,
+  onAddColumn
 }: { 
   layers: Layer[], 
   activeColumnTrigger: number | null,
@@ -4408,14 +4489,17 @@ const LayersSection = React.memo(({
   outputs: any[],
   externalScreens: Screen[],
   clips: Clip[],
-  isDarkMode: boolean 
+  isDarkMode: boolean,
+  selectedItemId?: string | null,
+  selectedItemType?: string | null,
+  onAddColumn?: () => void
 }) => {
   const [activeOutputMenu, setActiveOutputMenu] = useState<string | null>(null);
   const columnsCount = layers[0]?.slots.length || 0;
 
   return (
-    <div className="flex flex-col bg-obs-bg border-b border-obs-border pb-32">
-      <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-dark-1">
+    <div className="flex-1 flex flex-col min-h-0 bg-obs-bg border border-obs-border rounded-lg shadow-inner">
+      <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-dark-1 shrink-0">
         <div className="flex items-center gap-2">
           <Grid size={12} className="text-obs-accent" />
           <span className="text-[10px] font-bold uppercase tracking-wider text-white">Capas (Control de Salidas Directo)</span>
@@ -4428,30 +4512,32 @@ const LayersSection = React.memo(({
           <Plus size={14} />
         </button>
       </div>
-      <div className="p-2 space-y-3 overflow-visible">
-        {/* Column Triggers Header */}
-        <div className="flex gap-2 items-end mb-1 sticky top-0 bg-obs-bg z-10 pb-2 border-b border-obs-text/5">
-          <div className="w-48 shrink-0 px-2 py-1 text-[8px] font-black text-obs-muted uppercase flex items-center gap-1.5">
-            <Zap size={10} className="text-obs-accent" />
-            TRIGGERS
-          </div>
-              <div className="flex-1 flex gap-1">
+
+      <div className="flex-1 overflow-x-auto custom-scrollbar p-2">
+        <div className="min-w-max space-y-3">
+          {/* Column Triggers Header */}
+          <div className="flex gap-2 items-end mb-1 sticky top-0 bg-obs-bg z-20 pb-2 border-b border-obs-text/5">
+            <div className="w-40 shrink-0 px-2 py-1 text-[8px] font-black text-obs-muted uppercase flex items-center gap-1.5 sticky left-0 bg-obs-bg z-30">
+              <Zap size={10} className="text-obs-accent" />
+              TRIGGERS
+            </div>
+            <div className="flex gap-1">
                  {Array.from({ length: columnsCount }).map((_, colIdx) => {
                    const state = columnUIStates[colIdx];
                    return (
-                     <div key={colIdx} className="w-[140px] shrink-0">
+                     <div key={colIdx} className="w-[88px] shrink-0">
                         <div className="w-full h-full flex gap-1">
                           <div className="flex-1 flex gap-0.5">
                             <button 
                               onClick={() => onTriggerColumn(colIdx)} 
-                              className={`flex-1 rounded-[2px] border-2 flex items-center justify-center h-6 transition-colors ${state === 'play' ? 'bg-green-500/20 border-green-500 text-green-500' : 'bg-transparent border-gray-400 text-gray-400 hover:bg-gray-400/10'}`}
+                              className={`flex-1 rounded-[2px] border flex items-center justify-center h-6 transition-colors ${state === 'play' ? 'bg-green-500/20 border-green-500 text-green-500' : 'bg-transparent border-gray-400 text-gray-400 hover:bg-gray-400/10'}`}
                               title={`Play Column ${colIdx + 1}`}
                             >
                               <Play size={10} fill="currentColor" />
                             </button>
                             <button 
                               onClick={() => onStopColumn(colIdx)} 
-                              className={`flex-1 rounded-[2px] border-2 flex items-center justify-center h-6 transition-colors ${state === 'stop' ? 'bg-red-500/20 border-red-500 text-red-500' : 'bg-transparent border-gray-400 text-gray-400 hover:bg-gray-400/10'}`}
+                              className={`flex-1 rounded-[2px] border flex items-center justify-center h-6 transition-colors ${state === 'stop' ? 'bg-red-500/20 border-red-500 text-red-500' : 'bg-transparent border-gray-400 text-gray-400 hover:bg-gray-400/10'}`}
                               title={`Stop Column ${colIdx + 1}`}
                             >
                               <Square size={8} fill="currentColor" />
@@ -4461,217 +4547,169 @@ const LayersSection = React.memo(({
                      </div>
                    );
                  })}
-              </div>
-        </div>
+                 <div className="w-[88px] shrink-0 ml-1 h-6 pointer-events-none"></div>
+            </div>
+          </div>
 
-        <div className="space-y-3">
-          {layers.map((layer, lIdx) => (
-            <div key={layer.id} className="flex gap-2 items-center group/row">
-              <div 
-                onClick={() => {
-                  onSelectLayer(layer.id);
-                  onUpdateLayer(layer.id, {});
-                }}
-                className={`w-48 h-[92px] px-2 py-1.5 border rounded flex flex-col justify-between group relative overflow-visible shrink-0 cursor-pointer transition-all ${
-                  layer.activeClipId ? 'bg-obs-surface' : 'bg-obs-dark-1'
-                } ${layers.find(l => l.activeClipId === l.slots.find(s => s?.id === layer.activeClipId)?.id) ? 'border-obs-accent ring-1 ring-obs-accent/20' : 'border-obs-border'}`}
-              >
-                <div className="flex justify-between items-center w-full min-h-[14px]">
-                  <div className="bg-obs-accent text-white px-1.5 py-0.5 rounded-[2px] text-[7.5px] font-black uppercase tracking-tight max-w-[55%] truncate shadow-sm">
-                    {layer.name}
-                  </div>
-                  <div className="flex items-center gap-0.5">
-                    {layer.activeClipId && clips.find(c => c.id === layer.activeClipId)?.type === 'document' && (
-                      <div className="flex items-center bg-obs-dark-1 rounded px-1 group shadow-sm border border-obs-text/5 absolute -top-4 right-0 z-10 w-auto">
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const clip = clips.find(c => c.id === layer.activeClipId);
-                            if (clip) onUpdateClip(clip.id, { currentPage: Math.max(1, (clip.currentPage || 1) - 1) });
-                          }}
-                          className="hover:text-obs-accent p-0.5"
-                        >
-                          <ChevronLeft size={6} strokeWidth={3} />
-                        </button>
-                        <span className="text-[6px] font-mono font-bold text-obs-accent min-w-[10px] text-center">
-                          {(() => {
-                            const clip = clips.find(c => c.id === layer.activeClipId);
-                            if (!clip) return null;
-                            return `${clip.currentPage || 1}${clip.totalPages ? `/${clip.totalPages}` : ''}`;
-                          })()}
-                        </span>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const clip = clips.find(c => c.id === layer.activeClipId);
-                            if (clip) onUpdateClip(clip.id, { currentPage: Math.min((clip.currentPage || 1) + 1, clip.totalPages || Infinity) });
-                          }}
-                          className="hover:text-obs-accent p-0.5"
-                        >
-                          <ChevronRight size={6} strokeWidth={3} />
-                        </button>
-                      </div>
-                    )}
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { muted: !layer.muted }); }}
-                      className={`w-5 h-5 flex items-center justify-center rounded-[2px] transition-colors ${!layer.muted ? 'bg-obs-accent text-black shadow-[0_0_8px_rgba(0,163,245,0.4)]' : 'bg-transparent text-obs-muted hover:bg-obs-accent/20'}`}
-                      title={layer.muted ? "Activar audio" : "Silenciar"}
-                    >
-                      <Volume2 size={12} />
-                    </button>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { isVisible: !layer.isVisible }); }}
-                      className={`w-5 h-5 flex items-center justify-center rounded-[2px] transition-colors ${layer.isVisible ? 'bg-obs-accent text-black shadow-[0_0_8px_rgba(0,163,245,0.4)]' : 'bg-transparent text-obs-muted hover:bg-obs-accent/20'}`}
-                      title={layer.isVisible ? "Ocultar capa" : "Mostrar capa"}
-                    >
-                      <Eye size={12} />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onRemoveLayer(layer.id); }}
-                      className="w-5 h-5 flex items-center justify-center rounded-[2px] transition-colors bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.4)] hover:bg-red-600"
-                      title="Eliminar capa"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </div>
-              
-              <div className="relative w-full mt-0.5">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(activeOutputMenu === layer.id ? null : layer.id); }}
-                  className={`w-full py-0.5 px-1 rounded-[2px] text-[7.5px] font-black uppercase tracking-tighter transition-all flex items-center justify-between gap-1 border ${layerOutputs[layer.id] ? 'bg-obs-accent/20 text-obs-accent border-obs-accent/30 shadow-[0_2px_5px_rgba(0,163,245,0.1)]' : 'bg-transparent text-white border-transparent hover:border-obs-text/10'}`}
+          <div className="space-y-2 relative">
+            {layers.map((layer, lIdx) => (
+              <div key={layer.id} className={`flex gap-2 items-center group/row relative ${activeOutputMenu === layer.id ? 'z-50' : 'z-10'}`}>
+                <div 
+                  onClick={() => {
+                    onSelectLayer(layer.id);
+                    onUpdateLayer(layer.id, {});
+                  }}
+                  className={`w-40 h-[60px] px-1.5 py-1 border rounded flex flex-col justify-between group relative overflow-visible shrink-0 cursor-pointer transition-all sticky left-0 ${activeOutputMenu === layer.id ? 'z-[100]' : 'z-20'} ${
+                    layer.activeClipId ? 'bg-obs-surface' : 'bg-obs-dark-1'
+                  } ${(selectedItemId === layer.id && selectedItemType === 'layer') || layer.isActive ? 'border-obs-accent ring-1 ring-obs-accent/20' : 'border-obs-border'}`}
                 >
-                  <div className="flex gap-1.5 items-center">
-                    <MonitorIcon size={7} className="text-obs-accent" />
-                    <span>{layerOutputs[layer.id] ? `OUT ${layerOutputs[layer.id]}` : 'PROGRAM'}</span>
-                  </div>
-                  <ChevronDown size={7} className={`text-obs-muted transition-transform ${activeOutputMenu === layer.id ? 'rotate-180' : ''}`} />
-                </button>
-                
-                {activeOutputMenu === layer.id && (
-                  <div className="absolute bottom-full left-0 bg-obs-surface border border-obs-border rounded shadow-[0_-8px_30px_rgba(0,0,0,0.9)] z-[1000] mb-1 p-1 flex flex-row flex-wrap gap-1 min-w-[200px] max-w-[280px]">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSetLayerOutput(layer.id, null);
-                          onUpdateLayer(layer.id, { outputId: null });
-                          setActiveOutputMenu(null);
-                        }}
-                        className={`h-7 px-2 text-[7px] font-black rounded flex items-center justify-center transition-all ${!layerOutputs[layer.id] ? 'bg-obs-accent text-white shadow-lg' : 'bg-obs-dark-1 text-obs-muted hover:bg-white/5'}`}
-                      >
-                         PROGRAM
-                      </button>
-                      {outputs.map(out => {
-                        const isSelected = layerOutputs[layer.id] === out.id;
-                        return (
-                          <button
-                            key={out.id}
+                  <div className="flex flex-col gap-1 w-full h-full justify-between">
+                    {/* Top Row: Layer Name, Play/Stop and Output Selector */}
+                    <div className="flex justify-between items-center w-full">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[9px] font-black text-obs-accent uppercase truncate max-w-[50px]">
+                          {layer.name}
+                        </span>
+                        <div className="flex gap-0.5 shrink-0">
+                          <button 
                             onClick={(e) => {
                               e.stopPropagation();
-                              onSetLayerOutput(layer.id, out.id);
-                              onUpdateLayer(layer.id, { outputId: out.id });
-                              setActiveOutputMenu(null);
+                              setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: 'stop' }));
+                              onUpdateLayer(layer.id, { isPlaying: false, activeClipId: null, activeSlotIndex: null });
                             }}
-                            className={`h-7 px-2 text-[7px] font-black rounded flex items-center justify-center transition-all min-w-[30px] ${isSelected ? 'bg-obs-accent text-white shadow-lg' : 'bg-obs-dark-1 text-obs-muted hover:bg-white/5'}`}
+                            className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${(!layer.isPlaying && !layer.activeClipId) ? 'border-red-500 bg-red-500 text-white' : 'border-white/80 bg-white text-black hover:bg-gray-200'}`}
+                            title="Stop Layer"
                           >
-                             OUT {out.id}
+                            <Square size={8} fill="currentColor" />
                           </button>
-                        );
-                      })}
-                  </div>
-                )}
-              </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveColumnTrigger(null);
+                              setColumnUIStates({});
+                              setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: 'play' }));
+                              onUpdateLayer(layer.id, { isPlaying: true, playbackMode: 'sequence' });
+                              const currentIdx = layer.activeSlotIndex !== null ? layer.activeSlotIndex : 0;
+                              onTriggerClip(layer.id, currentIdx, 'sequence');
+                            }}
+                            className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${layer.isPlaying && layer.playbackMode === 'sequence' ? 'border-green-500 bg-green-500 text-white' : 'border-white/80 bg-white text-black hover:bg-gray-200'}`}
+                            title="Play Layer"
+                          >
+                            <Play size={8} fill="currentColor" />
+                          </button>
+                        </div>
+                      </div>
 
-              <div className="flex items-center gap-2.5 w-full mt-0.5">
-                <div className="flex gap-1">
-                  <button 
-                    title="Play Layer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const isStarting = !layer.isPlaying || activeLayerTriggers[layer.id] !== 'play';
-                      setActiveColumnTrigger(null);
-                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: isStarting ? 'play' : 'stop' }));
-                      onUpdateLayer(layer.id, { isPlaying: isStarting, playbackMode: 'sequence' });
-                      if (isStarting) {
-                        const currentIdx = layer.activeSlotIndex !== null ? layer.activeSlotIndex : 
-                                         (layer.activeClipId ? layer.slots.findIndex(s => s?.id === layer.activeClipId) : -1);
-                        const targetIdx = currentIdx !== -1 ? currentIdx : layer.slots.findIndex(s => s !== null);
-                        if (targetIdx !== -1) onTriggerClip(layer.id, targetIdx, 'sequence');
-                      }
-                    }}
-                    className={`w-6 h-6 flex items-center justify-center rounded-[2px] transition-all border-2 ${activeLayerTriggers[layer.id] === 'play' ? 'bg-green-500/20 border-green-500 text-green-500 shadow-[0_0_10px_rgba(34,197,94,0.3)]' : 'bg-transparent border-gray-400/50 text-gray-400 hover:bg-gray-400/10'}`}
-                  >
-                    <Play size={10} fill="currentColor" />
-                  </button>
-                  <button 
-                    title="Stop Layer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: 'stop' }));
-                      onUpdateLayer(layer.id, { isPlaying: false, activeClipId: null, activeSlotIndex: null });
-                    }}
-                    className={`w-6 h-6 flex items-center justify-center rounded-[2px] transition-all border-2 ${activeLayerTriggers[layer.id] === 'stop' ? 'bg-red-500/20 border-red-500 text-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'bg-transparent border-gray-400/50 text-gray-400 hover:bg-gray-400/10'}`}
-                  >
-                    <Square size={8} fill="currentColor" />
-                  </button>
-                  <button 
-                    title="Loop Playlist"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUpdateLayer(layer.id, { loop: !(layer.loop !== false) });
-                    }}
-                    className={`w-6 h-6 flex items-center justify-center rounded-[2px] transition-all border-2 ${layer.loop !== false ? 'bg-obs-accent/20 border-obs-accent text-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.3)]' : 'bg-transparent border-gray-400/50 text-gray-400 hover:bg-gray-400/10'}`}
-                  >
-                    <RefreshCw size={10} />
-                  </button>
-                </div>
-                
-                <div className="flex-1 flex flex-col gap-1 pr-1 min-w-0">
-                  <div className="flex justify-between items-center bg-obs-dark-2 rounded-[2px] px-1 h-8 border border-white/5">
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { opacity: Math.max(0, (layer.opacity || 0) - 0.05) }); }}
-                      className="text-[12px] text-white hover:text-obs-accent px-1.5 font-mono transition-colors active:scale-95"
-                    >-</button>
-                    <div className="flex-1 flex items-center relative group px-1 h-full min-w-0">
-                       <input 
-                         type="number"
-                         min="0" max="100"
-                         value={Math.round((layer.opacity || 0) * 100)}
-                         onChange={(e) => {
-                           const val = parseInt(e.target.value);
-                           if (!isNaN(val)) {
-                             onUpdateLayer(layer.id, { opacity: Math.max(0, Math.min(100, val)) / 100 });
-                           }
-                         }}
-                         className="w-full bg-transparent text-white text-[11px] text-center font-black focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
-                       />
+                      <div className="relative">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(activeOutputMenu === layer.id ? null : layer.id); }}
+                          className="flex items-center gap-1 group/out hover:opacity-80 transition-opacity"
+                        >
+                          <MonitorIcon size={8} className="text-obs-accent" />
+                          <span className="text-[8px] font-bold text-white uppercase tracking-tight">
+                            {layerOutputs[layer.id] ? `OUT ${layerOutputs[layer.id]}` : 'PROGRAM'}
+                          </span>
+                          <ChevronRight size={8} className="text-obs-muted" />
+                        </button>
+                        
+                        {activeOutputMenu === layer.id && (
+                          <div className="absolute top-1/2 -translate-y-1/2 left-full ml-2 bg-obs-surface border border-obs-border rounded shadow-2xl z-[1000] p-1 flex flex-row flex-nowrap gap-1 w-max">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSetLayerOutput(layer.id, null);
+                                  setActiveOutputMenu(null);
+                                }}
+                                className={`h-5 px-1.5 text-[7px] font-black rounded flex items-center justify-center transition-all ${!layerOutputs[layer.id] ? 'bg-obs-accent text-white shadow-lg' : 'bg-obs-dark-1 text-obs-muted hover:bg-white/5'}`}
+                              >
+                                 PROGRAM
+                              </button>
+                              {outputs.map(out => (
+                                <button
+                                  key={out.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onSetLayerOutput(layer.id, out.id);
+                                    setActiveOutputMenu(null);
+                                  }}
+                                  className={`h-5 px-1.5 text-[7px] font-black rounded flex items-center justify-center transition-all min-w-[25px] ${layerOutputs[layer.id] === out.id ? 'bg-obs-accent text-white shadow-lg' : 'bg-obs-dark-1 text-obs-muted hover:bg-white/5'}`}
+                                >
+                                   OUT {out.id}
+                                </button>
+                              ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { opacity: Math.min(1, (layer.opacity || 0) + 0.05) }); }}
-                      className="text-[12px] text-white hover:text-obs-accent px-1.5 font-mono transition-colors active:scale-95"
-                    >+</button>
-                  </div>
-                  <div className="flex justify-between items-center text-[6px] text-obs-muted font-black px-1 uppercase tracking-widest mt-[-2px] overflow-hidden">
-                    <span className="truncate">OPACIDAD</span>
-                    <span className="shrink-0">{Math.round((layer.opacity || 0) * 100)}%</span>
+
+                    {/* Bottom Row: Trash, Eye, Volume and Opacity */}
+                    <div className="flex justify-between items-end w-full">
+                      <div className="flex gap-2 items-center px-1">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onRemoveLayer(layer.id); }}
+                          className={`hover:scale-110 transition-all text-obs-muted hover:text-red-500`}
+                          title="Eliminar capa"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { isVisible: !layer.isVisible }); }}
+                          className={`hover:scale-110 transition-all ${layer.isVisible ? 'text-white' : 'text-obs-muted'}`}
+                          title="Visibilidad"
+                        >
+                          {layer.isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { muted: !layer.muted }); }}
+                          className={`hover:scale-110 transition-all ${!layer.muted ? 'text-white' : 'text-obs-muted'}`}
+                          title={layer.muted ? "Activar audio" : "Silenciar"}
+                        >
+                          {layer.muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { loop: !(layer.loop !== false) }); }}
+                          className={`hover:scale-110 transition-all ${layer.loop !== false ? 'text-obs-accent' : 'text-white'}`}
+                          title={layer.loop !== false ? "Desactivar bucle" : "Activar bucle"}
+                        >
+                          <Repeat size={14} />
+                        </button>
+                      </div>
+
+                      <div className="flex-1 flex flex-col items-end gap-0.5 min-w-0 pb-0.5">
+                        <span className="text-[8px] font-bold text-obs-muted leading-none mr-2">Opacity</span>
+                        <div className="flex items-center bg-obs-dark-2 rounded-[2px] px-1 h-4 border border-white/10 w-full max-w-[60px]">
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { opacity: Math.max(0, (layer.opacity || 0) - 0.05) }); }}
+                            className="text-[10px] text-white hover:text-obs-accent px-0.5 transition-colors font-bold"
+                          >-</button>
+                          <div className="flex-1 text-center">
+                            <span className="text-[9px] font-black text-white font-mono">
+                              {Math.round((layer.opacity || 0) * 100)}
+                            </span>
+                          </div>
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { opacity: Math.min(1, (layer.opacity || 0) + 0.05) }); }}
+                            className="text-[10px] text-white hover:text-obs-accent px-0.5 transition-colors font-bold"
+                          >+</button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            <div className="flex-1 flex gap-1 pb-1 overflow-x-auto custom-scrollbar">
-              {layer.slots.map((slot, idx) => (
-                <div 
-                  key={idx}
-                  draggable={!!slot}
-                  onDragStart={(e) => slot && onDragStartSlot(e, slot)}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => onDropOnLayer(e, layer.id, idx)}
-                  onClick={() => onTriggerClip(layer.id, idx)}
-                  className={`flex-shrink-0 w-[140px] h-[92px] rounded border cursor-pointer transition-all relative group overflow-hidden ${
-                    slot ? 'bg-obs-surface border-obs-border' : 'bg-obs-dark-1 border-obs-border/30 hover:border-obs-accent/50'
-                  } ${layer.activeClipId === slot?.id && slot ? 'border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.3)]' : ''}`}
-                >
+                <div className="flex gap-1 pb-1">
+                  {layer.slots.map((slot, idx) => (
+                    <div 
+                      key={idx}
+                      draggable={!!slot}
+                      onDragStart={(e) => slot && onDragStartSlot(e, slot)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => onDropOnLayer(e, layer.id, idx)}
+                      onClick={() => onTriggerClip(layer.id, idx)}
+                      className={`flex-shrink-0 w-[88px] h-[60px] rounded border cursor-pointer transition-all relative group overflow-hidden ${
+                        slot ? 'bg-obs-surface border-obs-border' : 'bg-obs-dark-1 border-obs-border/30 hover:border-obs-accent/50'
+                      } ${layer.activeSlotIndex === idx ? 'border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.3)]' : ''}`}
+                    >
                   {slot ? (
                     <>
                       {slot.type === 'video' ? (
@@ -4715,12 +4753,20 @@ const LayersSection = React.memo(({
                   )}
                 </div>
               ))}
+              <div 
+                onClick={onAddColumn}
+                className="flex flex-shrink-0 items-center justify-center w-[88px] h-[60px] ml-1 bg-obs-dark-1/50 border border-dashed border-obs-text/20 rounded cursor-pointer hover:border-obs-accent hover:bg-obs-accent/10 transition-all group"
+                title="Añadir columna"
+              >
+                <Plus size={16} className="text-obs-muted group-hover:text-obs-accent transition-colors" />
+              </div>
             </div>
           </div>
         ))}
       </div>
     </div>
   </div>
+</div>
 );
 });
 
@@ -4926,14 +4972,14 @@ const MixerSection = React.memo(({
           <Settings size={12} />
         </button>
       </div>
-      <div className="flex-1 p-3 flex gap-4 overflow-x-auto justify-start select-none">
+      <div className="flex-1 p-2 flex gap-0.5 overflow-x-auto justify-start select-none">
         {[
           { name: 'Master', level: programLevel, volume: masterVolume, onChange: onMasterVolumeChange },
           { name: 'Programa', level: programLevel, volume: programVolume, onChange: onProgramVolumeChange },
           { name: 'USB IN', level: 0, volume: usbInVolume, onChange: onUsbInVolumeChange },
           { name: 'USB Out', level: 0, volume: usbOutVolume, onChange: onUsbOutVolumeChange }
         ].map((source, i) => (
-          <div key={source.name} className="flex gap-2 h-full items-end min-w-[60px]">
+          <div key={source.name} className="flex gap-1 h-full items-end min-w-[36px]">
             {/* VU Meter */}
             <div className="w-1.5 h-full max-h-[120px] bg-obs-dark-1 rounded-sm border border-obs-text/5 relative overflow-hidden flex flex-col justify-end">
               <div 
@@ -4946,9 +4992,9 @@ const MixerSection = React.memo(({
             </div>
             
             {/* Fader */}
-            <div className="flex flex-col items-center gap-1.5 h-full">
+            <div className="flex flex-col items-center gap-1 h-full">
               <div 
-                className="w-5 h-full max-h-[120px] relative bg-obs-dark-1 rounded-sm border border-obs-text/5 cursor-ns-resize overflow-hidden group"
+                className="w-4 h-full max-h-[120px] relative bg-obs-dark-1 rounded-sm border border-obs-text/5 cursor-ns-resize overflow-hidden group"
                 style={faderBgStyle}
                 onMouseDown={(e) => {
                   e.preventDefault();
@@ -5231,7 +5277,7 @@ export default function App() {
     { id: 'playlist-2', name: 'Playlist 2', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, transition: 'fade', transitionDuration: 1, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
   ]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<'clip' | 'playlist' | 'program' | 'preview' | 'layer' | 'pip' | 'pipManager' | null>(null);
+  const [selectedItemType, setSelectedItemType] = useState<'clip' | 'playlist' | 'program' | 'preview' | 'layer' | 'pip' | 'pipManager' | null>('program');
   const [previewVolume, setPreviewVolume] = useState(0.5);
   const [programVolume, setProgramVolume] = useState(0.5);
   const [masterVolume, setMasterVolume] = useState(0.5);
@@ -5289,8 +5335,8 @@ export default function App() {
   };
 
   const [layers, setLayers] = useState<Layer[]>([
-    { id: 'layer-1', name: 'CAPA 1', slots: Array(8).fill(null), ...DEFAULT_LAYER_PROPS },
-    { id: 'layer-2', name: 'CAPA 2', slots: Array(8).fill(null), ...DEFAULT_LAYER_PROPS },
+    { id: 'layer-1', name: 'CAPA 1', slots: Array(10).fill(null), ...DEFAULT_LAYER_PROPS },
+    { id: 'layer-2', name: 'CAPA 2', slots: Array(10).fill(null), ...DEFAULT_LAYER_PROPS },
   ]);
 
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
@@ -5948,15 +5994,9 @@ export default function App() {
   const onTriggerLayerClip = (layerId: string, slotIdx: number, mode: 'single' | 'sequence' = 'single') => {
     setActiveColumnTrigger(null);
     if (mode === 'sequence') {
-      setActiveLayerTriggers(prev => ({ ...prev, [layerId]: 'play' }));
+      setActiveLayerTriggers({ [layerId]: 'play' });
     } else {
-      // If single mode, we might want to clear the sequence light or just not set it
-      // User says "only when initiating playlist"
-      setActiveLayerTriggers(prev => {
-        const next = { ...prev };
-        delete next[layerId];
-        return next;
-      });
+      setActiveLayerTriggers({});
     }
     setColumnUIStates({});
     setLayers(prev => prev.map(l => {
@@ -5965,26 +6005,30 @@ export default function App() {
       if (clip) {
         return { ...l, activeClipId: clip.id, activeSlotIndex: slotIdx, isPlaying: true, playbackMode: mode };
       }
-      return { ...l, activeClipId: null, activeSlotIndex: null, isPlaying: false };
+      return { ...l, activeClipId: null, activeSlotIndex: slotIdx, isPlaying: false };
     }));
+  };
+
+  const handleAddColumn = () => {
+    setLayers(prev => prev.map(layer => ({ ...layer, slots: [...layer.slots, null] })));
   };
 
   const handleColumnTrigger = (colIdx: number) => {
     setActiveColumnTrigger(colIdx);
-    setColumnUIStates(prev => ({ ...prev, [colIdx]: 'play' }));
+    setColumnUIStates({ [colIdx]: 'play' });
     setActiveLayerTriggers({});
     setLayers(prev => prev.map(layer => {
       const clip = layer.slots[colIdx];
       if (clip) {
         return { ...layer, activeClipId: clip.id, activeSlotIndex: colIdx, isPlaying: true, playbackMode: 'single' };
       }
-      return layer;
+      return { ...layer, activeClipId: null, activeSlotIndex: colIdx, isPlaying: false };
     }));
   };
 
   const handleColumnStop = (colIdx: number) => {
     setActiveColumnTrigger(null);
-    setColumnUIStates(prev => ({ ...prev, [colIdx]: 'stop' }));
+    setColumnUIStates({});
     setLayers(prev => prev.map(layer => {
       const clip = layer.slots[colIdx];
       if (clip && layer.activeClipId === clip.id) {
@@ -6711,7 +6755,11 @@ export default function App() {
     ? clips.find(c => c.id === selectedItemId) || null
     : selectedItemType === 'pip'
     ? pipLayers.find(p => p.id === selectedItemId) || null
-    : playlists.find(p => p.id === selectedItemId) || null;
+    : selectedItemType === 'layer'
+    ? layers.find(l => l.id === selectedItemId) || null
+    : selectedItemType === 'playlist'
+    ? playlists.find(p => p.id === selectedItemId) || null
+    : null;
   const previewClip = clips.find(c => c.id === previewClipId) || null;
   const programClip = clips.find(c => c.id === programClipId) || null;
 
@@ -6883,23 +6931,17 @@ export default function App() {
                           { name: 'USB', volume: usbOutVolume, onChange: setUsbOutVolume, level: 0 },
                           { name: 'IN', volume: usbInVolume, onChange: setUsbInVolume, level: 0 },
                         ].map((source) => (
-                          <div key={source.name} className="bg-obs-surface p-2 rounded border border-obs-text/5 flex flex-col gap-1.5">
-                            <div className="flex justify-between items-center px-0.5">
-                              <span className="text-[8px] font-black text-obs-text uppercase tracking-wider">{source.name}</span>
-                              <span className="text-[8px] font-mono text-obs-accent font-bold">{volToDb(source.volume)}</span>
-                            </div>
-                            <div className="h-5 relative bg-obs-dark-1 rounded border border-obs-text/10 overflow-hidden flex items-center">
-                              <div className="absolute inset-y-0 left-0 bg-obs-accent/20 transition-all duration-75" style={{ width: `${source.volume * 100}%` }} />
-                              <div className="absolute inset-y-0 bg-obs-accent w-0.5 shadow-[0_0_8px_rgba(0,163,245,0.6)] transition-all duration-75" style={{ left: `calc(${source.volume * 100}% - 1px)` }} />
-                              <input 
-                                type="range" 
-                                min="0" max="1" step="0.01"
-                                value={source.volume}
-                                onChange={(e) => source.onChange(parseFloat(e.target.value))}
-                                className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
-                              />
-                            </div>
-                          </div>
+                          <PropertyControl
+                            key={source.name}
+                            label={source.name}
+                            value={source.volume}
+                            displayValue={volToDb(source.volume)}
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            onChange={(val) => source.onChange(val)}
+                            isAudioControl={true}
+                          />
                         ))}
                       </div>
                     </div>
@@ -6967,13 +7009,13 @@ export default function App() {
                                     style={{ width: `${programProgress.total > 0 ? (programProgress.current / programProgress.total) * 100 : 0}%` }} 
                                   />
                                 </div>
-                                <div className="flex justify-between font-mono text-[8px] text-obs-muted font-black">
+                                <div className="flex justify-between font-mono text-[8px] text-obs-muted font-normal">
                                   <div className="flex items-center gap-1">
                                     <Clock size={8} />
-                                    <span>{formatTime(programProgress.current)}</span>
+                                    <FluidTimeDisplay eventId="video-progress-program" />
                                   </div>
                                   <div className="flex items-center gap-1">
-                                    <span>-{formatTime(Math.max(0, programProgress.total - programProgress.current))}</span>
+                                    <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
                                   </div>
                                 </div>
                               </>
@@ -7045,9 +7087,9 @@ export default function App() {
     {/* Center: Monitors & Controls */}
     <div className="flex-1 flex flex-col overflow-hidden">
           {/* Monitors Area */}
-          <div className="flex-none p-2 flex flex-col lg:flex-row gap-4 items-start justify-center bg-obs-dark-m3 border-b border-obs-border z-10 relative overflow-x-hidden overflow-y-auto" style={{ maxHeight: '60vh' }}>
+          <div className="flex-none p-2 flex flex-col lg:flex-row gap-4 items-start justify-between bg-obs-dark-m3 border-b border-obs-border z-10 relative overflow-x-hidden overflow-y-auto" style={{ maxHeight: '60vh' }}>
             
-            <div className="flex-none grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-max w-fit shrink-0">
+            <div className="flex-none flex flex-wrap gap-4 auto-rows-max shrink-0">
               {previews.map(preview => (
                 <div key={`monitor-preview-${preview.id}`} className="flex flex-col gap-1.5 group/mon relative w-[320px]">
                    <div className="flex justify-between items-end px-1">
@@ -7178,7 +7220,10 @@ export default function App() {
                     onToggleLoop={handleToggleLoop}
                     onRewind={handleRewind}
                     onSkip={handleSkip}
-                    onProgressUpdate={(current, total) => setProgramProgress({ current, total })}
+                    onProgressUpdate={(current, total) => {
+                      setProgramProgress({ current, total });
+                      window.dispatchEvent(new CustomEvent('video-progress-program', { detail: { current, total } }));
+                    }}
                     onLevelChange={setProgramLevel}
                     onUpdateClip={updateClip}
                     isPlaylist={!!programPlaylistState}
@@ -7278,10 +7323,8 @@ export default function App() {
                   <div className="flex flex-col">
                      <span className="text-[10px] text-obs-muted uppercase font-black tracking-widest leading-none mb-0.5">{timerMode}</span>
                      <div className="flex items-center gap-2">
-                       <span className="text-3xl font-mono font-bold text-white leading-none tracking-tight">
-                         {timerMode === 'elapsed' 
-                           ? formatTime(programProgress.current) 
-                           : formatTime(Math.max(0, programProgress.total - programProgress.current))}
+                       <span className="text-2xl font-mono font-normal text-white leading-none tracking-tight">
+                         <FluidTimeDisplay eventId="video-progress-program" isRemaining={timerMode === 'remaining'} />
                        </span>
                        <button 
                          onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
@@ -7300,9 +7343,9 @@ export default function App() {
                         setShowLayers(true);
                         setShowPlaylists(false);
                       }}
-                      className={`px-5 py-1.5 rounded-md text-[11px] font-black tracking-wide transition-all border ${workMode === 'layers' ? 'bg-obs-accent text-black border-obs-accent scale-100' : 'bg-transparent text-white border-white hover:bg-white/10 scale-95'}`}
+                      className={`px-3 py-1 rounded-md text-[10px] font-black tracking-wide transition-all border ${workMode === 'layers' ? 'bg-obs-accent text-black border-obs-accent scale-100' : 'bg-transparent text-white border-white hover:bg-white/10 scale-95'}`}
                     >
-                      Gestión de capas
+                      GESTIÓN DE CAPAS
                     </button>
                     <button 
                       onClick={() => {
@@ -7310,9 +7353,9 @@ export default function App() {
                         setShowLayers(false);
                         setShowPlaylists(true);
                       }}
-                      className={`px-5 py-1.5 rounded-md text-[11px] font-black tracking-wide transition-all border ${workMode === 'previews' ? 'bg-obs-accent text-black border-obs-accent scale-100' : 'bg-transparent text-white border-white hover:bg-white/10 scale-95'}`}
+                      className={`px-3 py-1 rounded-md text-[10px] font-black tracking-wide transition-all border ${workMode === 'previews' ? 'bg-obs-accent text-black border-obs-accent scale-100' : 'bg-transparent text-white border-white hover:bg-white/10 scale-95'}`}
                     >
-                      Previews / Playlist
+                      PREVIEWS / PLAYLIST
                     </button>
                   </div>
                 </div>
@@ -7325,59 +7368,60 @@ export default function App() {
             <div className="flex-1 overflow-y-auto" />
 
             {/* Pinned area for layers and playlists pegged to docks */}
-              <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-2 py-2 space-y-4 scale-[0.95] origin-top mb-[-10px] w-full">
+              <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 py-1 space-y-4 w-full">
               {workMode === 'layers' && (
-                <CollapsibleSection title="Gestión de Capas" defaultOpen={true}>
-                  <div className="max-h-[300px] overflow-y-auto no-scrollbar">
-                    <LayersSection 
-                      layers={layers}
-                      activeColumnTrigger={activeColumnTrigger}
-                      activeLayerTriggers={activeLayerTriggers}
-                      columnUIStates={columnUIStates}
-                      setActiveColumnTrigger={setActiveColumnTrigger}
-                      setActiveLayerTriggers={setActiveLayerTriggers}
-                      onAddLayer={addLayer}
-                      onRemoveLayer={removeLayer}
-                      layerOutputs={layerOutputs}
-                      onSetLayerOutput={(lid, oid) => {
-                        setLayerOutputs(prev => ({ ...prev, [lid]: oid }));
-                        setLayers(prev => prev.map(l => l.id === lid ? { ...l, outputId: oid } : l));
-                      }}
-                      onUpdateLayer={(lid, updates) => {
-                        setLayers(prev => {
-                          const newLayers = prev.map(l => l.id === lid ? { ...l, ...updates } : l);
-                          return newLayers;
-                        });
-                        if (updates.outputId !== undefined) {
-                          setLayerOutputs(prev => ({ ...prev, [lid]: (updates.outputId as string | null) }));
-                        }
-                        setSelectedItemId(lid);
-                        setSelectedItemType('layer' as any);
-                      }}
-                      onUpdateClip={updateClip}
-                      onSelectLayer={(lid) => {
-                        setSelectedItemId(lid);
-                        setSelectedItemType('layer' as any);
-                      }}
-                      onTriggerClip={(layerId, slotIdx, mode) => {
-                        setSelectedItemId(layerId);
-                        setSelectedItemType('layer' as any);
-                        onTriggerLayerClip(layerId, slotIdx, mode);
-                      }}
-                      onTriggerColumn={handleColumnTrigger}
-                      onStopColumn={handleColumnStop}
-                      onDropOnLayer={handleDropOnLayer}
-                      onDragStartSlot={(e, clip) => {
-                         e.dataTransfer.setData('clip', JSON.stringify(clip));
-                      }}
-                      outputs={outputs}
-                      externalScreens={externalScreens}
-                      clips={clips}
-                      isDarkMode={isDarkMode}
-                      onPreviewClip={handlePreviewClip}
-                    />
-                </div>
-              </CollapsibleSection>
+                <div className="max-h-[350px] overflow-y-auto no-scrollbar px-2">
+                  <LayersSection 
+                    layers={layers}
+                    activeColumnTrigger={activeColumnTrigger}
+                    activeLayerTriggers={activeLayerTriggers}
+                    columnUIStates={columnUIStates}
+                    setActiveColumnTrigger={setActiveColumnTrigger}
+                    setActiveLayerTriggers={setActiveLayerTriggers}
+                    onAddLayer={addLayer}
+                    onRemoveLayer={removeLayer}
+                    layerOutputs={layerOutputs}
+                    onSetLayerOutput={(lid, oid) => {
+                      setLayerOutputs(prev => ({ ...prev, [lid]: oid }));
+                      setLayers(prev => prev.map(l => l.id === lid ? { ...l, outputId: oid } : l));
+                    }}
+                    onUpdateLayer={(lid, updates) => {
+                      setLayers(prev => {
+                        const newLayers = prev.map(l => l.id === lid ? { ...l, ...updates } : l);
+                        return newLayers;
+                      });
+                      if (updates.outputId !== undefined) {
+                        setLayerOutputs(prev => ({ ...prev, [lid]: (updates.outputId as string | null) }));
+                      }
+                      setSelectedItemId(lid);
+                      setSelectedItemType('layer' as any);
+                    }}
+                    onUpdateClip={updateClip}
+                    onSelectLayer={(lid) => {
+                      setSelectedItemId(lid);
+                      setSelectedItemType('layer' as any);
+                    }}
+                    onTriggerClip={(layerId, slotIdx, mode) => {
+                      setSelectedItemId(layerId);
+                      setSelectedItemType('layer' as any);
+                      onTriggerLayerClip(layerId, slotIdx, mode);
+                    }}
+                    onTriggerColumn={handleColumnTrigger}
+                    onStopColumn={handleColumnStop}
+                    onDropOnLayer={handleDropOnLayer}
+                    onDragStartSlot={(e, clip) => {
+                       e.dataTransfer.setData('clip', JSON.stringify(clip));
+                    }}
+                    outputs={outputs}
+                    externalScreens={externalScreens}
+                    clips={clips}
+                    isDarkMode={isDarkMode}
+                    onPreviewClip={handlePreviewClip}
+                    selectedItemId={selectedItemId}
+                    selectedItemType={selectedItemType as string}
+                    onAddColumn={handleAddColumn}
+                  />
+              </div>
               )}
 
               {workMode === 'previews' && (
