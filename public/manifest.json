@@ -5,7 +5,7 @@
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
-  "theme_color": "#00ecff",
+  "theme_color": "#00a3f5",
   "icons": [
     {
       "src": "https://picsum.photos/seed/lumin/192/192",

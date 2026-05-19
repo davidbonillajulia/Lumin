@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Use a reliable CDN worker matching the library version
-const pdfWorkerUrl = `https://unpkg.com/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs`;
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, pageNumber: number, onLoadSuccess?: (totalPages: number) => void }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -17,17 +18,10 @@ export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, p
 
     const loadPdf = async () => {
       try {
-        console.log("Loading PDF from URL:", url, "using pdfjs version: 4.4.168");
+        console.log("Loading PDF from URL:", url, "using vite worker");
         
-        // Fetch the PDF data first (works for blob:, file:, and http: URLs)
-        const response = await fetch(url);
-        const data = await response.arrayBuffer();
-        
-        // Using an object for parameters to include cMap settings for better font support
         loadingTask = pdfjsLib.getDocument({
-          data,
-          cMapUrl: `https://unpkg.com/pdfjs-dist@4.4.168/cmaps/`,
-          cMapPacked: true,
+          url: url,
         });
         
         const pdf = await loadingTask.promise;
@@ -46,9 +40,9 @@ export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, p
 
     return () => {
       isCancelled = true;
-      // if (loadingTask) {
-      //   loadingTask.destroy();
-      // }
+      if (loadingTask) {
+        loadingTask.destroy();
+      }
     };
   }, [url]);
 

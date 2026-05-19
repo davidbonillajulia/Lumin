@@ -1,16 +1,63 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
+:root {
+  --theme-bg: #1c1c1c;
+  --theme-surface: #1c1c1c;
+  --theme-border: #3a3a3a;
+  --theme-accent: #00a3f5;
+  --theme-text: #e0e0e0;
+  --theme-muted: #808080;
+
+  --theme-dark-1: #1c1c1c;
+  --theme-dark-2: #1c1c1c;
+  --theme-dark-3: #1c1c1c;
+  --theme-dark-m1: #0d0d0d;
+  --theme-dark-m2: #050505;
+  --theme-dark-m3: #080808;
+}
+
+.light {
+  --theme-bg: #e6e6e6;
+  --theme-surface: #ffffff;
+  --theme-border: #cccccc;
+  --theme-accent: #0055ff;
+  --theme-text: #1a1a1a;
+  --theme-muted: #666666;
+
+  --theme-dark-1: #d4d4d4;
+  --theme-dark-2: #cccccc;
+  --theme-dark-3: #999999;
+  --theme-dark-m1: #ffffff;
+  --theme-dark-m2: #ffffff;
+  --theme-dark-m3: #f5f5f5;
+}
+
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  
-  --color-obs-bg: #1c1c1c;
-  --color-obs-surface: #2b2b2b;
-  --color-obs-border: #3a3a3a;
-  --color-obs-accent: #00ecff;
-  --color-obs-text: #e0e0e0;
-  --color-obs-muted: #808080;
+
+  --color-obs-bg: var(--theme-bg);
+  --color-obs-surface: var(--theme-surface);
+  --color-obs-border: var(--theme-border);
+  --color-obs-accent: var(--theme-accent);
+  --color-obs-text: var(--theme-text);
+  --color-obs-muted: var(--theme-muted);
+
+  --color-obs-dark-1: var(--theme-dark-1);
+  --color-obs-dark-2: var(--theme-dark-2);
+  --color-obs-dark-3: var(--theme-dark-3);
+  --color-obs-dark-m1: var(--theme-dark-m1);
+  --color-obs-dark-m2: var(--theme-dark-m2);
+  --color-obs-dark-m3: var(--theme-dark-m3);
+}
+
+@layer base {
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
 }
 
 @layer utilities {
@@ -26,7 +73,7 @@
     border-radius: 10px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #00ecff;
+    background: #00a3f5;
   }
   
   .no-scrollbar::-webkit-scrollbar {

@@ -47,7 +47,8 @@ import {
   Trash2,
   RefreshCw,
   Layout,
-  PictureInPicture2
+  PictureInPicture2,
+  MonitorPlay
 } from 'lucide-react';
 import { motion, AnimatePresence, animate, Reorder } from 'motion/react';
 
@@ -95,6 +96,7 @@ interface Clip {
   currentPage?: number;
   totalPages?: number;
   keyboardNavEnabled?: boolean;
+  fitToScale?: boolean;
 }
 
 interface Playlist {
@@ -160,7 +162,8 @@ interface Layer {
   saturation: number;
   colorBalance: { r: number, g: number, b: number };
   rotation: number;
-  transition: 'cut' | 'fade' | 'wipe';
+  transition: 'cut' | 'fade' | 'wipe' | 'slide';
+  transitionDuration: number;
   isPlaying?: boolean;
   loop?: boolean;
   playbackMode?: 'single' | 'sequence';
@@ -252,31 +255,33 @@ const PropertyControl = ({
   const actualDisplayValue = isAudio ? volToDb(value) : displayValue;
 
   return (
-    <div className="flex flex-col gap-1.5 p-2 bg-[#1a1a1a] rounded border border-[#2a2a2a] group select-none">
-      <div className="flex items-center justify-between">
-        <span className="text-[9px] font-bold uppercase tracking-wider text-obs-muted">{label}</span>
-        <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-1 p-2 bg-obs-dark-1 rounded border border-obs-dark-2 group select-none min-w-0">
+      <div className="flex items-center justify-between gap-1 overflow-hidden h-5">
+        <span className="text-[8px] font-black uppercase tracking-tighter text-obs-muted truncate flex-1">{label}</span>
+        <div className="flex items-center gap-1.5 shrink-0">
           {onInputChange ? (
-            <div className="flex items-center gap-1 bg-black/40 px-2 py-0.5 rounded border border-white/5">
+            <div className="flex items-center gap-1.5 bg-obs-bg/50 px-2 py-0.5 rounded border border-white/5">
               <input 
                 type="text"
                 value={isAudio ? actualDisplayValue.split(' ')[0] : displayValue.replace(/[^\d.-]/g, '')}
                 onChange={(e) => onInputChange(e.target.value)}
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-10 bg-transparent border-none p-0 text-[10px] font-mono text-obs-accent outline-none text-right"
+                className="w-10 bg-transparent border-none p-0 text-[10px] font-black text-obs-accent outline-none text-right placeholder:text-obs-accent/30"
               />
-              <span className="text-[8px] text-obs-muted uppercase font-bold">{isAudio ? 'dB' : displayValue.replace(/[\d.-]/g, '')}</span>
+              <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">{isAudio ? 'dB' : (displayValue.replace(/[\d.-]/g, '') || 'PX')}</span>
             </div>
           ) : (
-            <span className="text-[10px] font-mono text-obs-accent">{actualDisplayValue.includes('.') ? Number.parseFloat(actualDisplayValue.replace(/[^\d.-]/g, '')).toFixed(1) + actualDisplayValue.replace(/[\d.-]/g, '') : actualDisplayValue}</span>
+            <span className="text-[10px] font-black text-obs-accent whitespace-nowrap">
+              {actualDisplayValue.includes('.') && !isAudio ? Number.parseFloat(actualDisplayValue.replace(/[^\d.-]/g, '')).toFixed(1) + (actualDisplayValue.replace(/[\d.-]/g, '') || '') : actualDisplayValue}
+            </span>
           )}
-          <div className="flex items-center gap-1 opacity-100">
+          <div className="flex items-center gap-0.5 shrink-0">
             <button 
               onClick={(e) => {
                 const amount = e.shiftKey ? step * 10 : step;
                 onChange(Math.max(min, value - amount));
               }}
-              className="text-obs-text hover:text-white bg-white/5 hover:bg-white/10 rounded transition-colors p-0.5"
+              className="text-obs-text hover:text-white bg-obs-bg hover:bg-obs-surface rounded transition-colors p-0.5 border border-white/5 active:scale-90"
             >
               <Minus size={10} />
             </button>
@@ -285,7 +290,7 @@ const PropertyControl = ({
                 const amount = e.shiftKey ? step * 10 : step;
                 onChange(Math.min(max, value + amount));
               }}
-              className="text-obs-text hover:text-white bg-white/5 hover:bg-white/10 rounded transition-colors p-0.5"
+              className="text-obs-text hover:text-white bg-obs-bg hover:bg-obs-surface rounded transition-colors p-0.5 border border-white/5 active:scale-90"
             >
               <Plus size={10} />
             </button>
@@ -296,7 +301,7 @@ const PropertyControl = ({
       {/* Fader/Slider */}
       <div 
         ref={sliderRef}
-        className="h-4 relative bg-black/60 rounded-sm cursor-ew-resize overflow-hidden border border-white/5"
+        className="h-3 relative bg-obs-bg/50 rounded-sm cursor-ew-resize overflow-hidden border border-white/5"
         onMouseDown={(e) => {
           e.preventDefault();
           const target = sliderRef.current;
@@ -337,7 +342,7 @@ const PropertyControl = ({
           style={{ width: `${progress}%` }}
         />
         <div 
-          className="absolute inset-y-0 bg-obs-accent w-0.5 shadow-[0_0_8px_rgba(0,170,255,0.6)] transition-all duration-75"
+          className="absolute inset-y-0 bg-obs-accent w-0.5 shadow-[0_0_8px_rgba(0,163,245,0.6)] transition-all duration-75"
           style={{ left: `calc(${progress}% - 1px)` }}
         />
       </div>
@@ -353,7 +358,7 @@ const CollapsibleSection = ({ title, children, defaultOpen = false, disabled = f
   }, [defaultOpen]);
   
   return (
-    <div className={`bg-obs-surface overflow-hidden border border-obs-border rounded shadow-sm ${disabled ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
+    <div className={`bg-obs-surface overflow-visible border border-obs-border rounded shadow-sm ${disabled ? 'opacity-50 grayscale pointer-events-none' : ''}`}>
       <div className="flex items-center w-full hover:bg-obs-border/30 transition-colors group">
         <button 
           onClick={() => {
@@ -401,7 +406,7 @@ const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelect
       onClick={onSelect}
       className={`w-full h-full rounded border transition-all ${
         isSelected 
-          ? 'border-obs-accent shadow-[0_0_8px_rgba(0,170,255,0.3)]' 
+          ? 'border-obs-accent shadow-[0_0_8px_rgba(0,163,245,0.3)]' 
           : 'border-obs-border hover:border-obs-muted bg-obs-surface'
       }`}
     >
@@ -547,6 +552,47 @@ const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isAct
   return level;
 };
 
+const ScaleToFit = ({ width, height, children }: { width?: number, height?: number, children: React.ReactNode }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    if (!containerRef.current || !width || !height) return;
+    const observer = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const cw = entry.contentRect.width;
+        const ch = entry.contentRect.height;
+        const scaleX = cw / width;
+        const scaleY = ch / height;
+        setScale(Math.min(scaleX, scaleY));
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, [width, height]);
+
+  if (!width || !height) {
+    return <div className="w-full h-full relative">{children}</div>;
+  }
+
+  return (
+    <div ref={containerRef} className="w-full h-full relative flex items-center justify-center overflow-hidden">
+      <div 
+        style={{ 
+          width: `${width}px`, 
+          height: `${height}px`,
+          transform: `scale(${scale})`,
+          transformOrigin: 'center center',
+          position: 'absolute'
+        }}
+        className="flex items-start justify-start"
+      >
+        {children}
+      </div>
+    </div>
+  );
+};
+
 const Monitor = React.memo(({ 
   title, 
   isActive, 
@@ -605,7 +651,7 @@ const Monitor = React.memo(({
   isProgram?: boolean,
   isPlaylist?: boolean,
   onEnded?: () => void,
-  onLayerEnded?: (layerId: string) => void,
+  onLayerEnded?: (layerId: string, clipId: string) => void,
   onTogglePlay?: (id: string) => void,
   onToggleLoop?: (id: string) => void,
   onRewind?: (id: string) => void,
@@ -761,7 +807,7 @@ const Monitor = React.memo(({
   }, [crossfaderValue, transitionType]);
 
   return (
-    <div className={`group flex flex-col h-full bg-[#0d0d0d] items-center justify-center p-4`}>
+    <div className={`group flex flex-col h-full bg-obs-dark-m1 items-center justify-center p-0`}>
       <div 
         className={`relative aspect-video w-full max-h-full bg-black rounded-sm border-2 ${isActive ? 'border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]' : 'border-[#333]'} overflow-hidden cursor-pointer`}
         onDragOver={(e) => e.preventDefault()}
@@ -771,12 +817,7 @@ const Monitor = React.memo(({
         {/* Main Content */}
         {isProgram ? (
           <div className="w-full h-full relative flex items-center justify-center">
-            <div 
-              className="relative shadow-xl flex items-center justify-center w-full h-full"
-              style={{
-                aspectRatio: settings?.width && settings?.height ? `${settings.width}/${settings.height}` : '16/9',
-              }}
-            >
+            <ScaleToFit width={settings?.width} height={settings?.height}>
               {/* Background Layer */}
               {settings?.showBackground && settings?.backgroundImage && (
                 <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center bg-black">
@@ -798,7 +839,7 @@ const Monitor = React.memo(({
               )}
 
               <div 
-                className="relative w-full h-full overflow-hidden flex items-center justify-center z-10"
+                className="relative w-full h-full overflow-hidden flex items-start justify-start z-10"
                 style={{
                   opacity: settings?.opacity ?? 1,
                   backgroundColor: (settings?.showBackground && settings?.backgroundImage && !hasActiveContent) ? 'transparent' : '#000',
@@ -823,42 +864,46 @@ const Monitor = React.memo(({
                   initial={{ opacity: 1 }}
                   animate={{ opacity: isProgramOff ? 0 : 1 }}
                   transition={{ duration: 2.5, ease: "easeInOut" }}
-                  className="w-full h-full flex items-center justify-center relative"
+                  className="w-full h-full flex items-start justify-start relative"
                 >
-                  {(busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) && (
-                    <VideoLayer 
-                      key="bus-A"
-                      clip={busAClip}
-                      volume={volume}
-                      masterVolume={masterVolume}
-                      opacity={transitionType === 'fade' ? audioOpacityA : (busAClip.opacity || 1) * (busAClip.master || 1)}
-                      faderOpacity={audioOpacityA}
-                      isProgram={crossfaderValue === 0}
-                      crossfaderValue={crossfaderValue}
-                      transitionType={transitionType}
-                      isTransmitting={isTransmitting}
-                      onProgressUpdate={onProgressUpdate}
-                      onLevelChange={onLevelChange}
-                      onEnded={onEnded}
-                    />
-                  )}
-                  {(busBClip && crossfaderValue !== undefined && crossfaderValue > 0) && (
-                    <VideoLayer 
-                      key="bus-B"
-                      clip={busBClip}
-                      volume={volume}
-                      masterVolume={masterVolume}
-                      opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
-                      style={{ clipPath: wipeTransform }}
-                      faderOpacity={audioOpacityB}
-                      isProgram={crossfaderValue === 100}
-                      crossfaderValue={crossfaderValue}
-                      transitionType={transitionType}
-                      isTransmitting={isTransmitting}
-                      onProgressUpdate={onProgressUpdate}
-                      onEnded={onEnded}
-                    />
-                  )}
+                  <AnimatePresence custom={transitionType}>
+                    {(busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) && (
+                      <VideoLayer 
+                        key="bus-A"
+                        clip={busAClip}
+                        volume={volume}
+                        masterVolume={masterVolume}
+                        opacity={transitionType === 'fade' ? audioOpacityA : (busAClip.opacity || 1) * (busAClip.master || 1)}
+                        faderOpacity={audioOpacityA}
+                        isProgram={isProgram}
+                        crossfaderValue={crossfaderValue}
+                        transitionType={transitionType}
+                        isTransmitting={isTransmitting}
+                        onProgressUpdate={onProgressUpdate}
+                        onLevelChange={onLevelChange}
+                        onEnded={onEnded}
+                        transitionDuration={settings?.transitionDuration}
+                      />
+                    )}
+                    {(busBClip && crossfaderValue !== undefined && crossfaderValue > 0) && (
+                      <VideoLayer 
+                        key="bus-B"
+                        clip={busBClip}
+                        volume={volume}
+                        masterVolume={masterVolume}
+                        opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
+                        style={{ clipPath: wipeTransform }}
+                        faderOpacity={audioOpacityB}
+                        isProgram={isProgram}
+                        crossfaderValue={crossfaderValue}
+                        transitionType={transitionType}
+                        isTransmitting={isTransmitting}
+                        onProgressUpdate={onProgressUpdate}
+                        onEnded={onEnded}
+                        transitionDuration={settings?.transitionDuration}
+                      />
+                    )}
+                  </AnimatePresence>
                   
                   {/* Layer Rendering - Multi-layer mixing */}
                   {layers.filter(l => l.isVisible && (layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id])).map((l, index) => {
@@ -891,17 +936,22 @@ const Monitor = React.memo(({
                             transform: `rotate(${l.rotation}deg)`
                           }}
                         >
+                        <AnimatePresence mode="popLayout" initial={false}>
                           <VideoLayer 
+                            key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}`}
                             clip={activeClip}
                             volume={l.muted ? 0 : volume}
                             masterVolume={masterVolume}
                             opacity={1}
-                            isProgram={true}
+                            isProgram={!!isProgram}
                             isTransmitting={isTransmitting}
                             onProgressUpdate={onProgressUpdate}
-                            onEnded={() => onLayerEnded?.(l.id)}
+                            onEnded={() => onLayerEnded?.(l.id, activeClip.id)}
                             loopOverride={l.playbackMode === 'single'}
+                            transitionType={l.transition || 'fade'}
+                            transitionDuration={l.transitionDuration || 0.4}
                           />
+                        </AnimatePresence>
                         </div>
                       </div>
                     );
@@ -911,7 +961,7 @@ const Monitor = React.memo(({
                     {pipLayers?.filter(p => ((isProgram && (p.isActive || p.showInPreview)) && (p.targetOutputId === activeOutputId || (!p.targetOutputId && activeOutputId === '1') || p.targetOutputId === 'program')) || (!isProgram && p.showInPreview && (p.targetOutputId === activeOutputId || (!p.targetOutputId && activeOutputId === '1') || p.targetOutputId === 'program'))).map(pip => (
                       <motion.div
                         key={pip.id}
-                        className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-white/20' : 'border-none'}`}
+                        className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-obs-text/20' : 'border-none'}`}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: pip.opacity }}
                         exit={{ opacity: 0 }}
@@ -931,14 +981,14 @@ const Monitor = React.memo(({
                               autoPlay 
                               muted 
                               loop 
-                              className="w-full h-full object-fill" 
+                              className="w-full h-full object-contain" 
                             />
                           ) : clips.find(c => c.id === pip.clipId)!.type === 'document' ? (
                             <DocumentLayer clip={clips.find(c => c.id === pip.clipId)!} onUpdateClip={updateClip} />
                           ) : (
                             <img 
                               src={clips.find(c => c.id === pip.clipId)!.url} 
-                              className="w-full h-full object-fill" 
+                              className="w-full h-full object-contain" 
                               referrerPolicy="no-referrer"
                             />
                           )
@@ -948,63 +998,55 @@ const Monitor = React.memo(({
                   </AnimatePresence>
                 </motion.div>
               ) : (
-                <div className={`w-full h-full ${settings?.showBackground ? 'bg-transparent' : 'bg-[#050505]'} flex items-center justify-center`}>
+                <div className={`w-full h-full ${settings?.showBackground ? 'bg-transparent' : 'bg-obs-dark-m2'} flex items-center justify-center`}>
                    {!settings?.showBackground && (
-                     <div className="flex flex-col items-center gap-4 opacity-10">
-                        <MonitorIcon size={120} strokeWidth={1} className="text-obs-muted" />
-                        <span className="text-[14px] font-black uppercase tracking-[0.6em] text-obs-muted">NO SIGNAL</span>
+                    <div className="flex flex-col items-center gap-2 opacity-10">
+                        <MonitorIcon size={80} strokeWidth={1} className="text-obs-muted" />
+                        <span className="text-[11px] font-black uppercase tracking-[0.6em] text-obs-muted">NO SIGNAL</span>
                      </div>
                    )}
                 </div>
               )}
              </div>
-            </div>
+            </ScaleToFit>
           </div>
         ) : (
-          <div className="w-full h-full relative flex items-center justify-center">
-            {activeClip ? (
-              activeClip.type === 'video' ? (
-                <video 
-                  ref={videoRef}
-                  src={activeClip.url} 
-                  className={`w-full h-full ${imageFit === 'fill' ? 'object-fill' : 'object-cover'}`}
-                  autoPlay 
-                  muted={true}
-                  loop={activeClip.loop !== false} 
-                  playsInline
-                  onEnded={() => onEnded?.()}
-                  onLoadedMetadata={() => {
-                    // Start VU meter reporting when metadata is loaded
-                    const interval = setInterval(() => {
-                      if (!videoRef.current || videoRef.current.paused) {
-                        clearInterval(interval);
-                        onLevelChange?.(0);
-                        return;
-                      }
-                      // Simulate a more realistic, fluctuating VU signal
-                      const peak = 0.5 + Math.random() * 0.45;
-                      onLevelChange?.(peak * volume);
-                    }, 100);
-                  }}
-                  crossOrigin="anonymous"
-                />
-              ) : activeClip.type === 'document' ? (
-                <DocumentLayer clip={activeClip} onUpdateClip={updateClip} />
+          <div className="w-full h-full relative flex items-center justify-center overflow-hidden">
+            <AnimatePresence custom={transitionType}>
+              {activeClip ? (
+                  <VideoLayer 
+                    key={activeClip.id}
+                    clip={activeClip}
+                    volume={volume}
+                    masterVolume={masterVolume}
+                    opacity={1}
+                    isProgram={false}
+                    isTransmitting={isTransmitting}
+                    onProgressUpdate={onProgressUpdate}
+                    onLevelChange={onLevelChange}
+                    onEnded={onEnded}
+                    transitionType={transitionType}
+                    transitionDuration={settings?.transitionDuration || 0.4}
+                  />
               ) : (
-                <img src={activeClip.url} alt={activeClip.name} className={`w-full h-full ${imageFit === 'fill' ? 'object-fill' : 'object-cover'}`} referrerPolicy="no-referrer" />
-              )
-            ) : (
-              <div className="flex flex-col items-center gap-4 opacity-10">
-                <MonitorIcon size={120} strokeWidth={1} className="text-obs-muted" />
-                <span className="text-[14px] font-black uppercase tracking-[0.6em] text-obs-muted">NO SIGNAL</span>
-              </div>
-            )}
+                <motion.div 
+                  key="no-signal"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex flex-col items-center gap-2 opacity-15 scale-90"
+                >
+                  <MonitorIcon size={80} strokeWidth={1} className="text-obs-muted" />
+                  <span className="text-[11px] font-black uppercase tracking-[0.6em] text-obs-muted">NO SIGNAL</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
         {/* Slide Controls for Program/Preview */}
         {!hideOverlays && activeClip?.type === 'document' && onUpdateClip && (
-          <div className="absolute bottom-1.5 left-1.5 z-30 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2 py-1 rounded border border-white/10 shadow-lg">
+          <div className="absolute bottom-1.5 left-1.5 z-30 flex items-center gap-1.5 bg-obs-dark-1 backdrop-blur-md px-2 py-1 rounded border border-obs-text/10 shadow-lg">
             <button 
               onClick={() => onUpdateClip(activeClip.id, { currentPage: Math.max(1, (activeClip.currentPage || 1) - 1) })}
               className="p-1 hover:bg-obs-accent hover:text-white text-obs-text rounded transition-colors"
@@ -1032,7 +1074,7 @@ const Monitor = React.memo(({
         {!hideOverlays && (
           <div className="absolute bottom-1.5 right-1.5 z-20 pointer-events-none">
             <div 
-              className={`px-1.5 py-0.5 rounded-sm bg-black/60 backdrop-blur-md border ${isActive ? 'border-red-500/50 text-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]' : 'border-white/10 text-obs-muted'} text-[7px] font-black uppercase tracking-widest`}
+              className={`px-1.5 py-0.5 rounded-sm bg-obs-dark-1 backdrop-blur-md border ${isActive ? 'border-red-500/50 text-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]' : 'border-obs-text/10 text-obs-muted'} text-[7px] font-black uppercase tracking-widest`}
               style={!isActive && accentColor ? { color: accentColor, borderColor: `${accentColor}33` } : {}}
             >
               {isActive ? 'LIVE' : 'STANDBY'}
@@ -1090,7 +1132,7 @@ const PixelMapModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-8">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-obs-bg/90 backdrop-blur-sm p-8">
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -1130,12 +1172,19 @@ const PixelMapModal = ({
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
               {slices.map(slice => (
-                <button
+                <div
                   key={slice.id}
                   onClick={() => setActiveSliceId(slice.id)}
-                  className={`w-full text-left px-3 py-2 rounded text-[11px] transition-all flex items-center justify-between group ${
+                  role="button"
+                  tabIndex={0}
+                  className={`w-full text-left px-3 py-2 rounded text-[11px] transition-all flex items-center justify-between group cursor-pointer ${
                     activeSliceId === slice.id ? 'bg-obs-accent text-white' : 'hover:bg-obs-border text-obs-text'
                   }`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setActiveSliceId(slice.id);
+                    }
+                  }}
                 >
                   <div className="flex items-center gap-2">
                     <GripVertical size={12} className="opacity-50" />
@@ -1147,13 +1196,13 @@ const PixelMapModal = ({
                   >
                     <Plus size={12} className="rotate-45" />
                   </button>
-                </button>
+                </div>
               ))}
             </div>
           </div>
 
           {/* Center Panel: Canvas Editor */}
-          <div className="flex-1 flex flex-col bg-black/40 relative">
+          <div className="flex-1 flex flex-col bg-obs-dark-1 relative">
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex bg-obs-surface border border-obs-border rounded-full p-1 shadow-lg">
               <button 
                 onClick={() => setViewMode('input')}
@@ -1170,13 +1219,13 @@ const PixelMapModal = ({
             </div>
 
             <div className="flex-1 flex items-center justify-center p-12">
-              <div className="w-full aspect-video bg-obs-surface/20 border border-white/10 relative shadow-2xl overflow-hidden">
+              <div className="w-full aspect-video bg-obs-surface/20 border border-obs-text/10 relative shadow-2xl overflow-hidden">
                 {/* Test Card Background */}
                 {showTestCard && (
                   <div className="absolute inset-0 z-0 opacity-40 pointer-events-none">
                     <div className="absolute inset-0 grid grid-cols-8 grid-rows-8">
                       {Array.from({ length: 64 }).map((_, i) => (
-                        <div key={i} className={`border border-white/20 ${i % 2 === 0 ? 'bg-white/5' : 'bg-transparent'}`} />
+                        <div key={i} className={`border border-obs-text/20 ${i % 2 === 0 ? 'bg-obs-dark-1' : 'bg-transparent'}`} />
                       ))}
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center">
@@ -1199,7 +1248,7 @@ const PixelMapModal = ({
                   <div
                     key={slice.id}
                     className={`absolute border-2 transition-all ${
-                      activeSliceId === slice.id ? 'border-obs-accent bg-obs-accent/10 z-20' : 'border-white/20 bg-white/5 z-10'
+                      activeSliceId === slice.id ? 'border-obs-accent bg-obs-accent/10 z-20' : 'border-obs-text/20 bg-obs-dark-1 z-10'
                     }`}
                     style={{
                       left: `${(viewMode === 'input' ? slice.x : slice.outputX) / 19.2}%`,
@@ -1327,7 +1376,7 @@ const DocumentLayer = ({ clip, onUpdateClip }: { clip: any, onUpdateClip?: (id: 
   );
 };
 
-const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip }: { 
+const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, transitionDuration, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip }: { 
   clip: any, 
   volume: number, 
   masterVolume?: number,
@@ -1336,6 +1385,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   isProgram: boolean, 
   crossfaderValue?: number,
   transitionType?: 'fade' | 'wipe' | 'slide' | 'cut',
+  transitionDuration?: number,
   onTimeUpdate?: (time: number) => void,
   onProgressUpdate?: (current: number, total: number) => void,
   onLevelChange?: (level: number) => void,
@@ -1349,14 +1399,19 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>('');
   const onEndedRef = useRef(onEnded);
+  const [isReady, setIsReady] = useState(false);
   
+  const handleEnded = () => {
+    onEndedRef.current?.();
+  };
+
   useEffect(() => {
     onEndedRef.current = onEnded;
   }, [onEnded]);
 
   const filterId = useMemo(() => `filter-${clip.id}-${Math.random().toString(36).substr(2, 9)}`, [clip.id]);
 
-  const audioLevel = useAudioLevel(videoRef, clip.type === 'video', 1);
+  const audioLevel = useAudioLevel(videoRef, clip.type === 'video', 1, isProgram);
 
   useEffect(() => {
     onLevelChange?.(audioLevel);
@@ -1365,18 +1420,30 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   useEffect(() => {
     const video = videoRef.current;
     if (video && clip.type === 'video') {
+      const earlyEndTriggered = { current: false };
+      
       const handleTimeUpdate = () => {
         onTimeUpdate?.(video.currentTime);
         onProgressUpdate?.(video.currentTime, video.duration || 0);
+
+        // Early transition logic: trigger onEnded slightly before the video physically ends
+        if (video.duration) {
+           const remaining = video.duration - video.currentTime;
+           const isLooping = loopOverride !== undefined ? loopOverride : clip.loop !== false;
+            // If it's not looping, trigger early
+           if (!isLooping && !earlyEndTriggered.current) {
+             const actualTransition = transitionType || 'fade';
+             const fadeTriggerTime = (actualTransition !== 'cut') ? (transitionDuration || 0.4) : 0;
+             // Add 0.05s tolerance to make sure we don't freeze early on slow decoding
+             if (remaining > 0 && remaining <= fadeTriggerTime + 0.1) {
+               earlyEndTriggered.current = true;
+               onEndedRef.current?.();
+             }
+           }
+        }
       };
       
       video.addEventListener('timeupdate', handleTimeUpdate);
-      
-      const handleEnded = () => {
-        console.log("Video ended:", clip.id);
-        onEndedRef.current?.();
-      };
-      video.addEventListener('ended', handleEnded);
       
       if (lastSrc.current !== clip.url) {
         console.log("Changing src for", clip.id, clip.url);
@@ -1406,7 +1473,6 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
       
       return () => {
          video.removeEventListener('timeupdate', handleTimeUpdate);
-         video.removeEventListener('ended', handleEnded);
       };
     }
   }, [clip.id, clip.url, clip.isPlaying]);
@@ -1422,9 +1488,9 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
       const finalVolume = Math.max(0, Math.min(1, volume * masterVolume * targetAudioOpacity * clipBaseVolume));
       
       video.volume = finalVolume;
-      video.muted = !isTransmitting || finalVolume <= 0;
+      video.muted = isProgram ? (!isTransmitting || finalVolume <= 0) : true;
     }
-  }, [volume, masterVolume, opacity, faderOpacity, isTransmitting, clip.volume, clip.id, clip.url]);
+  }, [volume, masterVolume, opacity, faderOpacity, isTransmitting, isProgram, clip.volume, clip.id, clip.url]);
 
   // Speed and sync - BE CAREFUL with sync to prevent rebound
   useEffect(() => {
@@ -1469,6 +1535,39 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     return `${baseOffset}%`;
   }, [clip.transform.x, isProgram, transitionType, crossfaderValue]);
 
+  const variants: any = {
+    initial: (type: string) => ({
+      opacity: 0,
+      x: type === 'slide' ? '100.1%' : 0,
+      clipPath: type === 'wipe' ? 'inset(0 0 0 100%)' : 'inset(0 0 0 0)'
+    }),
+    animate: {
+      opacity: opacity * (faderOpacity !== undefined ? faderOpacity : 1),
+      x: xOffsetPercentage,
+      clipPath: 'inset(0 0 0 0)',
+      y: `${clip.transform.y}%`,
+      scaleX: clip.transform.scaleW,
+      scaleY: clip.transform.scaleH,
+      rotate: clip.transform.rotation,
+      rotateX: clip.transform.rotationX,
+      transition: { 
+        duration: transitionType === 'cut' ? 0.001 : (transitionDuration || 0.2), 
+        ease: "easeInOut",
+        opacity: { duration: (transitionDuration || 0.2) * 0.8 } // Slightly faster opacity for smoothness
+      }
+    },
+    exit: (type: string) => ({
+      opacity: type === 'cut' ? 0 : 0, // Always fade out slightly unless cut
+      x: type === 'slide' ? '-100.2%' : 0,
+      clipPath: type === 'wipe' ? 'inset(0 100% 0 0)' : 'inset(0 0 0 0)',
+      zIndex: -1,
+      transition: { 
+        duration: transitionType === 'cut' ? 0.001 : (transitionDuration || 0.2), 
+        ease: "easeInOut" 
+      }
+    })
+  };
+
   return (
     <>
       <svg width="0" height="0" className="absolute">
@@ -1482,50 +1581,45 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
           />
         </filter>
       </svg>
-      <motion.div 
-        key={clip.id}
-        initial={{ opacity: 0 }}
-        animate={{ 
-          opacity: opacity * (faderOpacity !== undefined ? faderOpacity : 1),
-          x: xOffsetPercentage,
-          y: `${clip.transform.y}%`,
-          scaleX: clip.transform.scaleW,
-          scaleY: clip.transform.scaleH,
-          rotate: clip.transform.rotation,
-          rotateX: clip.transform.rotationX,
-        }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2 }}
-        className="absolute inset-0 flex items-center justify-center pointer-events-none"
-        style={{
-          clipPath,
-          filter: `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) url(#${filterId}) ${
-            clip.filter === 'grayscale' ? 'grayscale(100%)' :
-            clip.filter === 'sepia' ? 'sepia(100%)' :
-            clip.filter === 'invert' ? 'invert(100%)' :
-            clip.filter === 'blur' ? 'blur(10px)' : ''
-          }`,
-          ...style
-        }}
-      >
-        {clip.type === 'video' ? (
-            <video 
-              ref={videoRef}
-              src={clip.url} 
-              className="w-full h-full object-cover" 
-              autoPlay 
-              muted={true}
-              loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
-              playsInline
-              crossOrigin="anonymous"
-              onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
-            />
-        ) : clip.type === 'document' ? (
-          <DocumentLayer clip={clip} onUpdateClip={updateClip} />
-        ) : (
-          <img src={clip.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-        )}
-      </motion.div>
+        <motion.div 
+          key={clip.id}
+          custom={transitionType || 'fade'}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          variants={variants}
+          className="absolute inset-0 flex items-start justify-start pointer-events-none"
+          style={{
+            filter: `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) url(#${filterId}) ${
+              clip.filter === 'grayscale' ? 'grayscale(100%)' :
+              clip.filter === 'sepia' ? 'sepia(100%)' :
+              clip.filter === 'invert' ? 'invert(100%)' :
+              clip.filter === 'blur' ? 'blur(10px)' : ''
+            }`,
+            ...style
+          }}
+        >
+          {clip.type === 'video' ? (
+              <video 
+                ref={videoRef}
+                src={clip.url} 
+                className={`w-full h-full ${(!isProgram || clip.fitToScale) ? 'object-contain' : 'object-none'}`} 
+                autoPlay 
+                muted={true}
+                loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
+                playsInline
+                crossOrigin="anonymous"
+                preload="auto"
+                onCanPlay={() => setIsReady(true)}
+                onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
+                onEnded={handleEnded}
+              />
+          ) : clip.type === 'document' ? (
+            <DocumentLayer clip={clip} onUpdateClip={updateClip} />
+          ) : (
+            <img src={clip.url} className={`w-full h-full ${(!isProgram || clip.fitToScale) ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
+          )}
+        </motion.div>
     </>
   );
 };
@@ -1623,26 +1717,40 @@ const OutputView = React.memo(() => {
     const { programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates, outputs, clips, allScreenSettings, crossfaderValue, isLive, isTransmitting, programVolume, masterVolume, transitionType } = state;
     
     // Find if this screen is mapped to a specific Lumin Output
-    const mappedOutput = outputs?.find((o: any) => o.physicalScreenId === screenId);
+    const mappedOutput = outputs?.find((o: any) => o && o.physicalScreenId === screenId);
+    
+    // Default fallback settings
+    const defaultSettings: ExternalScreenSettings = {
+      brightness: 1, contrast: 1, saturation: 1, opacity: 1, x: 0, y: 0, rotation: 0,
+      scalingW: 1, scalingH: 1, colorBalance: { r: 1, g: 1, b: 1 },
+      bgScalingW: 100, bgScalingH: 100,
+      transitionType: 'cut', transitionDuration: 1
+    };
+
+    const settings = (allScreenSettings && screenId && allScreenSettings[screenId]) 
+      ? allScreenSettings[screenId] 
+      : defaultSettings;
+    
+    // Ensure all required fields exist safely
+    const safeSettings = {
+       ...defaultSettings,
+       ...settings,
+       colorBalance: (settings && settings.colorBalance) ? settings.colorBalance : { r: 1, g: 1, b: 1 },
+       transitionDuration: (settings && settings.transitionDuration !== undefined) ? settings.transitionDuration : 1,
+       transitionType: (settings && settings.transitionType) ? settings.transitionType : 'cut'
+    };
+    
     const mappedProgramClipId = (mappedOutput && outputPrograms) ? outputPrograms[mappedOutput.id] : programClipId;
     const mappedTargetClipId = (mappedOutput && outputTransitionTargets) ? outputTransitionTargets[mappedOutput.id] : previewClipId;
     const mappedOffState = (mappedOutput && outputOffStates) ? outputOffStates[mappedOutput.id] : false;
 
-    const settings = (allScreenSettings && screenId && allScreenSettings[screenId]) 
-      ? allScreenSettings[screenId] 
-      : (state.externalScreenSettings || {
-          brightness: 1, contrast: 1, saturation: 1, opacity: 1, x: 0, y: 0, rotation: 0,
-          scalingW: 1, scalingH: 1, colorBalance: { r: 1, g: 1, b: 1 },
-          bgScalingW: 100, bgScalingH: 100
-        });
-    
     const isContentActive = isLive && isTransmitting;
-    const busAClip = clips.find((c: any) => c.id === mappedProgramClipId);
+    const busAClip = (clips || []).find((c: any) => c && c.id === mappedProgramClipId);
     
     // Only use busB if this output is a target of the current transition, or if we're doing a global take
     const isTarget = (mappedOutput && outputTransitionTargets && outputTransitionTargets[mappedOutput.id]);
     const busBClip = (isTarget || !Object.keys(outputTransitionTargets || {}).length) 
-      ? clips.find((c: any) => c.id === mappedTargetClipId) 
+      ? (clips || []).find((c: any) => c && c.id === mappedTargetClipId) 
       : null;
     
     // In OutputView, we only show content if it's active.
@@ -1652,19 +1760,19 @@ const OutputView = React.memo(() => {
     const audioOpacityA = (() => {
       if (!busAClip) return 0;
       if (transitionType === 'cut') return mappedOffState ? 0 : 1;
-      const base = (1 - crossfaderValue / 100);
+      const base = (1 - (crossfaderValue || 0) / 100);
       return mappedOffState ? 0 : base;
     })();
     const audioOpacityB = (() => {
       if (!busBClip) return 0;
       if (transitionType === 'cut') return 0;
-      const base = (crossfaderValue / 100);
+      const base = ((crossfaderValue || 0) / 100);
       return mappedOffState ? 0 : base;
     })();
 
     const wipeTransformOut = (() => {
       if (transitionType !== 'wipe') return undefined;
-      return `inset(0 ${100 - crossfaderValue}% 0 0)`;
+      return `inset(0 ${100 - (crossfaderValue || 0)}% 0 0)`;
     })();
 
     return (
@@ -1677,10 +1785,10 @@ const OutputView = React.memo(() => {
         }}
       >
         {/* Background Layer - Always rendered if enabled */}
-        {settings.showBackground && settings.backgroundImage && (
+        {safeSettings.showBackground && safeSettings.backgroundImage && (
           <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center bg-black">
             <img 
-              src={settings.backgroundImage} 
+              src={safeSettings.backgroundImage} 
               className="absolute pointer-events-none" 
               style={{
                 width: '100%',
@@ -1688,7 +1796,7 @@ const OutputView = React.memo(() => {
                 objectFit: 'fill',
                 top: '50%',
                 left: '50%',
-                transform: `translate(-50%, -50%) scale(${(settings.bgScalingW ?? 100) / 100}, ${(settings.bgScalingH ?? 100) / 100})`,
+                transform: `translate(-50%, -50%) scale(${(safeSettings.bgScalingW ?? 100) / 100}, ${(safeSettings.bgScalingH ?? 100) / 100})`,
                 display: 'block'
               }}
               referrerPolicy="no-referrer" 
@@ -1699,7 +1807,7 @@ const OutputView = React.memo(() => {
             {/* Fullscreen Guard Overlay - Invisible Click Catcher */}
             {!isFullscreen && (
               <div 
-                className="fixed inset-0 z-[1000] bg-black/10 cursor-pointer"
+                className="fixed inset-0 z-[1000] bg-obs-dark-1 cursor-pointer"
                 onClick={(e) => {
                   e.stopPropagation();
                   document.documentElement.requestFullscreen().catch(() => {});
@@ -1708,7 +1816,7 @@ const OutputView = React.memo(() => {
             )}
 
         <div 
-          className="relative overflow-hidden flex items-center justify-center z-10"
+          className="relative overflow-hidden flex items-start justify-start z-10"
           style={{ 
             width: settings.width ? `${settings.width}px` : '100%', 
             height: settings.height ? `${settings.height}px` : '100%',
@@ -1719,9 +1827,10 @@ const OutputView = React.memo(() => {
           }}
         >
           <div 
-            className="absolute inset-0 flex items-center justify-center"
+            className="absolute inset-0 flex items-start justify-start"
             style={{
               transform: `scale(${settings.scalingW ?? 1}, ${settings.scalingH ?? 1})`,
+              transformOrigin: 'top left',
               filter: `brightness(${settings.brightness ?? 1}) contrast(${settings.contrast ?? 1}) saturate(${settings.saturation ?? 1}) url(#rgbBalance)`
             }}
           >
@@ -1743,7 +1852,7 @@ const OutputView = React.memo(() => {
                 initial={{ opacity: 1 }}
                 animate={{ opacity: mappedOffState ? 0 : 1 }}
                 transition={{ duration: 1.5, ease: "easeInOut" }}
-                className="w-full h-full flex items-center justify-center relative"
+                className="w-full h-full flex items-start justify-start relative"
               >
                 {/* Bus A Layer */}
                 {busAClip && (
@@ -1761,6 +1870,7 @@ const OutputView = React.memo(() => {
                     onEnded={() => {
                        channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busAClip.id } });
                     }}
+                    transitionDuration={safeSettings.transitionDuration}
                   />
                 )}
  
@@ -1774,20 +1884,22 @@ const OutputView = React.memo(() => {
                     opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
                     style={{ clipPath: wipeTransformOut }}
                     faderOpacity={audioOpacityB}
-                    isProgram={false}
+                    isProgram={true}
                     crossfaderValue={crossfaderValue}
                     transitionType={transitionType}
                     isTransmitting={isTransmitting}
                     onEnded={() => {
                        channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busBClip.id } });
                     }}
+                    transitionDuration={safeSettings.transitionDuration}
                   />
                 )}
 
                 {/* Layer Rendering - Multi-layer mixing */}
-                {state.layers && state.layers.filter((l: any) => l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
-                  const activeClip = l.activeClipId ? (state.clips || []).find((c: any) => c.id === l.activeClipId) : null;
+                {state.layers && state.layers.filter((l: any) => l && l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
+                  const activeClip = l.activeClipId ? (state.clips || []).find((c: any) => c && c.id === l.activeClipId) : null;
                   if (!activeClip) return null;
+                  const lb = l.colorBalance || { r: 1, g: 1, b: 1 };
                   return (
                     <div 
                       key={l.id} 
@@ -1801,32 +1913,37 @@ const OutputView = React.memo(() => {
                         <filter id={`rgbLayerOutput-${l.id}`} colorInterpolationFilters="sRGB">
                           <feColorMatrix 
                             type="matrix" 
-                            values={`${l.colorBalance.r} 0 0 0 0
-                                    0 ${l.colorBalance.g} 0 0 0
-                                    0 0 ${l.colorBalance.b} 0 0
+                            values={`${lb.r} 0 0 0 0
+                                    0 ${lb.g} 0 0 0
+                                    0 0 ${lb.b} 0 0
                                     0 0 0 1 0`} 
                           />
                         </filter>
                       </svg>
                       <div 
-                        className="w-full h-full"
+                        className="w-full h-full relative"
                         style={{
                           filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayerOutput-${l.id})`,
                           transform: `rotate(${l.rotation}deg)`
                         }}
                       >
-                        <VideoLayer 
-                          clip={activeClip}
-                          volume={l.muted ? 0 : programVolume}
-                          masterVolume={masterVolume}
-                          opacity={1}
-                          isProgram={true}
-                          isTransmitting={isTransmitting}
-                          onEnded={() => {
-                             channelRef.current?.postMessage({ type: 'LAYER_CLIP_ENDED', payload: { layerId: l.id } });
-                          }}
-                          loopOverride={l.playbackMode === 'single'}
-                        />
+                        <AnimatePresence mode="popLayout" initial={false}>
+                          <VideoLayer 
+                            key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}`}
+                            clip={activeClip}
+                            volume={l.muted ? 0 : programVolume}
+                            masterVolume={masterVolume}
+                            opacity={1}
+                            isProgram={true}
+                            isTransmitting={isTransmitting}
+                            transitionType={l.transition || 'fade'}
+                            transitionDuration={l.transitionDuration || 1}
+                            onEnded={() => {
+                               channelRef.current?.postMessage({ type: 'LAYER_CLIP_ENDED', payload: { layerId: l.id, clipId: activeClip.id } });
+                            }}
+                            loopOverride={l.playbackMode === 'single'}
+                          />
+                        </AnimatePresence>
                       </div>
                     </div>
                   );
@@ -1836,16 +1953,16 @@ const OutputView = React.memo(() => {
                   {state.pipLayers && state.pipLayers.filter((p: any) => p.isActive && (p.targetOutputId === mappedOutput?.id || (!p.targetOutputId && mappedOutput?.id === '1') || p.targetOutputId === 'program')).map((pip: any) => (
                     <motion.div
                       key={pip.id}
-                      className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-white/20' : ''}`}
+                      className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-obs-text/20' : ''}`}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: pip.opacity }}
                       exit={{ opacity: 0 }}
                       style={{ 
                         zIndex: 100,
-                        left: `${(pip.x / 1920) * 100}%`,
-                        top: `${(pip.y / 1080) * 100}%`,
-                        width: `${(pip.width / 1920) * 100}%`,
-                        height: `${(pip.height / 1080) * 100}%`,
+                        left: `${(pip.x / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.width || 1920) : 1920)) * 100}%`,
+                        top: `${(pip.y / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.height || 1080) : 1080)) * 100}%`,
+                        width: `${(pip.width / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.width || 1920) : 1920)) * 100}%`,
+                        height: `${(pip.height / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.height || 1080) : 1080)) * 100}%`,
                         borderRadius: 0
                       }}
                     >
@@ -1856,12 +1973,12 @@ const OutputView = React.memo(() => {
                             autoPlay 
                             muted 
                             loop 
-                            className="w-full h-full object-fill" 
+                            className="w-full h-full object-contain" 
                           />
                         ) : (
                           <img 
                             src={state.clips.find((c: any) => c.id === pip.clipId)!.url} 
-                            className="w-full h-full object-fill" 
+                            className="w-full h-full object-contain" 
                             referrerPolicy="no-referrer"
                           />
                         )
@@ -1879,8 +1996,12 @@ const OutputView = React.memo(() => {
     );
   } catch (e: any) {
     console.error("Error crítico en OutputView:", e);
-    setError(e.message);
-    return null;
+    return (
+      <div className="bg-black h-screen w-screen flex flex-col items-center justify-center text-red-500 font-mono text-[10px] p-8 uppercase tracking-widest text-center gap-4">
+        <span>Error de Salida</span>
+        <div className="text-[7px] text-obs-muted max-w-xs">{e.message}</div>
+      </div>
+    );
   }
 });
 
@@ -1907,7 +2028,9 @@ const Inspector = React.memo(({
   onSelectPiP,
   onUpdateClip,
   clips,
-  isDarkMode 
+  allScreenSettings,
+  isDarkMode,
+  isOutputLaunched
 }: { 
   selectedItem: Clip | Playlist | any | null, 
   selectedItemType: 'clip' | 'playlist' | 'program' | 'preview' | 'layer' | 'pip' | 'pipManager' | null,
@@ -1931,7 +2054,9 @@ const Inspector = React.memo(({
   onSelectPiP?: (pip: PiPLayer) => void,
   onUpdateClip?: (id: string, updates: Partial<Clip>) => void,
   clips?: Clip[],
-  isDarkMode: boolean 
+  allScreenSettings: Record<string, ExternalScreenSettings>,
+  isDarkMode: boolean,
+  isOutputLaunched?: boolean
 }) => {
   const handleReset = () => {
     if ((selectedItemType === 'clip' || selectedItemType === 'playlist') && selectedItem) {
@@ -1997,7 +2122,7 @@ const Inspector = React.memo(({
         </div>
         <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2 custom-scrollbar">
           {pips.map(layer => (
-            <div key={layer.id} className={`p-2 rounded border transition-all ${layer.isActive ? 'bg-obs-accent/10 border-obs-accent' : 'bg-black/20 border-white/5 hover:border-white/10'}`}>
+            <div key={layer.id} className={`p-2 rounded border transition-all ${layer.isActive ? 'bg-obs-accent/10 border-obs-accent' : 'bg-obs-dark-1 border-obs-text/5 hover:border-obs-text/10'}`}>
               <div className="flex justify-between items-center mb-2">
                 <div className="flex items-center gap-2">
                   <span className={`text-[9px] font-bold uppercase ${layer.isActive ? 'text-obs-accent' : 'text-obs-muted'}`}>{layer.name}</span>
@@ -2021,7 +2146,7 @@ const Inspector = React.memo(({
                     <select 
                       value={layer.clipId || ''}
                       onChange={(e) => onUpdatePiP?.(layer.id, { clipId: e.target.value || null })}
-                      className="w-full bg-black/40 border border-white/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
+                      className="w-full bg-obs-dark-1 border border-obs-text/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
                     >
                       <option value="">No Source</option>
                       {(clips || []).map(c => (
@@ -2036,7 +2161,7 @@ const Inspector = React.memo(({
                       <select 
                         value={layer.targetOutputId || ''}
                         onChange={(e) => onUpdatePiP?.(layer.id, { targetOutputId: e.target.value || null })}
-                        className="w-full bg-black/40 border border-white/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
+                        className="w-full bg-obs-dark-1 border border-obs-text/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
                       >
                         <option value="">Output 1 (Def)</option>
                         <option value="program">Todas (Program)</option>
@@ -2046,7 +2171,7 @@ const Inspector = React.memo(({
                       </select>
                     </div>
                     <div className="flex items-end">
-                      <div className="w-full flex items-center justify-between bg-black/20 px-2 py-1. rounded border border-white/5">
+                      <div className="w-full flex items-center justify-between bg-obs-dark-1 px-2 py-1. rounded border border-obs-text/5">
                         <span className="text-[8px] font-bold text-obs-muted uppercase">Prev</span>
                         <button 
                           onClick={() => onUpdatePiP?.(layer.id, { showInPreview: !layer.showInPreview })}
@@ -2067,8 +2192,12 @@ const Inspector = React.memo(({
 
   if (selectedItemType === 'pip') {
     const pip = (selectedItem as PiPLayer);
+    const outputSettings = (pip.targetOutputId && allScreenSettings[pip.targetOutputId]) || allScreenSettings['1'] || { width: 1920, height: 1080 };
+    const maxW = outputSettings.width || 1920;
+    const maxH = outputSettings.height || 1080;
+
     return (
-      <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
+      <div className="h-full flex flex-col overflow-hidden bg-obs-bg border-l border-obs-border">
         <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
           <div className="flex items-center gap-2">
             <button
@@ -2078,7 +2207,7 @@ const Inspector = React.memo(({
                   document.dispatchEvent(new CustomEvent('nav-to-pip-manager'));
                 }
               }}
-              className="p-1 px-2 rounded hover:bg-white/10 text-obs-muted transition-colors"
+              className="p-1 px-2 rounded hover:bg-obs-dark-1 text-obs-muted transition-colors"
               title="Volver"
             >
               <ChevronRight size={12} className="rotate-180" />
@@ -2107,24 +2236,28 @@ const Inspector = React.memo(({
                 max={100}
                 step={1}
                 onChange={(val) => onUpdatePiP?.(pip.id, { opacity: val / 100 })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { opacity: Math.max(0, Math.min(100, n)) / 100 });
+                }}
               />
               <div className="grid grid-cols-2 gap-3">
-                <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
-                  <span className="text-[9px] font-bold text-obs-muted uppercase">Mostrar Marco</span>
+                <div className="flex items-center justify-between bg-obs-dark-1 p-2 h-[34px] rounded border border-obs-dark-2 group select-none">
+                  <span className="text-[8px] font-black uppercase text-obs-muted">Mostrar Marco</span>
                   <button 
                     onClick={() => onUpdatePiP?.(pip.id, { showFrame: !pip.showFrame })}
-                    className={`w-10 h-5 rounded-full transition-colors relative ${pip.showFrame !== false ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                    className={`w-9 h-4.5 rounded-full transition-all relative ${pip.showFrame !== false ? 'bg-obs-accent shadow-[0_0_8px_rgba(0,163,245,0.3)]' : 'bg-obs-bg border border-white/10'}`}
                   >
-                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${pip.showFrame !== false ? 'translate-x-6' : 'translate-x-1'}`} />
+                    <div className={`absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full transition-all shadow-[0_1px_3px_rgba(0,0,0,0.4)] ${pip.showFrame !== false ? 'left-[18px]' : 'left-0.5'}`} />
                   </button>
                 </div>
-                <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
-                  <span className="text-[9px] font-bold text-obs-muted uppercase">Preview</span>
+                <div className="flex items-center justify-between bg-obs-dark-1 p-2 h-[34px] rounded border border-obs-dark-2 group select-none">
+                  <span className="text-[8px] font-black uppercase text-obs-muted">Preview</span>
                   <button 
                     onClick={() => onUpdatePiP?.(pip.id, { showInPreview: !pip.showInPreview })}
-                    className={`w-10 h-5 rounded-full transition-colors relative ${pip.showInPreview ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                    className={`w-9 h-4.5 rounded-full transition-all relative ${pip.showInPreview ? 'bg-obs-accent shadow-[0_0_8px_rgba(0,163,245,0.3)]' : 'bg-obs-bg border border-white/10'}`}
                   >
-                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${pip.showInPreview ? 'translate-x-6' : 'translate-x-1'}`} />
+                    <div className={`absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full transition-all shadow-[0_1px_3px_rgba(0,0,0,0.4)] ${pip.showInPreview ? 'left-[18px]' : 'left-0.5'}`} />
                   </button>
                 </div>
               </div>
@@ -2136,38 +2269,54 @@ const Inspector = React.memo(({
               <PropertyControl 
                 label="Posición X"
                 value={pip.x}
-                displayValue={`${pip.x}px`}
+                displayValue={`${Math.round(pip.x)}px`}
                 min={0}
-                max={1920}
-                step={0.1}
+                max={maxW}
+                step={1}
                 onChange={(val) => onUpdatePiP?.(pip.id, { x: val })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { x: Math.max(0, Math.min(maxW, n)) });
+                }}
               />
               <PropertyControl 
                 label="Posición Y"
                 value={pip.y}
-                displayValue={`${pip.y}px`}
+                displayValue={`${Math.round(pip.y)}px`}
                 min={0}
-                max={1080}
-                step={0.1}
+                max={maxH}
+                step={1}
                 onChange={(val) => onUpdatePiP?.(pip.id, { y: val })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { y: Math.max(0, Math.min(maxH, n)) });
+                }}
               />
               <PropertyControl 
                 label="Ancho"
                 value={pip.width}
-                displayValue={`${pip.width}px`}
+                displayValue={`${Math.round(pip.width)}px`}
                 min={10}
-                max={1920}
-                step={0.1}
+                max={maxW}
+                step={1}
                 onChange={(val) => onUpdatePiP?.(pip.id, { width: val })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { width: Math.max(10, Math.min(maxW, n)) });
+                }}
               />
               <PropertyControl 
                 label="Alto"
                 value={pip.height}
-                displayValue={`${pip.height}px`}
+                displayValue={`${Math.round(pip.height)}px`}
                 min={10}
-                max={1080}
-                step={0.1}
+                max={maxH}
+                step={1}
                 onChange={(val) => onUpdatePiP?.(pip.id, { height: val })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { height: Math.max(10, Math.min(maxH, n)) });
+                }}
               />
             </div>
           </CollapsibleSection>
@@ -2181,7 +2330,7 @@ const Inspector = React.memo(({
                       <button
                         key={id || 'prog'}
                         onClick={() => onUpdatePiP?.(pip.id, { targetOutputId: id })}
-                        className={`py-1 rounded text-[8px] uppercase font-black tracking-tight border transition-all ${pip.targetOutputId === id ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-surface text-obs-muted border-white/5'}`}
+                        className={`py-1 rounded text-[8px] uppercase font-black tracking-tight border transition-all ${pip.targetOutputId === id ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-surface text-obs-muted border-obs-text/5'}`}
                       >
                         {id ? `OUT ${id}` : 'PROG'}
                       </button>
@@ -2212,7 +2361,7 @@ const Inspector = React.memo(({
         <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
           <div className="flex items-center gap-2">
             <MonitorIcon size={12} className="text-obs-accent" />
-            <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest text-[#00AAFF]">PROPIEDADES PREVIEW</span>
+            <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest text-obs-accent">PROPIEDADES PREVIEW</span>
           </div>
         </div>
         
@@ -2249,7 +2398,7 @@ const Inspector = React.memo(({
                               } : pr
                             ));
                          }}
-                         className={`aspect-square rounded font-bold text-xs flex items-center justify-center transition-all border ${preview.selectedOutputs.includes(out.id) ? 'bg-[#00AAFF] text-white border-[#00AAFF] shadow-[0_0_8px_rgba(0,170,255,0.3)]' : 'bg-[#1a1a1a] text-obs-muted border-white/10 hover:border-white/30'}`}
+                         className={`aspect-square rounded font-bold text-xs flex items-center justify-center transition-all border ${preview.selectedOutputs.includes(out.id) ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,163,245,0.3)]' : 'bg-obs-dark-1 text-obs-muted border-obs-text/10 hover:border-obs-text/30'}`}
                        >
                          {out.id}
                        </button>
@@ -2264,7 +2413,7 @@ const Inspector = React.memo(({
 
              <CollapsibleSection title="Estado Maestro" defaultOpen={true}>
                 <div className="space-y-3">
-                   <div className="flex items-center justify-between bg-[#1a1a1a] p-3 rounded border border-white/10">
+                   <div className="flex items-center justify-between bg-obs-dark-1 p-3 rounded border border-obs-text/10">
                      <div className="flex flex-col">
                        <span className="text-[11px] font-bold text-white uppercase">Modo Preparado (LIVE)</span>
                        <span className="text-[9px] text-obs-muted">Mantener activo para incluir en el TAKE</span>
@@ -2281,7 +2430,7 @@ const Inspector = React.memo(({
                      </button>
                    </div>
 
-                   <div className="flex items-center justify-between bg-[#1a1a1a] p-3 rounded border border-white/10">
+                   <div className="flex items-center justify-between bg-obs-dark-1 p-3 rounded border border-obs-text/10">
                      <div className="flex flex-col">
                        <span className="text-[11px] font-bold text-white uppercase">Ocultar Overlays</span>
                        <span className="text-[9px] text-obs-muted">Ocultar textos de STANDBY y PREVIEW</span>
@@ -2301,7 +2450,7 @@ const Inspector = React.memo(({
                    <div className="space-y-2 pt-2">
                       <label className="text-[9px] text-obs-muted uppercase font-bold tracking-tighter">Color de Acento</label>
                       <div className="flex gap-2 flex-wrap">
-                         {['#00AAFF', '#FF4444', '#44FF44', '#FFAA00', '#FF00FF', '#FFFFFF'].map(color => (
+                         {['#00a3f5', '#FF4444', '#44FF44', '#FFAA00', '#FF00FF', '#FFFFFF'].map(color => (
                            <button 
                              key={color}
                              onClick={() => {
@@ -2344,8 +2493,37 @@ const Inspector = React.memo(({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 custom-scrollbar">
-          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdateLayer(layer.id, { opacity: 1, rotation: 0, transition: 'fade' })}>
+          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdateLayer(layer.id, { opacity: 1, rotation: 0, transition: 'fade', transitionDuration: 1 })}>
             <div className="space-y-2">
+              <div className="flex flex-col gap-1 mb-2">
+                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo Transición</label>
+                <div className="grid grid-cols-4 gap-1">
+                  {['fade', 'wipe', 'slide', 'cut'].map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => onUpdateLayer(layer.id, { transition: type as any })}
+                      className={`py-1 rounded text-[8px] uppercase font-black tracking-tight border transition-all ${
+                        layer.transition === type 
+                          ? 'bg-obs-accent border-obs-accent text-white' 
+                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
+                      }`}
+                    >
+                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'NADA'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              <PropertyControl 
+                label="Duración"
+                value={layer.transitionDuration || 1}
+                displayValue={`${(layer.transitionDuration || 1).toFixed(1)}s`}
+                min={0.5}
+                max={2.0}
+                step={0.1}
+                onChange={(val) => onUpdateLayer(layer.id, { transitionDuration: val })}
+              />
+
               <PropertyControl 
                 label="Opacidad"
                 value={layer.opacity * 100}
@@ -2354,6 +2532,10 @@ const Inspector = React.memo(({
                 max={100}
                 step={1}
                 onChange={(val) => onUpdateLayer(layer.id, { opacity: val / 100 })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdateLayer(layer.id, { opacity: Math.max(0, Math.min(100, n)) / 100 });
+                }}
               />
               <PropertyControl 
                 label="Rotación"
@@ -2364,21 +2546,7 @@ const Inspector = React.memo(({
                 step={1}
                 onChange={(val) => onUpdateLayer(layer.id, { rotation: val })}
               />
-              <div className="flex flex-col gap-1">
-                <label className="text-[8px] text-obs-muted uppercase font-bold">Transición Capa</label>
-                <div className="grid grid-cols-3 gap-1">
-                  {['cut', 'fade', 'wipe'].map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => onUpdateLayer(layer.id, { transition: t as any })}
-                      className={`py-1 rounded text-[8px] uppercase font-black tracking-tight border transition-all ${layer.transition === t ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-surface text-obs-muted border-white/5'}`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+              <div className="flex items-center justify-between bg-obs-dark-1 p-2 rounded border border-obs-text/5">
                 <span className="text-[9px] font-bold text-obs-muted uppercase">Loop Playlist</span>
                 <button 
                   onClick={() => onUpdateLayer(layer.id, { loop: !(layer.loop !== false) })}
@@ -2393,7 +2561,7 @@ const Inspector = React.memo(({
           {clips.find(c => c.id === layer.activeClipId)?.type === 'document' && (
             <CollapsibleSection title="CONTROLES DOCUMENTO" defaultOpen={true}>
               <div className="space-y-3">
-                <div className="flex items-center justify-between bg-black/30 p-4 rounded-lg border border-white/5">
+                <div className="flex items-center justify-between bg-obs-dark-1 p-4 rounded-lg border border-obs-text/5">
                   <button 
                     onClick={() => {
                       const clip = clips?.find(c => c.id === layer.activeClipId);
@@ -2407,7 +2575,7 @@ const Inspector = React.memo(({
                   
                   <div className="flex flex-col items-center gap-1">
                     <span className="text-[10px] text-obs-muted font-black uppercase tracking-widest mb-1">PÁGINA</span>
-                    <div className="text-3xl font-mono font-black text-obs-accent tabular-nums bg-obs-bg px-4 py-1 rounded border border-white/5 shadow-inner flex items-baseline gap-1">
+                    <div className="text-3xl font-mono font-black text-obs-accent tabular-nums bg-obs-bg px-4 py-1 rounded border border-obs-text/5 shadow-inner flex items-baseline gap-1">
                       {clips?.find(c => c.id === layer.activeClipId)?.currentPage || 1}
                       {clips?.find(c => c.id === layer.activeClipId)?.totalPages && (
                         <span className="text-sm text-obs-muted">/ {clips?.find(c => c.id === layer.activeClipId)?.totalPages}</span>
@@ -2418,7 +2586,7 @@ const Inspector = React.memo(({
                         const clip = clips?.find(c => c.id === layer.activeClipId);
                         if (clip && onUpdateClip) onUpdateClip(clip.id, { currentPage: 1 });
                       }}
-                      className="px-2 py-0.5 mt-1 bg-obs-surface hover:bg-obs-accent text-[9px] uppercase font-bold rounded transition-colors border border-white/5"
+                      className="px-2 py-0.5 mt-1 bg-obs-surface hover:bg-obs-accent text-[9px] uppercase font-bold rounded transition-colors border border-obs-text/5"
                     >
                       Reset
                     </button>
@@ -2436,7 +2604,7 @@ const Inspector = React.memo(({
                   </button>
                 </div>
                 
-                <div className="flex flex-col gap-2 p-3 bg-black/20 rounded border border-white/5 mt-2">
+                <div className="flex flex-col gap-2 p-3 bg-obs-dark-1 rounded border border-obs-text/5 mt-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-bold text-obs-text uppercase">Control por Teclado / Puntero USB</span>
                     <button 
@@ -2468,7 +2636,7 @@ const Inspector = React.memo(({
                   <div className="grid grid-cols-4 gap-1">
                     <button
                       onClick={() => onUpdateLayer(layer.id, { outputId: null })}
-                      className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center gap-0.5 ${!layer.outputId ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,170,255,0.4)]' : 'bg-obs-bg text-obs-muted border-white/5 hover:border-white/10'}`}
+                      className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center gap-0.5 ${!layer.outputId ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.4)]' : 'bg-obs-bg text-obs-muted border-obs-text/5 hover:border-obs-text/10'}`}
                     >
                       <span>PROGRAM</span>
                     </button>
@@ -2478,7 +2646,7 @@ const Inspector = React.memo(({
                         <button
                           key={out.id}
                           onClick={() => onUpdateLayer(layer.id, { outputId: out.id })}
-                          className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center leading-tight ${layer.outputId === out.id ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,170,255,0.4)]' : 'bg-obs-bg text-obs-muted border-white/5 hover:border-white/10'}`}
+                          className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center leading-tight ${layer.outputId === out.id ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.4)]' : 'bg-obs-bg text-obs-muted border-obs-text/5 hover:border-obs-text/10'}`}
                         >
                           <span>OUT {out.id}</span>
                           {screen && <span className="text-[6px] opacity-60 font-normal truncate max-w-full">({screen.name})</span>}
@@ -2563,6 +2731,10 @@ const Inspector = React.memo(({
                 max={100}
                 step={1}
                 onChange={(val) => onUpdate(playlist.id, { opacity: val / 100 })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdate(playlist.id, { opacity: Math.max(0, Math.min(100, n)) / 100 });
+                }}
               />
                <PropertyControl 
                 label="Velocidad"
@@ -2573,7 +2745,7 @@ const Inspector = React.memo(({
                 step={1}
                 onChange={(val) => onUpdate(playlist.id, { speed: val / 50 })}
               />
-              <div className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+              <div className="flex items-center justify-between bg-obs-dark-1 p-2 rounded border border-obs-text/5">
                 <span className="text-[9px] font-bold text-obs-muted uppercase">Loop Playlist</span>
                 <button 
                   onClick={() => onUpdate(playlist.id, { loop: !(playlist.loop !== false) })}
@@ -2588,7 +2760,7 @@ const Inspector = React.memo(({
           <CollapsibleSection title="Lista de Clips" defaultOpen={true}>
             <div className="space-y-1">
               {playlist.clips.map((c, i) => (
-                <div key={c.id} className={`flex items-center justify-between p-1.5 bg-black/20 rounded border border-white/5 ${playlist.currentClipIndex === i ? 'ring-1 ring-obs-accent ring-inset' : ''}`}>
+                <div key={c.id} className={`flex items-center justify-between p-1.5 bg-obs-dark-1 rounded border border-obs-text/5 ${playlist.currentClipIndex === i ? 'ring-1 ring-obs-accent ring-inset' : ''}`}>
                   <div className="flex items-center gap-2 overflow-hidden">
                     <span className="text-[8px] font-mono text-obs-muted">#{i + 1}</span>
                     <span className="text-[10px] text-obs-text truncate">{c.name}</span>
@@ -2605,7 +2777,7 @@ const Inspector = React.memo(({
                             newClips[i] = { ...newClips[i], duration: parseInt(e.target.value) || 1 };
                             onUpdate(playlist.id, { clips: newClips });
                           }}
-                          className="w-8 bg-black/40 border border-white/10 rounded text-center text-[8px] text-obs-accent outline-none"
+                          className="w-8 bg-obs-dark-1 border border-obs-text/10 rounded text-center text-[8px] text-obs-accent outline-none"
                         />
                         <span className="text-[7px] text-obs-muted">s</span>
                       </div>
@@ -2653,7 +2825,7 @@ const Inspector = React.memo(({
             <div className="space-y-1.5">
               {/* Screen Info Header */}
               {selectedScreenId && (
-                <div className="bg-black/20 rounded-lg p-1.5 border border-white/5 space-y-1">
+                <div className="bg-obs-dark-1 rounded-lg p-1.5 border border-obs-text/5 space-y-1">
                   <div className="aspect-[21/9] w-full bg-obs-surface rounded border border-obs-border overflow-hidden relative flex items-center justify-center">
                     <div className="absolute inset-0 opacity-5 bg-[radial-gradient(circle,var(--color-obs-accent)_1px,transparent_1px)] bg-[size:8px_8px]" />
                     <MonitorIcon size={16} className="text-obs-accent/20" />
@@ -2665,19 +2837,19 @@ const Inspector = React.memo(({
                   </div>
                   
                   <div className="grid grid-cols-2 gap-1">
-                    <div className="col-span-2 bg-obs-bg/50 p-1 rounded border border-white/5">
+                    <div className="col-span-2 bg-obs-bg/50 p-1 rounded border border-obs-text/5">
                       <div className="text-[6px] text-obs-muted uppercase font-bold">Monitor</div>
                       <div className="text-[7.5px] text-obs-text truncate font-medium">
                         {selectedScreen?.name || 'Genérico'}
                       </div>
                     </div>
-                    <div className="bg-obs-bg/50 p-1 rounded border border-white/5">
+                    <div className="bg-obs-bg/50 p-1 rounded border border-obs-text/5">
                       <div className="text-[6px] text-obs-muted uppercase font-bold">FPS</div>
                       <div className="text-[7.5px] text-obs-accent font-mono">
                         {selectedScreen?.refreshRate ? `${selectedScreen.refreshRate.toFixed(1)}Hz` : '60Hz'}
                       </div>
                     </div>
-                    <div className="bg-obs-bg/50 p-1 rounded border border-white/5">
+                    <div className="bg-obs-bg/50 p-1 rounded border border-obs-text/5">
                       <div className="text-[6px] text-obs-muted uppercase font-bold">Bit</div>
                       <div className="text-[7.5px] text-obs-text">
                         {selectedScreen?.colorDepth ? `${selectedScreen.colorDepth}b` : '8b'}
@@ -2732,17 +2904,17 @@ const Inspector = React.memo(({
                 </div>
               )}
 
-              <div className="flex justify-between items-center text-[9px] text-obs-text bg-black/40 p-2 rounded border border-white/5">
+              <div className="flex justify-between items-center text-[9px] text-obs-text bg-obs-dark-1 p-2 rounded border border-obs-text/5">
                 <div className="flex flex-col">
                   <span className="text-[7.5px] text-obs-muted uppercase font-bold">Res. Target</span>
                   <span className="font-mono text-obs-accent leading-none mt-0.5">{selectedScreen ? `${selectedScreen.width}x${selectedScreen.height}` : '---'}</span>
                 </div>
                 <button 
                   onClick={onLaunchOutput}
-                  className="px-2 py-1.5 bg-obs-accent hover:bg-obs-accent/80 text-white text-[8.5px] font-black uppercase tracking-widest rounded transition-all flex items-center gap-1.5"
+                  className={`px-2 py-1.5 ${isOutputLaunched ? 'bg-red-500 hover:bg-red-600' : 'bg-obs-accent hover:bg-obs-accent/80'} text-white text-[8.5px] font-black uppercase tracking-widest rounded transition-all flex items-center gap-1.5`}
                 >
                   <MonitorIcon size={9} />
-                  Lanzar
+                  {isOutputLaunched ? 'Cerrar' : 'Lanzar'}
                 </button>
               </div>
             </div>
@@ -2751,7 +2923,7 @@ const Inspector = React.memo(({
 
           <CollapsibleSection 
             title="Transiciones"
-            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: 'cut', transitionDuration: 1000 })}
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: 'cut', transitionDuration: 1 })}
           >
             <div className="space-y-3">
               <div className="flex flex-col gap-1">
@@ -2767,7 +2939,7 @@ const Inspector = React.memo(({
                           : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
                       }`}
                     >
-                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT'}
+                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'NADA'}
                     </button>
                   ))}
                 </div>
@@ -2776,14 +2948,14 @@ const Inspector = React.memo(({
               <PropertyControl 
                 label="Duración"
                 value={externalScreenSettings.transitionDuration}
-                displayValue={`${externalScreenSettings.transitionDuration}ms`}
-                min={0}
-                max={5000}
-                step={100}
-                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, transitionDuration: Math.round(val) })}
+                displayValue={`${externalScreenSettings.transitionDuration.toFixed(1)}s`}
+                min={0.5}
+                max={2.0}
+                step={0.1}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, transitionDuration: val })}
               />
               
-              <div className="p-2 bg-black/40 rounded border border-white/5 text-[8.5px] text-obs-muted leading-tight italic">
+              <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
                 {externalScreenSettings.transitionType === 'fade' && "Fundido cruzado de opacidad."}
                 {externalScreenSettings.transitionType === 'wipe' && "Cortinilla lateral usando crossfader."}
                 {externalScreenSettings.transitionType === 'slide' && "Desplazamiento lateral usando crossfader."}
@@ -2977,7 +3149,7 @@ const Inspector = React.memo(({
             onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, backgroundImage: undefined, showBackground: false, bgScalingW: 100, bgScalingH: 100 })}
           >
             <div className="space-y-3">
-              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-white/5">
+              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5">
                 <div className="flex flex-col">
                   <span className="text-[10px] font-bold text-obs-text uppercase">Mostrar Fondo</span>
                   <span className="text-[8px] text-obs-muted">Activar imagen cuando no hay video</span>
@@ -2993,7 +3165,7 @@ const Inspector = React.memo(({
                   </button>
                   <button 
                     onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, showBackground: !externalScreenSettings.showBackground })}
-                    className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.showBackground ? 'bg-obs-accent' : 'bg-white/10'}`}
+                    className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.showBackground ? 'bg-obs-accent' : 'bg-obs-dark-1'}`}
                   >
                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.showBackground ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
                   </button>
@@ -3058,7 +3230,7 @@ const Inspector = React.memo(({
                 </div>
               </div>
               {externalScreenSettings.backgroundImage && (
-                <div className="aspect-video w-full rounded border border-obs-border overflow-hidden bg-black/40">
+                <div className="aspect-video w-full rounded border border-obs-border overflow-hidden bg-obs-dark-1">
                   <img 
                     src={externalScreenSettings.backgroundImage} 
                     className="w-full h-full object-contain" 
@@ -3165,7 +3337,7 @@ const Inspector = React.memo(({
                     ) : (
                       <img src={clip.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                     )}
-                    <div className="absolute top-2 left-2 bg-black/60 px-1.5 py-0.5 rounded text-[8px] font-bold text-obs-accent uppercase tracking-widest border border-obs-accent/30">
+                    <div className="absolute top-2 left-2 bg-obs-dark-1 px-1.5 py-0.5 rounded text-[8px] font-bold text-obs-accent uppercase tracking-widest border border-obs-accent/30">
                       Preview
                     </div>
                   </div>
@@ -3201,6 +3373,21 @@ const Inspector = React.memo(({
         )}
 
         <div className="space-y-4">
+          {/* Escalado/Transformación Section */}
+          <CollapsibleSection title="ESCALA" defaultOpen={true}>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between bg-obs-dark-1 p-2 rounded border border-obs-border/30">
+                <span className="text-[10px] font-bold text-obs-muted uppercase">Fit to scale (Llenar pantalla)</span>
+                <input 
+                  type="checkbox" 
+                  className="w-3 h-3 accent-obs-accent cursor-pointer"
+                  checked={!!(selectedItem as Clip).fitToScale}
+                  onChange={(e) => onUpdate(selectedItem.id, { fitToScale: e.target.checked })}
+                />
+              </div>
+            </div>
+          </CollapsibleSection>
+
           {/* VIDEO Section (Opacity) */}
           <CollapsibleSection title="VIDEO">
             <div className="space-y-2">
@@ -3224,7 +3411,7 @@ const Inspector = React.memo(({
           {selectedItem.type === 'document' && (
             <CollapsibleSection title="CONTROLES DOCUMENTO" defaultOpen={true}>
               <div className="space-y-3">
-                <div className="flex items-center justify-between bg-black/30 p-4 rounded-lg border border-white/5">
+                <div className="flex items-center justify-between bg-obs-dark-1 p-4 rounded-lg border border-obs-text/5">
                   <button 
                     onClick={() => {
                        if (onUpdateClip) onUpdateClip(selectedItem.id, { currentPage: Math.max(1, (selectedItem.currentPage || 1) - 1) });
@@ -3238,7 +3425,7 @@ const Inspector = React.memo(({
                   
                   <div className="flex flex-col items-center gap-1">
                     <span className="text-[10px] text-obs-muted font-black uppercase tracking-widest mb-1">PÁGINA</span>
-                    <div className="text-3xl font-mono font-black text-obs-accent tabular-nums bg-obs-bg px-4 py-1 rounded border border-white/5 shadow-inner flex items-baseline gap-1">
+                    <div className="text-3xl font-mono font-black text-obs-accent tabular-nums bg-obs-bg px-4 py-1 rounded border border-obs-text/5 shadow-inner flex items-baseline gap-1">
                       {selectedItem.currentPage || 1}
                       {selectedItem.totalPages && (
                         <span className="text-sm text-obs-muted">/ {selectedItem.totalPages}</span>
@@ -3249,7 +3436,7 @@ const Inspector = React.memo(({
                          if (onUpdateClip) onUpdateClip(selectedItem.id, { currentPage: 1 });
                          else onUpdate(selectedItem.id, { currentPage: 1 });
                       }}
-                      className="px-2 py-0.5 mt-1 bg-obs-surface hover:bg-obs-accent text-[9px] uppercase font-bold rounded transition-colors border border-white/5"
+                      className="px-2 py-0.5 mt-1 bg-obs-surface hover:bg-obs-accent text-[9px] uppercase font-bold rounded transition-colors border border-obs-text/5"
                     >
                       Reset
                     </button>
@@ -3268,7 +3455,7 @@ const Inspector = React.memo(({
                   </button>
                 </div>
                 
-                <div className="flex flex-col gap-2 p-3 bg-black/20 rounded border border-white/5 mt-2">
+                <div className="flex flex-col gap-2 p-3 bg-obs-dark-1 rounded border border-obs-text/5 mt-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-bold text-obs-text uppercase">Control por Teclado / Puntero USB</span>
                     <button 
@@ -3286,7 +3473,7 @@ const Inspector = React.memo(({
                   </p>
                 </div>
 
-                <div className="text-[8px] text-obs-muted text-center italic bg-black/20 p-2 rounded border border-white/5 mt-2">
+                <div className="text-[8px] text-obs-muted text-center italic bg-obs-dark-1 p-2 rounded border border-obs-text/5 mt-2">
                   * Los PDFs locales usan el visor integrado. Las presentaciones Online requieren URLs públicas.
                 </div>
               </div>
@@ -3620,7 +3807,7 @@ const Library = React.memo(({
         />
       </div>
 
-      <div className="grid grid-cols-4 border-b border-obs-border bg-black/40">
+      <div className="grid grid-cols-4 border-b border-obs-border bg-obs-dark-1">
         {folders.map(folder => (
           <button
             key={folder.id}
@@ -3671,7 +3858,7 @@ const Library = React.memo(({
                     <img src={file.url} className="w-full h-full object-cover opacity-80" referrerPolicy="no-referrer" />
                   )}
                   {viewMode === 'grid' && (
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                    <div className="absolute bottom-0 left-0 right-0 bg-obs-dark-1 px-1 py-0.5">
                       <div className="text-[7px] truncate text-white uppercase font-bold">{file.type.split('/')[1] || 'DOC'}</div>
                     </div>
                   )}
@@ -3784,7 +3971,7 @@ const PlaylistsSection = React.memo(({
       {isHorizontal ? (
         <div className="flex-1 flex overflow-hidden">
           {/* List of Playlists */}
-          <div className="w-48 border-r border-obs-border overflow-y-auto p-1 space-y-1 bg-black/10">
+          <div className="w-48 border-r border-obs-border overflow-y-auto p-1 space-y-1 bg-obs-dark-1">
             {playlists.map(playlist => (
               <div 
                 key={playlist.id}
@@ -3812,11 +3999,11 @@ const PlaylistsSection = React.memo(({
                         e.stopPropagation();
                         onSetEditingPlaylist(playlist.id);
                       }}
-                      className={`p-2 rounded hover:bg-black/20 transition-colors ${activeId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
+                      className={`p-2 rounded hover:bg-obs-dark-1 transition-colors ${activeId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
                     >
                       <Settings size={18} />
                     </button>
-                    <span className="text-[8px] px-1 rounded bg-black/40 text-obs-muted font-mono">{playlist.clips.length}</span>
+                    <span className="text-[8px] px-1 rounded bg-obs-dark-1 text-obs-muted font-mono">{playlist.clips.length}</span>
                   </div>
                 </div>
               </div>
@@ -3826,7 +4013,7 @@ const PlaylistsSection = React.memo(({
           {/* Clips in Selected Playlist */}
           {selectedPlaylist ? (
             <div 
-              className="flex-1 overflow-x-auto p-2 flex gap-2 bg-black/5"
+              className="flex-1 overflow-x-auto p-2 flex gap-2 bg-obs-dark-1"
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => onDropOnPlaylist(e, selectedPlaylist.id)}
             >
@@ -3845,10 +4032,10 @@ const PlaylistsSection = React.memo(({
                     ) : (
                       <img src={clip.thumbnail} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                     )}
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="absolute inset-0 bg-obs-dark-1 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <span className="text-[8px] font-bold uppercase tracking-widest text-white bg-obs-accent px-2 py-1 rounded shadow-lg">Clip {idx + 1}</span>
                     </div>
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-0.5">
+                    <div className="absolute bottom-0 left-0 right-0 bg-obs-dark-1 px-1.5 py-0.5">
                       <span className="text-[8px] text-white truncate block">{clip.name}</span>
                     </div>
                   </div>
@@ -3911,11 +4098,11 @@ const PlaylistsSection = React.memo(({
                     e.stopPropagation();
                     onSetEditingPlaylist(playlist.id);
                   }}
-                  className={`p-1 rounded hover:bg-black/20 transition-colors ${activeId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
+                  className={`p-1 rounded hover:bg-obs-dark-1 transition-colors ${activeId === playlist.id ? 'text-white' : 'text-obs-muted'}`}
                 >
                   <Settings size={16} />
                 </button>
-                <span className={`text-[8px] px-1 rounded ${activeId === playlist.id ? 'bg-white/20' : 'bg-obs-surface text-obs-muted'}`}>
+                <span className={`text-[8px] px-1 rounded ${activeId === playlist.id ? 'bg-obs-dark-1' : 'bg-obs-surface text-obs-muted'}`}>
                   {playlist.clips.length}
                 </span>
               </div>
@@ -4098,7 +4285,7 @@ const ProgramSection = React.memo(({
                 {activeClip ? activeClip.name : 'Ningún clip'}
               </span>
             </div>
-            <div className="px-2 py-0.5 bg-black/40 rounded text-[8px] font-bold text-obs-accent border border-white/5 uppercase">
+            <div className="px-2 py-0.5 bg-obs-dark-1 rounded text-[8px] font-bold text-obs-accent border border-obs-text/5 uppercase">
               {isPlaylist ? 'Playlist' : 'Clip único'}
             </div>
           </div>
@@ -4113,11 +4300,11 @@ const ProgramSection = React.memo(({
                     {activeClip.totalPages ? `Quedan ${activeClip.totalPages - (activeClip.currentPage || 1)}` : 'Documento'}
                   </span>
                 </div>
-                <div className="h-2.5 bg-black/60 rounded-full overflow-hidden border border-white/5 p-0.5">
+                <div className="h-2.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5 p-0.5">
                   <motion.div 
                     initial={false}
                     animate={{ width: `${activeClip.totalPages ? ((activeClip.currentPage || 1) / activeClip.totalPages) * 100 : 100}%` }}
-                    className="h-full bg-gradient-to-r from-obs-accent to-blue-400 rounded-full shadow-[0_0_10px_rgba(0,170,255,0.4)]"
+                    className="h-full bg-gradient-to-r from-obs-accent to-blue-400 rounded-full shadow-[0_0_10px_rgba(0,163,245,0.4)]"
                   />
                 </div>
                 <div className="flex justify-between text-[7px] font-bold text-obs-muted uppercase tracking-tighter">
@@ -4133,11 +4320,11 @@ const ProgramSection = React.memo(({
                   <span className="text-obs-accent">{formatTime(progress.current)}</span>
                   <span className="text-obs-muted">-{formatTime(timeRemaining > 0 ? timeRemaining : 0)}</span>
                 </div>
-                <div className="h-2.5 bg-black/60 rounded-full overflow-hidden border border-white/5 p-0.5">
+                <div className="h-2.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5 p-0.5">
                   <motion.div 
                     initial={false}
                     animate={{ width: `${percent}%` }}
-                    className="h-full bg-gradient-to-r from-obs-accent to-blue-400 rounded-full shadow-[0_0_10px_rgba(0,170,255,0.4)]"
+                    className="h-full bg-gradient-to-r from-obs-accent to-blue-400 rounded-full shadow-[0_0_10px_rgba(0,163,245,0.4)]"
                   />
                 </div>
                 <div className="flex justify-between text-[7px] font-bold text-obs-muted uppercase tracking-tighter">
@@ -4154,7 +4341,7 @@ const ProgramSection = React.memo(({
           <span className="text-[8px] font-black text-obs-muted uppercase tracking-widest px-1">Pantallas de Salida</span>
           <div className="grid grid-cols-1 gap-1">
             {activeScreensList.length > 0 ? activeScreensList.map(screen => (
-              <div key={screen.id} className="flex items-center gap-2 p-1.5 bg-obs-surface/50 rounded border border-white/5">
+              <div key={screen.id} className="flex items-center gap-2 p-1.5 bg-obs-surface/50 rounded border border-obs-text/5">
                 <Radio size={10} className="text-green-500" />
                 <span className="text-[9px] font-bold text-obs-text uppercase truncate">ID: {screen.name}</span>
               </div>
@@ -4175,6 +4362,7 @@ const LayersSection = React.memo(({
   layers, 
   activeColumnTrigger,
   activeLayerTriggers,
+  columnUIStates,
   setActiveColumnTrigger,
   setActiveLayerTriggers,
   onAddLayer, 
@@ -4189,6 +4377,7 @@ const LayersSection = React.memo(({
   onUpdateLayer,
   onUpdateClip,
   onSelectLayer,
+  onPreviewClip,
   outputs,
   externalScreens,
   clips,
@@ -4196,9 +4385,10 @@ const LayersSection = React.memo(({
 }: { 
   layers: Layer[], 
   activeColumnTrigger: number | null,
-  activeLayerTriggers: Record<string, boolean>,
+  activeLayerTriggers: Record<string, 'play' | 'stop' | null>,
+  columnUIStates: Record<number, 'play' | 'stop' | null>,
   setActiveColumnTrigger: (val: number | null) => void,
-  setActiveLayerTriggers: React.Dispatch<React.SetStateAction<Record<string, boolean>>>,
+  setActiveLayerTriggers: React.Dispatch<React.SetStateAction<Record<string, 'play' | 'stop' | null>>>,
   onAddLayer: () => void, 
   onRemoveLayer: (layerId: string) => void,
   onTriggerClip: (layerId: string, slotIdx: number, mode?: 'single' | 'sequence') => void,
@@ -4211,6 +4401,7 @@ const LayersSection = React.memo(({
   onUpdateLayer: (layerId: string, updates: Partial<Layer>) => void,
   onUpdateClip: (clipId: string, updates: Partial<Clip>) => void,
   onSelectLayer: (layerId: string) => void,
+  onPreviewClip: (clip: Clip) => void,
   outputs: any[],
   externalScreens: Screen[],
   clips: Clip[],
@@ -4220,11 +4411,11 @@ const LayersSection = React.memo(({
   const columnsCount = layers[0]?.slots.length || 0;
 
   return (
-    <div className="flex flex-col bg-obs-bg border-b border-obs-border">
-      <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-surface">
+    <div className="flex flex-col bg-obs-bg border-b border-obs-border pb-32">
+      <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-dark-1">
         <div className="flex items-center gap-2">
           <Grid size={12} className="text-obs-accent" />
-          <span className="text-[10px] font-bold uppercase tracking-wider text-obs-muted">Capas (Control de Salidas Directo)</span>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-white">Capas (Control de Salidas Directo)</span>
         </div>
         <button 
           onClick={onAddLayer}
@@ -4236,32 +4427,38 @@ const LayersSection = React.memo(({
       </div>
       <div className="p-2 space-y-3 overflow-visible">
         {/* Column Triggers Header */}
-        <div className="flex gap-2 items-end mb-1 sticky top-0 bg-obs-bg z-10 pb-2 border-b border-white/5">
-          <div className="w-32 shrink-0 px-2 py-1 text-[8px] font-black text-obs-muted uppercase flex items-center gap-1.5">
+        <div className="flex gap-2 items-end mb-1 sticky top-0 bg-obs-bg z-10 pb-2 border-b border-obs-text/5">
+          <div className="w-48 shrink-0 px-2 py-1 text-[8px] font-black text-obs-muted uppercase flex items-center gap-1.5">
             <Zap size={10} className="text-obs-accent" />
             TRIGGERS
           </div>
-          <div className="flex-1 flex gap-1">
-             {Array.from({ length: columnsCount }).map((_, colIdx) => {
-               const isActive = activeColumnTrigger === colIdx;
-               return (
-                 <div key={colIdx} className="w-32 shrink-0 flex flex-col gap-0.5">
-                    <button 
-                      onClick={() => onTriggerColumn(colIdx)}
-                      className={`w-full py-1.5 rounded-[2px] text-[8px] font-black uppercase tracking-tighter transition-all shadow-lg active:scale-95 ${isActive ? 'bg-obs-accent text-white shadow-[0_0_12px_rgba(0,170,255,0.5)] opacity-100 ring-1 ring-white/20' : 'bg-obs-accent/30 text-white/40 hover:bg-obs-accent/50 opacity-60'}`}
-                    >
-                      PLAY {colIdx + 1}
-                    </button>
-                    <button 
-                      onClick={() => onStopColumn(colIdx)}
-                      className={`w-full py-0.5 rounded-[2px] text-[6.5px] font-black uppercase tracking-tighter border transition-all shadow active:scale-95 ${activeColumnTrigger === null ? 'bg-obs-accent/10 text-obs-muted/20 border-white/5' : isActive ? 'bg-red-500 text-white border-red-400 shadow-[0_0_10px_rgba(239,68,68,0.5)] opacity-100' : 'bg-red-950/30 text-red-500/40 hover:bg-red-800/60 border-red-500/10 opacity-60'}`}
-                    >
-                      STOP
-                    </button>
-                 </div>
-               );
-             })}
-          </div>
+              <div className="flex-1 flex gap-1">
+                 {Array.from({ length: columnsCount }).map((_, colIdx) => {
+                   const state = columnUIStates[colIdx];
+                   return (
+                     <div key={colIdx} className="w-[140px] shrink-0">
+                        <div className="w-full h-full flex gap-1">
+                          <div className="flex-1 flex gap-0.5">
+                            <button 
+                              onClick={() => onTriggerColumn(colIdx)} 
+                              className={`flex-1 rounded-[2px] border-2 flex items-center justify-center h-6 transition-colors ${state === 'play' ? 'bg-green-500/20 border-green-500 text-green-500' : 'bg-transparent border-gray-400 text-gray-400 hover:bg-gray-400/10'}`}
+                              title={`Play Column ${colIdx + 1}`}
+                            >
+                              <Play size={10} fill="currentColor" />
+                            </button>
+                            <button 
+                              onClick={() => onStopColumn(colIdx)} 
+                              className={`flex-1 rounded-[2px] border-2 flex items-center justify-center h-6 transition-colors ${state === 'stop' ? 'bg-red-500/20 border-red-500 text-red-500' : 'bg-transparent border-gray-400 text-gray-400 hover:bg-gray-400/10'}`}
+                              title={`Stop Column ${colIdx + 1}`}
+                            >
+                              <Square size={8} fill="currentColor" />
+                            </button>
+                          </div>
+                        </div>
+                     </div>
+                   );
+                 })}
+              </div>
         </div>
 
         <div className="space-y-3">
@@ -4272,18 +4469,17 @@ const LayersSection = React.memo(({
                   onSelectLayer(layer.id);
                   onUpdateLayer(layer.id, {});
                 }}
-                className={`w-32 h-16 px-2 py-1.5 border rounded flex flex-col justify-between group relative overflow-visible shrink-0 cursor-pointer transition-all ${
-                  layer.activeClipId ? 'bg-obs-surface' : 'bg-black/10'
+                className={`w-48 h-[92px] px-2 py-1.5 border rounded flex flex-col justify-between group relative overflow-visible shrink-0 cursor-pointer transition-all ${
+                  layer.activeClipId ? 'bg-obs-surface' : 'bg-obs-dark-1'
                 } ${layers.find(l => l.activeClipId === l.slots.find(s => s?.id === layer.activeClipId)?.id) ? 'border-obs-accent ring-1 ring-obs-accent/20' : 'border-obs-border'}`}
               >
                 <div className="flex justify-between items-center w-full min-h-[14px]">
-                  <div className="flex items-center gap-1 overflow-hidden">
-                    <span className="text-[7px] font-bold text-obs-muted">#{lIdx + 1}</span>
-                    <span className="text-[8px] font-black text-obs-text group-hover:text-obs-accent transition-colors truncate uppercase tracking-tighter">{layer.name}</span>
+                  <div className="bg-obs-accent text-white px-1.5 py-0.5 rounded-[2px] text-[7.5px] font-black uppercase tracking-tight max-w-[55%] truncate shadow-sm">
+                    {layer.name}
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-0.5">
                     {layer.activeClipId && clips.find(c => c.id === layer.activeClipId)?.type === 'document' && (
-                      <div className="flex items-center bg-black/40 rounded px-1 group shadow-sm border border-white/5">
+                      <div className="flex items-center bg-obs-dark-1 rounded px-1 group shadow-sm border border-obs-text/5 absolute -top-4 right-0 z-10 w-auto">
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
@@ -4292,9 +4488,9 @@ const LayersSection = React.memo(({
                           }}
                           className="hover:text-obs-accent p-0.5"
                         >
-                          <ChevronLeft size={10} strokeWidth={3} />
+                          <ChevronLeft size={6} strokeWidth={3} />
                         </button>
-                        <span className="text-[8px] font-mono font-bold text-obs-accent min-w-[12px] text-center">
+                        <span className="text-[6px] font-mono font-bold text-obs-accent min-w-[10px] text-center">
                           {(() => {
                             const clip = clips.find(c => c.id === layer.activeClipId);
                             if (!clip) return null;
@@ -4309,39 +4505,48 @@ const LayersSection = React.memo(({
                           }}
                           className="hover:text-obs-accent p-0.5"
                         >
-                          <ChevronRight size={10} strokeWidth={3} />
+                          <ChevronRight size={6} strokeWidth={3} />
                         </button>
                       </div>
                     )}
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { muted: !layer.muted }); }}
+                      className={`w-5 h-5 flex items-center justify-center rounded-[2px] transition-colors ${!layer.muted ? 'bg-obs-accent text-black shadow-[0_0_8px_rgba(0,163,245,0.4)]' : 'bg-transparent text-obs-muted hover:bg-obs-accent/20'}`}
+                      title={layer.muted ? "Activar audio" : "Silenciar"}
+                    >
+                      <Volume2 size={12} />
+                    </button>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { isVisible: !layer.isVisible }); }}
+                      className={`w-5 h-5 flex items-center justify-center rounded-[2px] transition-colors ${layer.isVisible ? 'bg-obs-accent text-black shadow-[0_0_8px_rgba(0,163,245,0.4)]' : 'bg-transparent text-obs-muted hover:bg-obs-accent/20'}`}
+                      title={layer.isVisible ? "Ocultar capa" : "Mostrar capa"}
+                    >
+                      <Eye size={12} />
+                    </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); onRemoveLayer(layer.id); }}
-                      className="text-red-500 hover:text-white hover:bg-red-500 p-0.5 rounded transition-colors opacity-0 group-hover:opacity-100"
+                      className="w-5 h-5 flex items-center justify-center rounded-[2px] transition-colors bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.4)] hover:bg-red-600"
                       title="Eliminar capa"
                     >
-                      <Trash2 size={8} />
+                      <Trash2 size={12} />
                     </button>
                   </div>
                 </div>
               
-              <div className="relative w-full">
+              <div className="relative w-full mt-0.5">
                 <button 
                   onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(activeOutputMenu === layer.id ? null : layer.id); }}
-                  className={`w-full py-1 rounded-[2px] text-[7px] font-black uppercase tracking-tighter transition-all flex items-center justify-center gap-1 border ${layerOutputs[layer.id] ? 'bg-obs-accent text-white border-obs-accent shadow-[0_4px_10px_rgba(0,170,255,0.4)]' : 'bg-black/40 text-obs-muted border-white/10 hover:border-obs-accent hover:text-obs-accent hover:border-obs-accent/50'}`}
+                  className={`w-full py-0.5 px-1 rounded-[2px] text-[7.5px] font-black uppercase tracking-tighter transition-all flex items-center justify-between gap-1 border ${layerOutputs[layer.id] ? 'bg-obs-accent/20 text-obs-accent border-obs-accent/30 shadow-[0_2px_5px_rgba(0,163,245,0.1)]' : 'bg-transparent text-white border-transparent hover:border-obs-text/10'}`}
                 >
-                  <MonitorIcon size={7} />
-                  <span>{layerOutputs[layer.id] ? `OUT ${layerOutputs[layer.id]}` : 'PROGRAM'}</span>
-                   <ChevronDown size={7} className={`transition-transform ${activeOutputMenu === layer.id ? 'rotate-180' : ''}`} />
+                  <div className="flex gap-1.5 items-center">
+                    <MonitorIcon size={7} className="text-obs-accent" />
+                    <span>{layerOutputs[layer.id] ? `OUT ${layerOutputs[layer.id]}` : 'PROGRAM'}</span>
+                  </div>
+                  <ChevronDown size={7} className={`text-obs-muted transition-transform ${activeOutputMenu === layer.id ? 'rotate-180' : ''}`} />
                 </button>
                 
                 {activeOutputMenu === layer.id && (
-                  <div className="absolute top-full left-0 w-full min-w-[120px] bg-obs-surface border border-obs-border rounded-md shadow-[0_4px_20px_rgba(0,0,0,0.8)] z-[300] mt-1 overflow-hidden">
-                    <div className="px-2 py-1 bg-black/40 border-b border-white/5 flex justify-between items-center">
-                      <span className="text-[7px] font-black text-obs-muted uppercase tracking-widest">Salida</span>
-                      <button onClick={(e) => { e.stopPropagation(); setActiveOutputMenu(null); }} className="text-obs-muted hover:text-white transition-colors">
-                        <X size={8} />
-                      </button>
-                    </div>
-                    <div className="max-h-40 overflow-y-auto custom-scrollbar">
+                  <div className="absolute bottom-full left-0 bg-obs-surface border border-obs-border rounded shadow-[0_-8px_30px_rgba(0,0,0,0.9)] z-[1000] mb-1 p-1 flex flex-row flex-wrap gap-1 min-w-[200px] max-w-[280px]">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -4349,13 +4554,11 @@ const LayersSection = React.memo(({
                           onUpdateLayer(layer.id, { outputId: null });
                           setActiveOutputMenu(null);
                         }}
-                        className={`w-full py-2 px-3 text-[8px] font-black text-left uppercase hover:bg-obs-accent hover:text-white transition-colors border-b border-white/5 flex items-center justify-between ${!layerOutputs[layer.id] ? 'bg-obs-accent/20 text-obs-accent' : 'text-obs-muted'}`}
+                        className={`h-7 px-2 text-[7px] font-black rounded flex items-center justify-center transition-all ${!layerOutputs[layer.id] ? 'bg-obs-accent text-white shadow-lg' : 'bg-obs-dark-1 text-obs-muted hover:bg-white/5'}`}
                       >
-                         <span>PROGRAM</span>
-                         {!layerOutputs[layer.id] && <Check size={8} />}
+                         PROGRAM
                       </button>
                       {outputs.map(out => {
-                        const screen = externalScreens.find(s => s.id === out.physicalScreenId);
                         const isSelected = layerOutputs[layer.id] === out.id;
                         return (
                           <button
@@ -4366,30 +4569,25 @@ const LayersSection = React.memo(({
                               onUpdateLayer(layer.id, { outputId: out.id });
                               setActiveOutputMenu(null);
                             }}
-                            className={`w-full py-2 px-3 text-[8px] font-black text-left uppercase hover:bg-obs-accent hover:text-white transition-colors border-b border-white/5 last:border-0 flex items-center justify-between ${isSelected ? 'bg-obs-accent/20 text-obs-accent' : 'text-obs-muted'}`}
+                            className={`h-7 px-2 text-[7px] font-black rounded flex items-center justify-center transition-all min-w-[30px] ${isSelected ? 'bg-obs-accent text-white shadow-lg' : 'bg-obs-dark-1 text-obs-muted hover:bg-white/5'}`}
                           >
-                             <div className="flex flex-col">
-                               <span>OUT {out.id}</span>
-                               {screen && <span className="text-[6px] opacity-60 normal-case font-medium">{screen.name}</span>}
-                             </div>
-                             {isSelected && <Check size={8} />}
+                             OUT {out.id}
                           </button>
                         );
                       })}
-                    </div>
                   </div>
                 )}
               </div>
 
-              <div className="flex items-center gap-1 w-full justify-between">
-                <div className="flex gap-0.5">
+              <div className="flex items-center gap-2.5 w-full mt-0.5">
+                <div className="flex gap-1">
                   <button 
                     title="Play Layer"
                     onClick={(e) => {
                       e.stopPropagation();
-                      const isStarting = !layer.isPlaying || activeLayerTriggers[layer.id] === false;
+                      const isStarting = !layer.isPlaying || activeLayerTriggers[layer.id] !== 'play';
                       setActiveColumnTrigger(null);
-                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: isStarting }));
+                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: isStarting ? 'play' : 'stop' }));
                       onUpdateLayer(layer.id, { isPlaying: isStarting, playbackMode: 'sequence' });
                       if (isStarting) {
                         const currentIdx = layer.activeSlotIndex !== null ? layer.activeSlotIndex : 
@@ -4398,38 +4596,62 @@ const LayersSection = React.memo(({
                         if (targetIdx !== -1) onTriggerClip(layer.id, targetIdx, 'sequence');
                       }
                     }}
-                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${activeLayerTriggers[layer.id] ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,170,255,0.4)]' : 'bg-obs-accent/20 text-obs-accent/50 hover:bg-obs-accent/40 border-obs-accent/20'}`}
+                    className={`w-6 h-6 flex items-center justify-center rounded-[2px] transition-all border-2 ${activeLayerTriggers[layer.id] === 'play' ? 'bg-green-500/20 border-green-500 text-green-500 shadow-[0_0_10px_rgba(34,197,94,0.3)]' : 'bg-transparent border-gray-400/50 text-gray-400 hover:bg-gray-400/10'}`}
                   >
-                    <Play size={5} fill="currentColor" />
+                    <Play size={10} fill="currentColor" />
                   </button>
                   <button 
                     title="Stop Layer"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: false }));
+                      setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: 'stop' }));
                       onUpdateLayer(layer.id, { isPlaying: false, activeClipId: null, activeSlotIndex: null });
                     }}
-                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${!layer.isPlaying && activeLayerTriggers[layer.id] === false ? 'bg-red-500 text-white border-red-400 shadow-[0_0_8px_rgba(239,68,68,0.4)]' : 'bg-obs-bg/50 text-obs-muted border-white/5 hover:bg-red-500/20'}`}
+                    className={`w-6 h-6 flex items-center justify-center rounded-[2px] transition-all border-2 ${activeLayerTriggers[layer.id] === 'stop' ? 'bg-red-500/20 border-red-500 text-red-500 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'bg-transparent border-gray-400/50 text-gray-400 hover:bg-gray-400/10'}`}
                   >
-                    <Square size={5} fill="currentColor" />
+                    <Square size={8} fill="currentColor" />
+                  </button>
+                  <button 
+                    title="Loop Playlist"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUpdateLayer(layer.id, { loop: !(layer.loop !== false) });
+                    }}
+                    className={`w-6 h-6 flex items-center justify-center rounded-[2px] transition-all border-2 ${layer.loop !== false ? 'bg-obs-accent/20 border-obs-accent text-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.3)]' : 'bg-transparent border-gray-400/50 text-gray-400 hover:bg-gray-400/10'}`}
+                  >
+                    <RefreshCw size={10} />
                   </button>
                 </div>
                 
-                <div className="flex gap-0.5">
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { isVisible: !layer.isVisible }); }}
-                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${layer.isVisible ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-bg/50 text-obs-muted border-white/5 hover:bg-obs-accent/20'}`}
-                    title={layer.isVisible ? "Ocultar capa" : "Mostrar capa"}
-                  >
-                    <Eye size={7} />
-                  </button>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { muted: !layer.muted }); }}
-                    className={`w-3.5 h-3.5 flex items-center justify-center rounded-[2px] transition-colors border ${!layer.muted ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-bg/50 text-obs-muted border-white/5 hover:bg-obs-accent/20'}`}
-                    title={layer.muted ? "Activar audio" : "Silenciar"}
-                  >
-                    <Volume2 size={7} />
-                  </button>
+                <div className="flex-1 flex flex-col gap-1 pr-1 min-w-0">
+                  <div className="flex justify-between items-center bg-obs-dark-2 rounded-[2px] px-1 h-8 border border-white/5">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { opacity: Math.max(0, (layer.opacity || 0) - 0.05) }); }}
+                      className="text-[12px] text-white hover:text-obs-accent px-1.5 font-mono transition-colors active:scale-95"
+                    >-</button>
+                    <div className="flex-1 flex items-center relative group px-1 h-full min-w-0">
+                       <input 
+                         type="number"
+                         min="0" max="100"
+                         value={Math.round((layer.opacity || 0) * 100)}
+                         onChange={(e) => {
+                           const val = parseInt(e.target.value);
+                           if (!isNaN(val)) {
+                             onUpdateLayer(layer.id, { opacity: Math.max(0, Math.min(100, val)) / 100 });
+                           }
+                         }}
+                         className="w-full bg-transparent text-white text-[11px] text-center font-black focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                       />
+                    </div>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); onUpdateLayer(layer.id, { opacity: Math.min(1, (layer.opacity || 0) + 0.05) }); }}
+                      className="text-[12px] text-white hover:text-obs-accent px-1.5 font-mono transition-colors active:scale-95"
+                    >+</button>
+                  </div>
+                  <div className="flex justify-between items-center text-[6px] text-obs-muted font-black px-1 uppercase tracking-widest mt-[-2px] overflow-hidden">
+                    <span className="truncate">OPACIDAD</span>
+                    <span className="shrink-0">{Math.round((layer.opacity || 0) * 100)}%</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4443,9 +4665,9 @@ const LayersSection = React.memo(({
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => onDropOnLayer(e, layer.id, idx)}
                   onClick={() => onTriggerClip(layer.id, idx)}
-                  className={`flex-shrink-0 w-32 h-16 rounded border-2 cursor-pointer transition-all relative group overflow-hidden ${
-                    slot ? 'bg-obs-surface' : 'bg-black/20 border-dashed border-obs-border hover:border-obs-muted'
-                  } ${layer.activeClipId === slot?.id && slot ? 'border-obs-accent shadow-[0_0_10px_rgba(0,170,255,0.3)]' : 'border-obs-border'}`}
+                  className={`flex-shrink-0 w-[140px] h-[92px] rounded border cursor-pointer transition-all relative group overflow-hidden ${
+                    slot ? 'bg-obs-surface border-obs-border' : 'bg-obs-dark-1 border-obs-border/30 hover:border-obs-accent/50'
+                  } ${layer.activeClipId === slot?.id && slot ? 'border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.3)]' : ''}`}
                 >
                   {slot ? (
                     <>
@@ -4458,9 +4680,19 @@ const LayersSection = React.memo(({
                       ) : (
                         <img src={slot.thumbnail} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" />
                       )}
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5">
+                      <div className="absolute bottom-0 left-0 right-0 bg-obs-dark-1 px-1 py-0.5 z-10">
                         <span className="text-[7px] text-white truncate block">{slot.name}</span>
                       </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPreviewClip(slot);
+                        }}
+                        className="absolute top-1 right-8 h-5 px-1.5 bg-obs-accent text-white rounded-[2px] text-[8px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-all hover:bg-white hover:text-obs-accent shadow-lg z-20"
+                        title="VISTA PREVIA"
+                      >
+                        PREV
+                      </button>
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
@@ -4468,7 +4700,7 @@ const LayersSection = React.memo(({
                           newSlots[idx] = null;
                           onUpdateLayer(layer.id, { slots: newSlots });
                         }}
-                        className="absolute top-0.5 right-0.5 p-0.5 bg-black/60 rounded text-red-500 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 hover:text-white"
+                        className="absolute top-1 right-1 h-5 w-5 flex items-center justify-center bg-obs-dark-1 border border-obs-text/10 rounded-[2px] text-red-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500 hover:text-white z-20"
                       >
                          <X size={10} />
                       </button>
@@ -4508,7 +4740,7 @@ const PiPSection = React.memo(({
 }) => {
   return (
     <div className="flex flex-col w-48 bg-obs-surface border border-obs-border rounded-lg overflow-hidden shrink-0" style={{ maxHeight: '300px' }}>
-      <div className="px-2 py-1.5 border-b border-obs-border bg-black/20 flex items-center justify-between">
+      <div className="px-2 py-1.5 border-b border-obs-border bg-obs-dark-1 flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <Layers size={12} className="text-obs-accent" />
           <span className="text-[10px] font-black uppercase tracking-wider text-obs-text">PiP Panels</span>
@@ -4520,7 +4752,7 @@ const PiPSection = React.memo(({
       
       <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar px-1">
         {layers.map(layer => (
-          <div key={layer.id} className={`p-2 rounded border transition-all ${layer.isActive ? 'bg-obs-accent/10 border-obs-accent' : 'bg-black/20 border-white/5 hover:border-white/10'}`}>
+          <div key={layer.id} className={`p-2 rounded border transition-all ${layer.isActive ? 'bg-obs-accent/10 border-obs-accent' : 'bg-obs-dark-1 border-obs-text/5 hover:border-obs-text/10'}`}>
             <div className="flex justify-between items-center mb-2">
               <span className={`text-[9px] font-bold uppercase ${layer.isActive ? 'text-obs-accent' : 'text-obs-muted'}`}>{layer.name}</span>
               <div className="flex gap-1">
@@ -4539,7 +4771,7 @@ const PiPSection = React.memo(({
                   <select 
                     value={layer.clipId || ''}
                     onChange={(e) => onUpdateLayer(layer.id, { clipId: e.target.value || null })}
-                    className="w-full bg-black/40 border border-white/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
+                    className="w-full bg-obs-dark-1 border border-obs-text/10 rounded px-1 py-1 text-[9px] text-obs-text outline-none focus:border-obs-accent"
                   >
                     <option value="">No Source</option>
                     {clips.map(c => (
@@ -4555,7 +4787,7 @@ const PiPSection = React.memo(({
                       type="number" 
                       value={layer.x} 
                       onChange={(e) => onUpdateLayer(layer.id, { x: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                      className="w-full bg-obs-dark-1 border border-obs-text/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
                     />
                   </div>
                   <div className="flex flex-col gap-0.5">
@@ -4564,7 +4796,7 @@ const PiPSection = React.memo(({
                       type="number" 
                       value={layer.y} 
                       onChange={(e) => onUpdateLayer(layer.id, { y: parseInt(e.target.value) || 0 })}
-                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                      className="w-full bg-obs-dark-1 border border-obs-text/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
                     />
                   </div>
                </div>
@@ -4576,7 +4808,7 @@ const PiPSection = React.memo(({
                       type="number" 
                       value={layer.width} 
                       onChange={(e) => onUpdateLayer(layer.id, { width: parseInt(e.target.value) || 100 })}
-                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                      className="w-full bg-obs-dark-1 border border-obs-text/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
                     />
                   </div>
                   <div className="flex flex-col gap-0.5">
@@ -4585,7 +4817,7 @@ const PiPSection = React.memo(({
                       type="number" 
                       value={layer.height} 
                       onChange={(e) => onUpdateLayer(layer.id, { height: parseInt(e.target.value) || 100 })}
-                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                      className="w-full bg-obs-dark-1 border border-obs-text/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
                     />
                   </div>
                </div>
@@ -4600,7 +4832,7 @@ const PiPSection = React.memo(({
                       max="1"
                       value={layer.opacity} 
                       onChange={(e) => onUpdateLayer(layer.id, { opacity: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-black/60 border border-white/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
+                      className="w-full bg-obs-dark-1 border border-obs-text/5 rounded px-1 py-0.5 text-[9px] text-obs-accent font-mono outline-none"
                     />
                   </div>
                   <div className="flex flex-col gap-0.5">
@@ -4608,7 +4840,7 @@ const PiPSection = React.memo(({
                     <select 
                       value={layer.targetOutputId || ''}
                       onChange={(e) => onUpdateLayer(layer.id, { targetOutputId: e.target.value || null })}
-                      className="w-full bg-black border border-white/10 rounded px-1 py-0.5 text-[8.5px] text-white font-bold outline-none"
+                      className="w-full bg-black border border-obs-text/10 rounded px-1 py-0.5 text-[8.5px] text-white font-bold outline-none"
                     >
                       <option value="" className="bg-obs-surface text-white">Prog</option>
                       <option value="1" className="bg-obs-surface text-white">Out 1</option>
@@ -4621,13 +4853,13 @@ const PiPSection = React.memo(({
                <div className="grid grid-cols-2 gap-1.5 pt-1">
                   <button 
                     onClick={() => onUpdateLayer(layer.id, { showInPreview: !layer.showInPreview })}
-                    className={`py-1 rounded text-[7px] font-black uppercase tracking-tighter transition-all border ${layer.showInPreview ? 'bg-obs-accent text-white border-obs-accent' : 'bg-black/20 text-obs-muted border-white/5'}`}
+                    className={`py-1 rounded text-[7px] font-black uppercase tracking-tighter transition-all border ${layer.showInPreview ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-dark-1 text-obs-muted border-obs-text/5'}`}
                   >
                     PREVIEW {layer.showInPreview ? 'ON' : 'OFF'}
                   </button>
                   <button 
                     onClick={() => onUpdateLayer(layer.id, { showFrame: !layer.showFrame })}
-                    className={`py-1 rounded text-[7px] font-black uppercase tracking-tighter transition-all border ${layer.showFrame !== false ? 'bg-obs-accent text-white border-obs-accent' : 'bg-black/20 text-obs-muted border-white/5'}`}
+                    className={`py-1 rounded text-[7px] font-black uppercase tracking-tighter transition-all border ${layer.showFrame !== false ? 'bg-obs-accent text-white border-obs-accent' : 'bg-obs-dark-1 text-obs-muted border-obs-text/5'}`}
                   >
                     FRAME {layer.showFrame !== false ? 'ON' : 'OFF'}
                   </button>
@@ -4700,7 +4932,7 @@ const MixerSection = React.memo(({
         ].map((source, i) => (
           <div key={source.name} className="flex gap-2 h-full items-end min-w-[60px]">
             {/* VU Meter */}
-            <div className="w-1.5 h-full max-h-[120px] bg-black/40 rounded-sm border border-white/5 relative overflow-hidden flex flex-col justify-end">
+            <div className="w-1.5 h-full max-h-[120px] bg-obs-dark-1 rounded-sm border border-obs-text/5 relative overflow-hidden flex flex-col justify-end">
               <div 
                 className="w-full bg-green-500/50 border-t border-green-400 transition-all duration-75" 
                 style={{ 
@@ -4713,7 +4945,7 @@ const MixerSection = React.memo(({
             {/* Fader */}
             <div className="flex flex-col items-center gap-1.5 h-full">
               <div 
-                className="w-5 h-full max-h-[120px] relative bg-black/60 rounded-sm border border-white/5 cursor-ns-resize overflow-hidden group"
+                className="w-5 h-full max-h-[120px] relative bg-obs-dark-1 rounded-sm border border-obs-text/5 cursor-ns-resize overflow-hidden group"
                 style={faderBgStyle}
                 onMouseDown={(e) => {
                   e.preventDefault();
@@ -4750,7 +4982,7 @@ const MixerSection = React.memo(({
                   style={{ height: `${source.volume * 100}%` }}
                 />
                 <div 
-                  className="absolute inset-x-0 bg-obs-accent h-1 shadow-[0_0_10px_rgba(0,170,255,0.8)] transition-all duration-75"
+                  className="absolute inset-x-0 bg-obs-accent h-1 shadow-[0_0_10px_rgba(0,163,245,0.8)] transition-all duration-75"
                   style={{ bottom: `calc(${source.volume * 100}% - 1px)` }}
                 />
               </div>
@@ -4765,6 +4997,227 @@ const MixerSection = React.memo(({
     </div>
   );
 });
+
+const OutputManagerModal = ({ 
+  outputs, 
+  externalScreens, 
+  activeOutputId, 
+  onClose, 
+  onApply 
+}: {
+  outputs: any[],
+  externalScreens: any[],
+  activeOutputId: string,
+  onClose: () => void,
+  onApply: (newOutputs: any[]) => void
+}) => {
+  const [localOutputs, setLocalOutputs] = useState([...outputs]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-obs-bg/90 backdrop-blur-sm">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-obs-bg border border-obs-border rounded-lg shadow-2xl w-[400px] flex flex-col overflow-hidden"
+      >
+        <div className="px-4 py-3 border-b border-obs-border bg-obs-surface flex justify-between items-center">
+          <span className="font-bold text-sm">Gestionar Salidas (Outputs)</span>
+          <button onClick={onClose} className="text-obs-muted hover:text-white">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-4 flex flex-col gap-4">
+          <button 
+            onClick={() => {
+              if (externalScreens.length > 0 && localOutputs.length >= externalScreens.length) {
+                alert(`No puedes crear más salidas que pantallas físicas detectadas (${externalScreens.length}).`);
+                return;
+              }
+              const newId = String(Date.now());
+              setLocalOutputs([...localOutputs, { id: String(localOutputs.length + 1), name: `Salida ${localOutputs.length + 1}`, physicalScreenId: null, internalId: newId }]);
+            }}
+            className="w-full py-2 bg-obs-accent hover:bg-obs-accent-hover text-white rounded font-bold text-sm disabled:opacity-50"
+            disabled={externalScreens.length > 0 && localOutputs.length >= externalScreens.length}
+          >
+            + Agregar Nueva Salida
+          </button>
+          <div className="flex flex-col gap-3">
+            {localOutputs.map(out => (
+                <div key={`output-manage-item-${out.internalId || out.id}`} className="flex flex-col gap-2 bg-obs-dark-1 p-3 rounded border border-obs-text/10">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold">Salida {out.id}</span>
+                    <button onClick={() => {
+                      if(localOutputs.length > 1) setLocalOutputs(localOutputs.filter(o => o.id !== out.id));
+                    }} className="text-red-400 hover:text-red-300">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-obs-muted uppercase font-bold">Pantalla Física</span>
+                    <select 
+                      value={out.physicalScreenId || ''} 
+                      onChange={(e) => {
+                        const screenId = e.target.value;
+                        setLocalOutputs(localOutputs.map(o => o.id === out.id ? { ...o, physicalScreenId: screenId || null } : o));
+                      }}
+                      className="bg-black border border-obs-border rounded px-2 py-1 text-xs text-white outline-none focus:border-obs-accent"
+                    >
+                      <option value="">No asignada</option>
+                      {externalScreens.map(screen => (
+                        <option key={screen.id} value={screen.id}>
+                          {screen.name || `Monitor ${screen.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+            ))}
+          </div>
+        </div>
+        <div className="px-4 py-3 border-t border-obs-border bg-obs-surface flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded text-obs-text hover:text-white transition-colors text-xs font-bold uppercase tracking-wider">
+            Cancelar
+          </button>
+          <button onClick={() => onApply(localOutputs)} className="px-5 py-2 rounded bg-obs-accent text-white hover:bg-obs-accent-hover transition-colors text-xs font-bold uppercase tracking-wider shadow-lg">
+            Aceptar
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const PreviewManagerModal = ({
+  previews,
+  outputs,
+  onClose,
+  onApply
+}: {
+  previews: any[],
+  outputs: any[],
+  onClose: () => void,
+  onApply: (newPreviews: any[]) => void
+}) => {
+  const [localPreviews, setLocalPreviews] = useState([...previews]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-obs-bg/90 backdrop-blur-sm">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-obs-bg border border-obs-border rounded-lg shadow-2xl w-[500px] flex flex-col overflow-hidden"
+      >
+        <div className="px-4 py-3 border-b border-obs-border bg-obs-surface flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <Eye size={16} className="text-obs-accent" />
+            <span className="font-bold text-sm uppercase tracking-widest">Configuración de Previews</span>
+          </div>
+          <button onClick={onClose} className="text-obs-muted hover:text-white transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-4 flex flex-col gap-4 bg-obs-bg">
+          <button 
+            onClick={() => {
+                const nextId = String(Math.max(0, ...localPreviews.map(p => parseInt(p.id))) + 1);
+                setLocalPreviews([...localPreviews, { 
+                  id: nextId, 
+                  name: `Preview ${nextId}`, 
+                  clipId: null, 
+                  volume: 0.5, 
+                  isLive: false,
+                  assignedOutputs: outputs.map(o => o.id),
+                  selectedOutputs: [],
+                  hideOverlay: false,
+                  overlayColor: '#00a3f5'
+                }]);
+            }}
+            className="w-full py-2.5 bg-obs-accent hover:bg-obs-accent-hover text-white rounded font-black text-[10px] uppercase tracking-widest shadow-lg shadow-obs-accent/20 transition-all active:scale-95"
+          >
+            + Agregar Nuevo Preview
+          </button>
+          <div className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+            {localPreviews.map(p => (
+                <div key={`preview-manage-item-${p.id}`} className="flex flex-col gap-3 bg-obs-dark-1 p-4 rounded-lg border border-obs-text/5 shadow-inner">
+                  <div className="flex justify-between items-center bg-obs-dark-1 p-2 rounded border border-obs-text/5">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Nombre del Monitor</span>
+                      <input 
+                        type="text" 
+                        value={p.name} 
+                        onChange={(e) => setLocalPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, name: e.target.value } : pr))}
+                        className="bg-transparent border-none px-0 py-0.5 text-sm font-bold w-48 focus:text-obs-accent outline-none text-white transition-colors"
+                      />
+                    </div>
+                    <button onClick={() => setLocalPreviews(localPreviews.filter(pr => pr.id !== p.id))} className="w-8 h-8 flex items-center justify-center bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded transition-all">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Salidas Disponibles</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {outputs.map(out => (
+                            <button 
+                              key={out.id}
+                              onClick={() => {
+                                setLocalPreviews(prevs => prevs.map(pr => 
+                                  pr.id === p.id ? { 
+                                    ...pr, 
+                                    assignedOutputs: (pr.assignedOutputs || []).includes(out.id) 
+                                      ? pr.assignedOutputs.filter((o: string) => o !== out.id) 
+                                      : [...(pr.assignedOutputs || []), out.id]
+                                  } : pr
+                                ));
+                              }}
+                              className={`w-7 h-7 rounded text-[10px] font-black transition-all border ${p.assignedOutputs?.includes(out.id) ? 'bg-obs-accent border-obs-accent text-white shadow-[0_0_8px_rgba(0,163,245,0.4)]' : 'bg-obs-dark-1 border-obs-text/10 text-obs-muted hover:border-obs-text/30'}`}
+                            >
+                              {out.id}
+                            </button>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Mostrar Textos</span>
+                        <button 
+                          onClick={() => setLocalPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, hideOverlay: !pr.hideOverlay } : pr))}
+                          className={`w-8 h-4 rounded-full relative transition-colors ${p.hideOverlay ? 'bg-red-500' : 'bg-green-500'}`}
+                        >
+                          <div className={`absolute top-0.5 bottom-0.5 w-3 bg-white rounded-full transition-all ${p.hideOverlay ? 'right-0.5' : 'left-0.5'}`} />
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Color Accent</span>
+                        <input 
+                          type="color" 
+                          value={p.overlayColor || '#00a3f5'} 
+                          onChange={(e) => setLocalPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, overlayColor: e.target.value } : pr))}
+                          className="w-10 h-5 bg-transparent border-none cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+            ))}
+          </div>
+        </div>
+        <div className="px-4 py-3 border-t border-obs-border bg-obs-surface flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded text-obs-text hover:text-white transition-colors text-xs font-bold uppercase tracking-wider">
+            Cancelar
+          </button>
+          <button onClick={() => onApply(localPreviews)} className="px-5 py-2 rounded bg-obs-accent text-white hover:bg-obs-accent-hover transition-colors text-xs font-bold uppercase tracking-wider shadow-lg">
+            Aceptar
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
 
 // --- Main App ---
 
@@ -4785,7 +5238,7 @@ export default function App() {
   const [allScreenSettings, setAllScreenSettings] = useState<Record<string, ExternalScreenSettings>>({});
   const [programProgress, setProgramProgress] = useState({ current: 0, total: 0 });
   const [previewProgress, setPreviewProgress] = useState({ current: 0, total: 0 });
-  const [timerMode, setTimerMode] = useState<'elapsed' | 'remaining'>('elapsed');
+  const [timerMode, setTimerMode] = useState<'elapsed' | 'remaining'>('remaining');
 
   const DEFAULT_SCREEN_SETTINGS: ExternalScreenSettings = {
     resolution: '1920x1080',
@@ -4806,7 +5259,7 @@ export default function App() {
     bgScalingW: 100,
     bgScalingH: 100,
     transitionType: 'cut',
-    transitionDuration: 1000
+    transitionDuration: 1
   };
 
   const getExternalScreenSettings = (screenId: string | null): ExternalScreenSettings => {
@@ -4828,7 +5281,8 @@ export default function App() {
     rotation: 0,
     loop: true,
     playbackMode: 'sequence',
-    transition: 'fade'
+    transition: 'fade',
+    transitionDuration: 1
   };
 
   const [layers, setLayers] = useState<Layer[]>([
@@ -4845,6 +5299,15 @@ export default function App() {
   const [showPlaylists, setShowPlaylists] = useState(true);
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.remove('light');
+    } else {
+      document.documentElement.classList.add('light');
+    }
+  }, [isDarkMode]);
+
   const [workMode, setWorkMode] = useState<'layers' | 'previews'>('layers');
   const [isPixelMapOpen, setIsPixelMapOpen] = useState(false);
   const [slices, setSlices] = useState([
@@ -4899,8 +5362,76 @@ export default function App() {
   const [hasDetailedScreens, setHasDetailedScreens] = useState(false);
   const [isIframe, setIsIframe] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<PermissionState | null>(null);
-  const outputWindowRef = useRef<Window | null>(null);
+  const outputWindowsRef = useRef<Record<string, Window | null>>({});
+  const [launchedScreens, setLaunchedScreens] = useState<Record<string, boolean>>({});
   const outputChannel = useRef<BroadcastChannel | null>(null);
+  
+  // Ref to store latest state
+  const stateRef = useRef({
+    programClipId,
+    previewClipId,
+    outputPrograms,
+    outputTransitionTargets,
+    outputOffStates,
+    outputs,
+    clips,
+    crossfaderValue,
+    allScreenSettings,
+    externalScreenSettings,
+    isLive,
+    isTransmitting,
+    activeOutputId,
+    programVolume,
+    masterVolume,
+    transitionType: externalScreenSettings.transitionType,
+    layers,
+    layerOutputs,
+    pipLayers,
+    playlists
+  });
+
+  // Sync ref with state
+  useEffect(() => {
+    stateRef.current = {
+      programClipId,
+      previewClipId,
+      outputPrograms,
+      outputTransitionTargets,
+      outputOffStates,
+      outputs,
+      clips,
+      crossfaderValue,
+      allScreenSettings,
+      externalScreenSettings,
+      isLive,
+      isTransmitting,
+      activeOutputId,
+      programVolume,
+      masterVolume,
+      transitionType: externalScreenSettings.transitionType,
+      layers,
+      layerOutputs,
+      pipLayers,
+      playlists
+    };
+  }, [
+    programClipId, previewClipId, outputPrograms, outputTransitionTargets, 
+    outputOffStates, outputs, clips, crossfaderValue, allScreenSettings, 
+    externalScreenSettings, isLive, isTransmitting, activeOutputId, 
+    programVolume, masterVolume, layers, layerOutputs, pipLayers, playlists
+  ]);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      Object.values(outputWindowsRef.current).forEach(win => {
+        if (win && !win.closed) {
+          win.close();
+        }
+      });
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   const handleProgramOff = () => {
     const isCurrentlyOff = outputOffStates[activeOutputId];
@@ -4940,11 +5471,24 @@ export default function App() {
     }
   };
 
-  // Initialize BroadcastChannel and Sync logic
+  // Initialize BroadcastChannel
   useEffect(() => {
     outputChannel.current = new BroadcastChannel('lumin-output');
     
-    // Handle requests from output windows
+    // Resync when window gets focus to prevent hangs/desync after minimize
+    const handleFocus = () => {
+      console.log("Window focused, requesting sync...");
+      outputChannel.current?.postMessage({ type: 'SYNC_STATE', payload: { isFocusResync: true } });
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      outputChannel.current?.close();
+    };
+  }, []);
+
+  // Handle requests from output windows
+  useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (event.data.type === 'REQUEST_SYNC') {
         outputChannel.current?.postMessage({
@@ -4989,16 +5533,15 @@ export default function App() {
         }
       }
       if (event.data.type === 'LAYER_CLIP_ENDED') {
-        const { layerId } = event.data.payload;
-        handleLayerEnded(layerId);
+        const { layerId, clipId } = event.data.payload;
+        handleLayerEnded(layerId, clipId);
       }
     };
     
-    outputChannel.current.addEventListener('message', handleMessage);
+    outputChannel.current?.addEventListener('message', handleMessage);
     
     return () => {
       outputChannel.current?.removeEventListener('message', handleMessage);
-      outputChannel.current?.close();
     };
   }, [
     programClipId, 
@@ -5021,42 +5564,42 @@ export default function App() {
     pipLayers,
     playlists
   ]);
-  // Throttle state mirroring to 30fps max to avoid locking the UI during smooth slider inputs
-  const syncTimeoutRef = useRef<any>(null);
-
+  // Use a fixed interval for syncing instead of dependency-triggered timeouts
+  // This is much lighter on the main thread and prevents "freezing" during rapid state updates
   useEffect(() => {
-    if (outputChannel.current) {
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-      syncTimeoutRef.current = setTimeout(() => {
-        outputChannel.current?.postMessage({
+    const syncInterval = setInterval(() => {
+      if (outputChannel.current && document.visibilityState === 'visible') {
+        const s = stateRef.current;
+        outputChannel.current.postMessage({
           type: 'SYNC_STATE',
           payload: {
-            programClipId,
-            previewClipId,
-            outputPrograms,
-            outputTransitionTargets,
-            outputOffStates,
-            outputs,
-            clips,
-            crossfaderValue,
-            allScreenSettings,
-            isLive,
-            isTransmitting,
-            isProgramOff: outputOffStates[activeOutputId] || false,
-            programVolume,
-            masterVolume,
-            transitionType: externalScreenSettings.transitionType,
-            layers,
-            layerOutputs,
-            pipLayers
+            programClipId: s.programClipId,
+            previewClipId: s.previewClipId,
+            outputPrograms: s.outputPrograms,
+            outputTransitionTargets: s.outputTransitionTargets,
+            outputOffStates: s.outputOffStates,
+            outputs: s.outputs,
+            clips: s.clips,
+            crossfaderValue: s.crossfaderValue,
+            allScreenSettings: s.allScreenSettings,
+            externalScreenSettings: s.externalScreenSettings,
+            isLive: s.isLive,
+            isTransmitting: s.isTransmitting,
+            isProgramOff: s.outputOffStates[s.activeOutputId] || false,
+            programVolume: s.programVolume,
+            masterVolume: s.masterVolume,
+            transitionType: s.transitionType,
+            activeOutputId: s.activeOutputId,
+            layers: s.layers,
+            layerOutputs: s.layerOutputs,
+            pipLayers: s.pipLayers
           }
         });
-      }, 30);
-    }
-    return () => {
-       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    }
-  }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, layers, layerOutputs, pipLayers]);
+      }
+    }, 100); // 10fps is much more stable and prevents memory/CPU overload
+
+    return () => clearInterval(syncInterval);
+  }, []);
 
   // Screen Detection Logic
   const detectScreens = async (requestPermission = false) => {
@@ -5122,12 +5665,20 @@ export default function App() {
           else if (depth >= 24) depth = 8;
           else depth = 8;
 
+          const snapRes = (val: number) => {
+            const standards = [720, 1080, 1280, 1366, 1440, 1600, 1920, 2160, 2560, 3440, 3840, 4096];
+            for (let st of standards) {
+              if (Math.abs(val - st) <= 6) return st;
+            }
+            return Math.round(val);
+          };
+
           return {
             id: s.id || `screen-${index}`,
             name: s.label || `Pantalla ${index + 1}`,
             isActive: true,
-            width: Math.round(s.width * dpr),
-            height: Math.round(s.height * dpr),
+            width: snapRes(s.width * dpr),
+            height: snapRes(s.height * dpr),
             left: s.left,
             top: s.top,
             isPrimary: s.isPrimary,
@@ -5213,6 +5764,18 @@ export default function App() {
   const handleLaunchOutput = () => {
     const selectedScreen = externalScreens.find(s => s.id === selectedScreenId);
     
+    // Check if window is already open
+    const screenKey = selectedScreenId || 'default';
+    const existingWin = outputWindowsRef.current[screenKey];
+    if (existingWin && !existingWin.closed) {
+      existingWin.close();
+      outputWindowsRef.current[screenKey] = null;
+      setLaunchedScreens(prev => ({ ...prev, [screenKey]: false }));
+      // Optional: If electron has a close API we would call it here, 
+      // but without standard electron API exposed we only rely on window.close
+      return;
+    }
+
     // Construct the URL
     const url = new URL(window.location.href);
     url.searchParams.set('mode', 'output');
@@ -5228,6 +5791,7 @@ export default function App() {
       });
       setIsTransmitting(true);
       setIsLive(true);
+      setLaunchedScreens(prev => ({ ...prev, [screenKey]: true }));
       return;
     }
 
@@ -5242,16 +5806,25 @@ export default function App() {
     }
 
     // Try to open the output window
-    const windowName = `LuminOutput_${selectedScreenId || 'default'}`;
+    const windowName = `LuminOutput_${screenKey}`;
     
       try {
         const win = window.open(url.toString(), windowName, features);
-        outputWindowRef.current = win;
+        outputWindowsRef.current[screenKey] = win;
 
         if (win) {
           win.focus();
           setIsTransmitting(true);
           setIsLive(true);
+          setLaunchedScreens(prev => ({ ...prev, [screenKey]: true }));
+          
+          // Poll to check if user closed window manually
+          const checkInterv = setInterval(() => {
+            if (win.closed) {
+              setLaunchedScreens(prev => ({ ...prev, [screenKey]: false }));
+              clearInterval(checkInterv);
+            }
+          }, 1000);
           
           setTimeout(() => {
             outputChannel.current?.postMessage({
@@ -5299,6 +5872,7 @@ export default function App() {
       opacity: 1,
       rotation: 0,
       transition: 'fade',
+      transitionDuration: 1,
       isVisible: true,
       muted: true,
       loop: true,
@@ -5321,11 +5895,13 @@ export default function App() {
   };
 
   const [activeColumnTrigger, setActiveColumnTrigger] = useState<number | null>(null);
-  const [activeLayerTriggers, setActiveLayerTriggers] = useState<Record<string, boolean>>({});
+  const [columnUIStates, setColumnUIStates] = useState<Record<number, 'play' | 'stop' | null>>({});
+  const [activeLayerTriggers, setActiveLayerTriggers] = useState<Record<string, 'play' | 'stop' | null>>({});
 
-  const handleLayerEnded = (layerId: string) => {
+  const handleLayerEnded = (layerId: string, clipId: string) => {
     setLayers(prev => prev.map(layer => {
       if (layer.id !== layerId) return layer;
+      if (layer.activeClipId !== clipId) return layer; // ALREADY HANDLED
       
       // Mode Single: Only loop the current clip indefinitely
       if (layer.playbackMode === 'single') {
@@ -5347,7 +5923,7 @@ export default function App() {
         return { ...layer, activeClipId: null, activeSlotIndex: null, isPlaying: false };
       } else {
         // End of layer sequence (loop playlist off): Black
-        setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: false }));
+        setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: 'stop' }));
         return { ...layer, activeClipId: null, activeSlotIndex: null, isPlaying: false };
       }
     }));
@@ -5355,7 +5931,18 @@ export default function App() {
 
   const onTriggerLayerClip = (layerId: string, slotIdx: number, mode: 'single' | 'sequence' = 'single') => {
     setActiveColumnTrigger(null);
-    setActiveLayerTriggers(prev => ({ ...prev, [layerId]: false }));
+    if (mode === 'sequence') {
+      setActiveLayerTriggers(prev => ({ ...prev, [layerId]: 'play' }));
+    } else {
+      // If single mode, we might want to clear the sequence light or just not set it
+      // User says "only when initiating playlist"
+      setActiveLayerTriggers(prev => {
+        const next = { ...prev };
+        delete next[layerId];
+        return next;
+      });
+    }
+    setColumnUIStates({});
     setLayers(prev => prev.map(l => {
       if (l.id !== layerId) return l;
       const clip = l.slots[slotIdx];
@@ -5368,6 +5955,7 @@ export default function App() {
 
   const handleColumnTrigger = (colIdx: number) => {
     setActiveColumnTrigger(colIdx);
+    setColumnUIStates(prev => ({ ...prev, [colIdx]: 'play' }));
     setActiveLayerTriggers({});
     setLayers(prev => prev.map(layer => {
       const clip = layer.slots[colIdx];
@@ -5380,6 +5968,7 @@ export default function App() {
 
   const handleColumnStop = (colIdx: number) => {
     setActiveColumnTrigger(null);
+    setColumnUIStates(prev => ({ ...prev, [colIdx]: 'stop' }));
     setLayers(prev => prev.map(layer => {
       const clip = layer.slots[colIdx];
       if (clip && layer.activeClipId === clip.id) {
@@ -5393,6 +5982,7 @@ export default function App() {
     e.preventDefault();
     const clipId = e.dataTransfer.getData('clipId');
     const clipData = e.dataTransfer.getData('clip');
+    const libraryFilesData = e.dataTransfer.getData('libraryFiles');
     
     let clip: Clip | undefined;
     if (clipData) {
@@ -5403,6 +5993,40 @@ export default function App() {
       }
     } else if (clipId) {
       clip = clips.find(c => c.id === clipId);
+    } else if (libraryFilesData) {
+      try {
+        const filesData = JSON.parse(libraryFilesData);
+        if (filesData.length > 0) {
+          const fileData = filesData[0];
+          clip = {
+            id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            name: fileData.name,
+            thumbnail: fileData.url,
+            url: fileData.url,
+            type: getClipTypeFromFile(fileData.type, fileData.name),
+            status: 'idle',
+            currentPage: 1,
+            transform: { ...DEFAULT_TRANSFORM },
+            mask: 'none',
+            opacity: 1,
+            master: 1,
+            speed: 1,
+            volume: 1,
+            pan: 0,
+            blendMode: 'Alpha',
+            behavior: 'Cortar',
+            curve: 'Lineal',
+            filter: 'none',
+            brightness: 1,
+            contrast: 1,
+            saturation: 1,
+            colorBalance: { r: 1, g: 1, b: 1 },
+            isPlaying: true,
+            loop: true
+          };
+          setClips(prev => [...prev, clip!]);
+        }
+      } catch (err) {}
     }
 
     if (clip) {
@@ -5600,6 +6224,8 @@ export default function App() {
   const handlePreviewClip = (clip: Clip) => {
     setPreviewClipId(clip.id);
     setPreviewPlaylistState(null);
+    // Also update the main preview monitor (PREVIEW 1)
+    setPreviews(prevs => prevs.map((p, i) => i === 0 ? { ...p, clipId: clip.id } : p));
   };
 
   const handlePreviewPlaylist = (playlist: Playlist) => {
@@ -5654,7 +6280,7 @@ export default function App() {
       }
 
       animate(0, 100, {
-        duration: tDuration / 1000,
+        duration: tDuration,
         ease: "linear",
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
@@ -5674,7 +6300,7 @@ export default function App() {
       }
 
       animate(0, 100, {
-        duration: tDuration / 1000,
+        duration: tDuration,
         ease: "linear",
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
@@ -5706,8 +6332,35 @@ export default function App() {
       try {
         const files = JSON.parse(libraryFilesStr);
         if (files.length > 0) {
-           // We just use the first for preview
-           targetClipId = files[0].id;
+           const fileData = files[0];
+           const clip: Clip = {
+             id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+             name: fileData.name,
+             thumbnail: fileData.url,
+             url: fileData.url,
+             type: getClipTypeFromFile(fileData.type, fileData.name),
+             status: 'idle',
+             currentPage: 1,
+             transform: { ...DEFAULT_TRANSFORM },
+             mask: 'none',
+             opacity: 1,
+             master: 1,
+             speed: 1,
+             volume: 1,
+             pan: 0,
+             blendMode: 'Alpha',
+             behavior: 'Cortar',
+             curve: 'Lineal',
+             filter: 'none',
+             brightness: 1,
+             contrast: 1,
+             saturation: 1,
+             colorBalance: { r: 1, g: 1, b: 1 },
+             isPlaying: true,
+             loop: true
+           };
+           setClips(prev => [...prev, clip]);
+           targetClipId = clip.id;
         }
       } catch (err) {}
     }
@@ -5808,6 +6461,7 @@ export default function App() {
     e.preventDefault();
     const clipId = e.dataTransfer.getData('clipId');
     const playlistId = e.dataTransfer.getData('playlistId');
+    const libraryFilesStr = e.dataTransfer.getData('libraryFiles');
     
     if (clipId) {
       const clip = clips.find(c => c.id === clipId);
@@ -5815,6 +6469,41 @@ export default function App() {
     } else if (playlistId) {
       const playlist = playlists.find(p => p.id === playlistId);
       if (playlist) handlePreviewPlaylist(playlist);
+    } else if (libraryFilesStr) {
+      try {
+        const files = JSON.parse(libraryFilesStr);
+        if (files.length > 0) {
+           const fileData = files[0];
+           const clip: Clip = {
+             id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+             name: fileData.name,
+             thumbnail: fileData.url,
+             url: fileData.url,
+             type: getClipTypeFromFile(fileData.type, fileData.name),
+             status: 'idle',
+             currentPage: 1,
+             transform: { ...DEFAULT_TRANSFORM },
+             mask: 'none',
+             opacity: 1,
+             master: 1,
+             speed: 1,
+             volume: 1,
+             pan: 0,
+             blendMode: 'Alpha',
+             behavior: 'Cortar',
+             curve: 'Lineal',
+             filter: 'none',
+             brightness: 1,
+             contrast: 1,
+             saturation: 1,
+             colorBalance: { r: 1, g: 1, b: 1 },
+             isPlaying: true,
+             loop: true
+           };
+           setClips(prev => [...prev, clip]);
+           handlePreviewClip(clip);
+        }
+      } catch (err) {}
     }
   };
 
@@ -6019,7 +6708,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen font-sans selection:bg-obs-accent/30 overflow-hidden bg-obs-bg text-obs-text">
+    <div className={`flex flex-col h-screen font-sans selection:bg-obs-accent/30 overflow-hidden bg-obs-bg text-obs-text`}>
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -6061,14 +6750,14 @@ export default function App() {
                       initial={{ opacity: 0, y: -5, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: -5, scale: 0.95 }}
-                      className="absolute left-0 top-full mt-1 w-56 bg-[#1a1a1a] border border-obs-border rounded shadow-2xl z-50 overflow-hidden"
+                      className="absolute left-0 top-full mt-1 w-56 bg-obs-dark-1 border border-obs-border rounded shadow-2xl z-50 overflow-hidden"
                     >
                       <button 
                         onClick={() => { 
                           setIsOutputModalOpen(true);
                           setIsEditMenuOpen(false);
                         }} 
-                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-white/5"
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
                       >
                         <span>Salidas</span>
                         <MonitorIcon size={12} />
@@ -6078,7 +6767,7 @@ export default function App() {
                           setIsPreviewModalOpen(true);
                           setIsEditMenuOpen(false);
                         }} 
-                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-white/5"
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
                       >
                         <span>Preview</span>
                         <Eye size={12} />
@@ -6154,31 +6843,30 @@ export default function App() {
                     initial={{ height: 0 }}
                     animate={{ height: 'auto' }}
                     exit={{ height: 0 }}
-                    className="overflow-hidden bg-black/40"
+                    className="overflow-hidden bg-obs-dark-1"
                   >
                     <div className="p-2">
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 gap-2">
                         {[
                           { name: 'Master', volume: masterVolume, onChange: setMasterVolume, level: programLevel },
-                          { name: 'Prog', volume: programVolume, onChange: setProgramVolume, level: programLevel },
-                          { name: 'Prev', volume: previewVolume, onChange: setPreviewVolume, level: previewLevel },
-                          { name: 'USB', volume: usbInVolume, onChange: setUsbInVolume, level: 0 },
+                          { name: 'Programa', volume: programVolume, onChange: setProgramVolume, level: programLevel },
+                          { name: 'USB', volume: usbOutVolume, onChange: setUsbOutVolume, level: 0 },
+                          { name: 'IN', volume: usbInVolume, onChange: setUsbInVolume, level: 0 },
                         ].map((source) => (
-                          <div key={source.name} className="bg-obs-surface p-1.5 rounded border border-white/5 flex flex-col gap-1">
+                          <div key={source.name} className="bg-obs-surface p-2 rounded border border-obs-text/5 flex flex-col gap-1.5">
                             <div className="flex justify-between items-center px-0.5">
-                              <span className="text-[7px] font-black text-obs-muted uppercase">{source.name}</span>
-                              <span className="text-[7px] font-mono text-obs-accent">{volToDb(source.volume)}</span>
+                              <span className="text-[8px] font-black text-obs-text uppercase tracking-wider">{source.name}</span>
+                              <span className="text-[8px] font-mono text-obs-accent font-bold">{volToDb(source.volume)}</span>
                             </div>
-                            <div className="h-16 relative bg-black/40 rounded-sm overflow-hidden flex flex-col justify-end">
-                              <div className="absolute inset-x-0 bottom-0 bg-obs-accent/20" style={{ height: `${source.volume * 100}%` }} />
-                              <div className="absolute inset-x-0 bg-obs-accent h-0.5" style={{ bottom: `${source.volume * 100}%` }} />
+                            <div className="h-5 relative bg-obs-dark-1 rounded border border-obs-text/10 overflow-hidden flex items-center">
+                              <div className="absolute inset-y-0 left-0 bg-obs-accent/20 transition-all duration-75" style={{ width: `${source.volume * 100}%` }} />
+                              <div className="absolute inset-y-0 bg-obs-accent w-0.5 shadow-[0_0_8px_rgba(0,163,245,0.6)] transition-all duration-75" style={{ left: `calc(${source.volume * 100}% - 1px)` }} />
                               <input 
                                 type="range" 
                                 min="0" max="1" step="0.01"
                                 value={source.volume}
                                 onChange={(e) => source.onChange(parseFloat(e.target.value))}
-                                className="absolute inset-0 opacity-0 cursor-ns-resize"
-                                style={{ writingMode: 'vertical-lr', direction: 'rtl' }}
+                                className="absolute inset-0 opacity-0 cursor-pointer z-10 w-full h-full"
                               />
                             </div>
                           </div>
@@ -6209,10 +6897,10 @@ export default function App() {
                     initial={{ height: 0 }}
                     animate={{ height: 'auto' }}
                     exit={{ height: 0 }}
-                    className="overflow-hidden bg-black/40"
+                    className="overflow-hidden bg-obs-dark-1"
                   >
                     <div className="p-2 space-y-2">
-                       <div className="bg-obs-surface p-2 rounded border border-white/5 space-y-3">
+                       <div className="bg-obs-surface p-2 rounded border border-obs-text/5 space-y-3">
                           <div className="flex flex-col gap-1">
                             <div className="flex justify-between items-center">
                               <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">En el aire</span>
@@ -6226,9 +6914,9 @@ export default function App() {
                           <div className="space-y-1">
                             {(programClip?.totalPages || programClip?.type === 'document' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
                               <>
-                                <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
+                                <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
                                   <div 
-                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,170,255,0.3)]" 
+                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
                                     style={{ width: `${(programClip.totalPages && programClip.totalPages > 0) ? ((programClip.currentPage || 1) / programClip.totalPages) * 100 : 100}%` }} 
                                   />
                                 </div>
@@ -6243,9 +6931,9 @@ export default function App() {
                               </>
                             ) : (
                               <>
-                                <div className="h-1.5 bg-black/40 rounded-full overflow-hidden border border-white/5">
+                                <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
                                   <div 
-                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,170,255,0.3)]" 
+                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
                                     style={{ width: `${programProgress.total > 0 ? (programProgress.current / programProgress.total) * 100 : 0}%` }} 
                                   />
                                 </div>
@@ -6262,7 +6950,7 @@ export default function App() {
                             )}
                           </div>
 
-                          <div className="pt-2 border-t border-white/5">
+                          <div className="pt-2 border-t border-obs-text/5">
                             <span className="text-[7px] text-obs-muted uppercase font-black mb-1 block">Salidas Activas</span>
                             <div className="flex flex-wrap gap-1">
                               {externalScreens.filter(s => s.isActive).length > 0 ? (
@@ -6272,7 +6960,7 @@ export default function App() {
                                   </div>
                                 ))
                               ) : (
-                                <span className="text-[7px] text-white/20 italic">No hay salidas activas</span>
+                                <span className="text-[7px] text-obs-text/20 italic">No hay salidas activas</span>
                               )}
                             </div>
                           </div>
@@ -6291,7 +6979,7 @@ export default function App() {
                    {selectedLibraryUrls.size === 1 ? '1 ARCHIVO' : selectedLibraryUrls.size > 1 ? `${selectedLibraryUrls.size} ARCHIVOS` : 'VACÍO'}
                 </span>
               </div>
-              <div className="flex-1 relative flex items-center justify-center bg-[#050505] overflow-hidden">
+              <div className="flex-1 relative flex items-center justify-center bg-obs-dark-m2 overflow-hidden">
                 {selectedLibraryUrls.size === 1 ? ((clipUpdateFunction) => {
                   const selectedFile = libraryFiles.find(f => selectedLibraryUrls.has(f.url));
                   if (!selectedFile) return null;
@@ -6325,18 +7013,18 @@ export default function App() {
         {/* Center: Monitors & Controls */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Monitors Area */}
-          <div className="flex-none p-4 flex flex-col lg:flex-row gap-4 items-start justify-center bg-[#080808] border-b border-obs-border z-10 relative overflow-y-auto" style={{ maxHeight: '60vh' }}>
+          <div className="flex-none p-4 flex flex-col lg:flex-row gap-4 items-start justify-between bg-obs-dark-m3 border-b border-obs-border z-10 relative overflow-y-auto" style={{ maxHeight: '60vh' }}>
             
-            <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-max w-full">
+            <div className="flex-none grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-max w-fit">
               {previews.map(preview => (
-                <div key={`monitor-preview-${preview.id}`} className="flex flex-col gap-1.5 group/mon relative">
+                <div key={`monitor-preview-${preview.id}`} className="flex flex-col gap-1.5 group/mon relative w-[320px]">
                    <div className="flex justify-between items-end px-1">
-                     <span className="text-[9px] text-[#00AAFF] font-black uppercase tracking-[0.2em]">{preview.name}</span>
+                     <span className="text-[9px] text-obs-accent font-black uppercase tracking-[0.2em]">{preview.name}</span>
                      {preview.selectedOutputs.length > 0 && (
                         <div className="flex gap-0.5 items-center">
                           <span className="text-[7px] text-obs-muted font-bold mr-1">TGT:</span>
                           {preview.selectedOutputs.map(outId => (
-                            <span key={outId} className="w-3 h-3 flex items-center justify-center bg-[#00AAFF] text-white text-[7px] font-black rounded-sm shadow-sm">
+                            <span key={outId} className="w-3 h-3 flex items-center justify-center bg-obs-accent text-white text-[7px] font-black rounded-sm shadow-sm">
                               {outId}
                             </span>
                           ))}
@@ -6344,7 +7032,7 @@ export default function App() {
                       )}
                    </div>
                    <div 
-                    className={`w-full aspect-video shadow-xl relative border rounded overflow-hidden cursor-pointer transition-all ${selectedItemType === 'preview' && selectedItemId === preview.id ? 'ring-2 ring-[#00AAFF] border-transparent' : 'border-white/10 hover:border-white/30'}`}
+                    className={`w-full aspect-video shadow-xl relative border rounded overflow-hidden cursor-pointer transition-all ${selectedItemType === 'preview' && selectedItemId === preview.id ? 'ring-2 ring-[#00a3f5] border-transparent' : 'border-obs-muted/40 hover:border-obs-muted/70'}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedItemType('preview');
@@ -6399,7 +7087,7 @@ export default function App() {
                           setPreviews(prevs => prevs.filter(p => p.id !== preview.id));
                           if (selectedItemId === preview.id) setSelectedItemId(null);
                         }}
-                        className="absolute top-2 left-2 bg-black/60 hover:bg-red-600 text-white rounded p-1.5 opacity-0 group-hover/mon:opacity-100 transition-opacity z-30"
+                        className="absolute top-2 left-2 bg-obs-dark-1 hover:bg-red-600 text-white rounded p-1.5 opacity-0 group-hover/mon:opacity-100 transition-opacity z-30"
                         title="Eliminar Preview"
                       >
                         <Minus size={12} />
@@ -6417,37 +7105,19 @@ export default function App() {
             </div>
             
             {/* Right: Program Monitor & Controls */}
-            <div className="w-full lg:w-[360px] xl:w-[480px] 2xl:w-[570px] flex flex-col gap-1.5 flex-none shrink-0 group/prog">
-              <div className="flex justify-between items-end px-1">
-                 <span className="text-[9px] text-[#FF4444] font-black uppercase tracking-[0.2em]">
+            <div className="w-[480px] flex flex-col flex-none ml-auto shrink-0 group/prog">
+              <div className="flex justify-between items-end px-1 pb-0.5">
+                 <span className="text-[9px] text-red-500 font-black uppercase tracking-[0.2em]">
                    PROGRAM SALIDA {activeOutputId}
                    {outputs.find(o => o.id === activeOutputId)?.physicalScreenId && (
                      <span className="text-obs-muted ml-2 font-medium">[{externalScreens.find(s => s.id === outputs.find(o => o.id === activeOutputId)?.physicalScreenId)?.name || 'Monitor'}]</span>
                    )}
                  </span>
-                 {isLive && <div className="text-[7px] font-black text-[#FF4444] animate-pulse flex items-center gap-1.5 uppercase tracking-tighter"><span className="w-1.5 h-1.5 rounded-full bg-[#FF4444]" /> ON AIR</div>}
+                 {isLive && <div className="text-[7px] font-black text-red-500 animate-pulse flex items-center gap-1.5 uppercase tracking-tighter"><span className="w-1.5 h-1.5 rounded-full bg-red-500" /> ON AIR</div>}
               </div>
-              <div className="flex gap-2 w-full">
-                {/* PiP Toggles */}
-                {pipLayers.length > 0 && (
-                  <div className="flex flex-col gap-1.5 shrink-0 justify-end w-8 py-0.5">
-                    {pipLayers.map((pip, idx) => (
-                      <button 
-                        key={pip.id}
-                        title={`Toggle ${pip.name}`}
-                        onClick={() => {
-                          setPipLayers(prev => prev.map(p => p.id === pip.id ? { ...p, isActive: !p.isActive } : p));
-                        }}
-                        className={`w-8 h-8 rounded border transition-colors flex items-center justify-center font-black text-[10px] shadow-lg ${pip.isActive ? 'bg-[#FF4444] text-white border-red-500 shadow-[0_0_8px_rgba(255,68,68,0.4)]' : 'bg-black/60 text-obs-muted border-white/10 hover:border-white/30'}`}
-                      >
-                        P{idx + 1}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                
+              <div className="flex flex-col w-full">
                 {/* Program Monitor */}
-                <div className="w-full aspect-video shadow-2xl relative border border-white/10 rounded overflow-hidden cursor-pointer"
+                <div className="w-full aspect-video relative border border-obs-muted/40 rounded overflow-hidden cursor-pointer"
                      onClick={() => {
                        setSelectedItemType('program');
                        setSelectedItemId('program-output');
@@ -6468,7 +7138,7 @@ export default function App() {
                     layerOutputs={layerOutputs}
                     isTransmitting={isTransmitting}
                     isProgramOff={outputOffStates[activeOutputId] || false}
-                    settings={externalScreenSettings}
+                    settings={allScreenSettings[activeOutputId] || DEFAULT_SCREEN_SETTINGS}
                     masterVolume={masterVolume}
                     onEnded={handleProgramNext}
                     onLayerEnded={handleLayerEnded}
@@ -6497,98 +7167,124 @@ export default function App() {
                   />
                 </div>
               </div>
-
-              {/* Program Controls */}
-              <div className="flex justify-between items-center bg-[#1a1a1a] p-3 rounded-lg border border-white/5 shadow-inner">
-                <div className="flex gap-2 items-center">
-                  <button onClick={() => setIsOutputModalOpen(true)} className="w-8 h-8 flex items-center justify-center bg-[#2a2a2a] hover:bg-[#333] rounded text-[#00AAFF] transition-colors border border-white/10" title="Configurar Salidas">
-                    <Settings size={16} />
-                  </button>
-                  <button onClick={() => setSelectedItemType('pipManager')} className="w-8 h-8 flex items-center justify-center bg-[#2a2a2a] hover:bg-[#333] rounded text-obs-accent transition-colors border border-white/10" title="Gestor de PiPs">
-                    <Layers size={16} />
-                  </button>
-                  {outputs.map(out => (
-                    <button 
-                      key={`output-btn-${out.id}`}
-                      onClick={() => {
-                        setActiveOutputId(out.id);
-                        setProgramClipId(outputPrograms[out.id] || null);
-                        setSelectedScreenId(out.physicalScreenId || null);
-                        setSelectedItemType('program');
-                      }}
-                      className={`w-8 h-8 rounded font-bold text-sm flex items-center justify-center transition-all ${activeOutputId === out.id ? 'bg-[#00AAFF] text-white shadow-[0_0_10px_rgba(0,170,255,0.4)]' : 'bg-[#2a2a2a] text-obs-muted border border-white/10 hover:text-white'}`}
-                    >
-                      {out.id}
-                    </button>
-                  ))}
-                </div>
                 
-                <div className="flex gap-2">
-                  <button 
-                    onClick={handleProgramOff} 
-                    className={`w-16 py-2 rounded text-[10px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-white/10 ${outputOffStates[activeOutputId] ? 'bg-red-600 animate-pulse' : 'bg-[#2a2a2a] hover:bg-[#333]'}`}
-                  >
-                    <Square size={14} className={outputOffStates[activeOutputId] ? '' : 'text-obs-muted'} />
-                    OFF
-                  </button>
-                  <button 
-                    onClick={() => handleTake()} 
-                    className="w-20 py-2 bg-[#2a2a2a] hover:bg-[#333] rounded text-[10px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-white/10"
-                  >
-                    <Scissors size={14} className="text-obs-accent" />
-                    TAKE
-                  </button>
-                  <button 
-                    onClick={() => setIsTransmitting(!isTransmitting)} 
-                    className={`w-16 py-2 rounded text-[10px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 ${isTransmitting ? 'bg-red-600 border border-red-500 shadow-[0_0_10px_rgba(220,38,38,0.4)]' : 'bg-[#2a2a2a] border border-white/10 text-obs-muted hover:text-white'}`}
-                  >
-                    <div className={`w-1.5 h-1.5 rounded-full ${isTransmitting ? 'bg-white animate-pulse' : 'bg-obs-muted'}`} />
-                    LIVE
-                  </button>
-                </div>
-              </div>
+              {/* Program Controls */}
+              <div className="flex flex-col gap-3 mt-1 px-1">
+                <div className="flex justify-between items-start">
+                  <div className="flex flex-col gap-1.5">
+                    {/* PIP Toggles Row */}
+                    <div className="flex gap-1">
+                       <div className="flex items-center justify-center px-4 py-1 bg-obs-dark-1 rounded border border-obs-border text-white font-black text-[9px] uppercase tracking-wider">
+                         PIP
+                       </div>
+                      {pipLayers.map((pip, idx) => (
+                        <button 
+                          key={pip.id}
+                          title={`Toggle ${pip.name}`}
+                          onClick={() => {
+                            setPipLayers(prev => prev.map(p => p.id === pip.id ? { ...p, isActive: !p.isActive } : p));
+                          }}
+                          className={`w-10 py-1 rounded border transition-colors flex items-center justify-center font-black text-[10px] shadow-lg ${pip.isActive ? 'bg-obs-accent text-black border-obs-accent shadow-[0_0_8px_rgba(0,163,245,0.4)]' : 'bg-obs-dark-1 text-obs-muted border-obs-text/10 hover:border-obs-text/20 hover:text-white'}`}
+                        >
+                          {idx + 1}
+                        </button>
+                      ))}
+                    </div>
 
-              {/* Work Mode Selectors */}
-                <div className="flex gap-2">
-                  <div className="flex items-center bg-[#1a1a1a] rounded border border-white/5 px-2 gap-3 mr-1">
-                    <div className="flex flex-col items-center">
-                       <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">{timerMode}</span>
-                       <span className="text-[14px] font-mono font-bold text-obs-accent leading-none">
+                    <div className="flex gap-1 items-center">
+                      <button onClick={() => setIsOutputModalOpen(true)} className="w-10 py-1 flex items-center justify-center bg-obs-dark-1 hover:bg-obs-text/10 hover:text-white rounded text-obs-accent transition-colors border border-obs-text/10" title="Configurar Salidas">
+                        <Settings size={14} />
+                      </button>
+                      <button onClick={() => setSelectedItemType('pipManager')} className="w-10 py-1 flex items-center justify-center bg-obs-dark-1 hover:bg-obs-text/10 hover:text-white rounded text-obs-accent transition-colors border border-obs-text/10" title="Gestor de PiPs">
+                        <PictureInPicture2 size={14} />
+                      </button>
+                      {outputs.map(out => (
+                        <button 
+                          key={`output-btn-${out.id}`}
+                          onClick={() => {
+                            setActiveOutputId(out.id);
+                            setProgramClipId(outputPrograms[out.id] || null);
+                            setSelectedScreenId(out.physicalScreenId || null);
+                            setSelectedItemType('program');
+                          }}
+                          className={`w-10 py-1 rounded font-black text-xs flex items-center justify-center transition-all border ${activeOutputId === out.id ? 'bg-obs-accent text-black border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.4)]' : 'bg-obs-dark-1 text-obs-muted border-obs-text/10 hover:text-white'}`}
+                        >
+                          {out.id}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* Take / Live Actions */}
+                  <div className="flex gap-1 pt-1">
+                    <button 
+                      onClick={handleProgramOff} 
+                      className={`w-12 py-3 rounded text-[7px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-obs-text/10 ${outputOffStates[activeOutputId] ? 'bg-red-600 animate-pulse' : 'bg-obs-dark-1 hover:bg-obs-text/10'}`}
+                    >
+                      <Square size={10} className={outputOffStates[activeOutputId] ? '' : 'text-obs-muted'} />
+                      OFF
+                    </button>
+                    <button 
+                      onClick={() => handleTake()} 
+                      className="w-14 py-3 bg-obs-dark-1 hover:bg-obs-text/10 rounded text-[7px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-obs-text/10"
+                    >
+                      <Scissors size={10} className="text-obs-accent" />
+                      TAKE
+                    </button>
+                    <button 
+                      onClick={() => setIsTransmitting(!isTransmitting)} 
+                      className={`w-16 py-3 rounded text-[8px] uppercase font-black text-white transition-colors flex flex-col items-center justify-center gap-1 ${isTransmitting ? 'bg-red-600 border border-red-500 shadow-[0_0_10px_rgba(220,38,38,0.4)]' : 'bg-[#e50000] border-transparent hover:bg-red-500'}`}
+                    >
+                      <div className={`w-1.5 h-1.5 rounded-full bg-white ${isTransmitting ? 'animate-pulse' : ''}`} />
+                      LIVE
+                    </button>
+                  </div>
+                </div>
+
+                {/* Work Mode Selectors & Timer */}
+                <div className="flex justify-between items-center mt-2">
+                  <div className="flex flex-col">
+                     <span className="text-[10px] text-obs-muted uppercase font-black tracking-widest leading-none mb-0.5">{timerMode}</span>
+                     <div className="flex items-center gap-2">
+                       <span className="text-3xl font-mono font-bold text-white leading-none tracking-tight">
                          {timerMode === 'elapsed' 
                            ? formatTime(programProgress.current) 
                            : formatTime(Math.max(0, programProgress.total - programProgress.current))}
                        </span>
-                    </div>
-                    <button 
-                      onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
-                      className="p-1 rounded bg-[#2a2a2a] hover:bg-[#333] transition-colors"
-                      title="Cambiar modo de tiempo"
-                    >
-                      <RefreshCw size={10} className="text-obs-muted" />
-                    </button>
+                       <button 
+                         onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
+                         className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5"
+                         title="Cambiar modo de tiempo"
+                       >
+                         <RefreshCw size={12} className="text-obs-muted" />
+                       </button>
+                     </div>
                   </div>
 
-                  <button 
-                    onClick={() => {
-                      setWorkMode('layers');
-                      setShowLayers(true);
-                      setShowPlaylists(false);
-                    }}
-                    className={`flex-1 min-w-[100px] py-1.5 rounded text-[9px] font-black uppercase tracking-widest transition-all border ${workMode === 'layers' ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,170,255,0.4)] scale-100' : 'bg-[#1a1a1a] text-obs-muted border-white/5 hover:text-white hover:border-white/10 scale-95'}`}
-                  >
-                    Gestión Capas
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setWorkMode('previews');
-                      setShowLayers(false);
-                      setShowPlaylists(true);
-                    }}
-                    className={`flex-1 min-w-[100px] py-1.5 rounded text-[9px] font-black uppercase tracking-widest transition-all border ${workMode === 'previews' ? 'bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,170,255,0.4)] scale-100' : 'bg-[#1a1a1a] text-obs-muted border-white/5 hover:text-white hover:border-white/10 scale-95'}`}
-                  >
-                    Previews / Playlist
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        setWorkMode('layers');
+                        setShowLayers(true);
+                        setShowPlaylists(false);
+                      }}
+                      className={`px-5 py-1.5 rounded-md text-[11px] font-black tracking-wide transition-all border ${workMode === 'layers' ? 'bg-obs-accent text-black border-obs-accent scale-100' : 'bg-transparent text-white border-white hover:bg-white/10 scale-95'}`}
+                    >
+                      Gestión de capas
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setWorkMode('previews');
+                        setShowLayers(false);
+                        setShowPlaylists(true);
+                      }}
+                      className={`px-5 py-1.5 rounded-md text-[11px] font-black tracking-wide transition-all border ${workMode === 'previews' ? 'bg-obs-accent text-black border-obs-accent scale-100' : 'bg-transparent text-white border-white hover:bg-white/10 scale-95'}`}
+                    >
+                      Previews / Playlist
+                    </button>
+                  </div>
                 </div>
+              </div>
             </div>
           </div>
 
@@ -6598,12 +7294,14 @@ export default function App() {
 
             {/* Pinned area for layers and playlists pegged to docks */}
               <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-4 py-2 space-y-4">
-                <CollapsibleSection title="Gestión de Capas" defaultOpen={workMode === 'layers'} disabled={workMode !== 'layers'}>
-                  <div className={`max-h-[300px] overflow-y-auto no-scrollbar ${workMode === 'layers' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
+              {workMode === 'layers' && (
+                <CollapsibleSection title="Gestión de Capas" defaultOpen={true}>
+                  <div className="max-h-[300px] overflow-y-auto no-scrollbar">
                     <LayersSection 
                       layers={layers}
                       activeColumnTrigger={activeColumnTrigger}
                       activeLayerTriggers={activeLayerTriggers}
+                      columnUIStates={columnUIStates}
                       setActiveColumnTrigger={setActiveColumnTrigger}
                       setActiveLayerTriggers={setActiveLayerTriggers}
                       onAddLayer={addLayer}
@@ -6644,12 +7342,15 @@ export default function App() {
                       externalScreens={externalScreens}
                       clips={clips}
                       isDarkMode={isDarkMode}
+                      onPreviewClip={handlePreviewClip}
                     />
                 </div>
               </CollapsibleSection>
+              )}
 
-              <CollapsibleSection title="Playlists" defaultOpen={workMode === 'previews'} disabled={workMode !== 'previews'}>
-                <div className={`h-32 overflow-hidden p-2 ${workMode === 'previews' ? '' : 'opacity-20 pointer-events-none grayscale'}`}>
+              {workMode === 'previews' && (
+              <CollapsibleSection title="Playlists" defaultOpen={true}>
+                <div className="h-32 overflow-hidden p-2">
                   <div className="h-full border-2 border-dashed border-obs-accent/30 rounded-lg overflow-hidden relative group">
                   <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[8px] font-black uppercase tracking-[0.3em] text-obs-accent/50 pointer-events-none z-10 transition-opacity group-hover:opacity-20">
                     DRAG AND DROP VIDEOS PLAY LIST
@@ -6670,6 +7371,7 @@ export default function App() {
                 </div>
               </div>
             </CollapsibleSection>
+            )}
           </div>
 
             {/* Bottom Docks Area - Fixed at bottom */}
@@ -6706,6 +7408,7 @@ export default function App() {
             selectedItemType={selectedItemType}
             externalScreenSettings={externalScreenSettings}
             externalScreens={externalScreens}
+            allScreenSettings={allScreenSettings}
             hasDetailedScreens={hasDetailedScreens}
             isIframe={isIframe}
             previews={previews}
@@ -6717,6 +7420,7 @@ export default function App() {
             onSelectedScreenIdChange={setSelectedScreenId}
             onLaunchOutput={handleLaunchOutput}
             onDetectScreens={() => detectScreens(true)}
+            isOutputLaunched={launchedScreens[selectedScreenId || 'default'] || false}
             onUpdateLayer={(lid, updates) => {
               setLayers(prev => prev.map(l => l.id === lid ? { ...l, ...updates } : l));
               if (updates.outputId !== undefined) {
@@ -6763,191 +7467,47 @@ export default function App() {
       {/* Multi-Output creation modal */}
       <AnimatePresence>
         {isOutputModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-obs-bg border border-obs-border rounded-lg shadow-2xl w-[400px] flex flex-col overflow-hidden"
-            >
-              <div className="px-4 py-3 border-b border-obs-border bg-obs-surface flex justify-between items-center">
-                <span className="font-bold text-sm">Gestionar Salidas (Outputs)</span>
-                <button onClick={() => setIsOutputModalOpen(false)} className="text-obs-muted hover:text-white">
-                  <X size={16} />
-                </button>
-              </div>
-              <div className="p-4 flex flex-col gap-4">
-                <button 
-                  onClick={() => {
-                    if (externalScreens.length > 0 && outputs.length >= externalScreens.length) {
-                      alert(`No puedes crear más salidas que pantallas físicas detectadas (${externalScreens.length}).`);
-                      return;
-                    }
-                    const newId = String(Date.now());
-                    setOutputs([...outputs, { id: String(outputs.length + 1), name: `Salida ${outputs.length + 1}`, physicalScreenId: null, internalId: newId }]);
-                  }}
-                  className="w-full py-2 bg-obs-accent hover:bg-obs-accent-hover text-white rounded font-bold text-sm disabled:opacity-50"
-                  disabled={externalScreens.length > 0 && outputs.length >= externalScreens.length}
-                >
-                  + Agregar Nueva Salida
-                </button>
-                <div className="flex flex-col gap-3">
-                  {outputs.map(out => (
-                     <div key={`output-manage-item-${out.internalId || out.id}`} className="flex flex-col gap-2 bg-[#1a1a1a] p-3 rounded border border-white/10">
-                       <div className="flex justify-between items-center">
-                         <span className="font-bold">Salida {out.id}</span>
-                         <button onClick={() => {
-                           if(outputs.length > 1) setOutputs(outputs.filter(o => o.id !== out.id));
-                         }} className="text-red-400 hover:text-red-300">
-                           <Trash2 size={14} />
-                         </button>
-                       </div>
-                       <div className="flex flex-col gap-1">
-                         <span className="text-[10px] text-obs-muted uppercase font-bold">Pantalla Física</span>
-                         <select 
-                           value={out.physicalScreenId || ''} 
-                           onChange={(e) => {
-                             const screenId = e.target.value;
-                             setOutputs(outputs.map(o => o.id === out.id ? { ...o, physicalScreenId: screenId || null } : o));
-                             if (activeOutputId === out.id) {
-                               setSelectedScreenId(screenId || null);
-                               setSelectedItemType('program');
-                             }
-                           }}
-                           className="bg-black border border-obs-border rounded px-2 py-1 text-xs text-white outline-none focus:border-obs-accent"
-                         >
-                           <option value="">No asignada</option>
-                           {externalScreens.map(screen => (
-                             <option key={screen.id} value={screen.id}>
-                               {screen.name || `Monitor ${screen.id}`}
-                             </option>
-                           ))}
-                         </select>
-                       </div>
-                     </div>
-                  ))}
-                </div>
-              </div>
-            </motion.div>
-          </div>
+          <OutputManagerModal 
+            outputs={outputs}
+            externalScreens={externalScreens}
+            activeOutputId={activeOutputId}
+            onClose={() => setIsOutputModalOpen(false)}
+            onApply={(newOutputs) => {
+              setOutputs(newOutputs);
+              
+              // Ensure selectedScreenId is correctly updated if the activeOutput modified its physicalScreenId
+              const currentActive = newOutputs.find(o => o.id === activeOutputId);
+              if (currentActive) {
+                if (currentActive.physicalScreenId !== selectedScreenId) {
+                  setSelectedScreenId(currentActive.physicalScreenId || null);
+                  setSelectedItemType('program');
+                }
+              }
+              
+              setIsOutputModalOpen(false);
+            }}
+          />
         )}
       </AnimatePresence>
 
       {/* Preview Modal */}
       <AnimatePresence>
         {isPreviewModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-obs-bg border border-obs-border rounded-lg shadow-2xl w-[500px] flex flex-col overflow-hidden"
-            >
-              <div className="px-4 py-3 border-b border-obs-border bg-obs-surface flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <Eye size={16} className="text-obs-accent" />
-                  <span className="font-bold text-sm uppercase tracking-widest">Configuración de Previews</span>
-                </div>
-                <button onClick={() => setIsPreviewModalOpen(false)} className="text-obs-muted hover:text-white transition-colors">
-                  <X size={20} />
-                </button>
-              </div>
-              <div className="p-4 flex flex-col gap-4 bg-obs-bg">
-                <button 
-                  onClick={() => {
-                     const nextId = String(Math.max(0, ...previews.map(p => parseInt(p.id))) + 1);
-                     setPreviews([...previews, { 
-                       id: nextId, 
-                       name: `Preview ${nextId}`, 
-                       clipId: null, 
-                       volume: 0.5, 
-                       isLive: false,
-                       assignedOutputs: outputs.map(o => o.id),
-                       selectedOutputs: [],
-                       hideOverlay: false,
-                       overlayColor: '#00AAFF'
-                     }]);
-                  }}
-                  className="w-full py-2.5 bg-obs-accent hover:bg-obs-accent-hover text-white rounded font-black text-[10px] uppercase tracking-widest shadow-lg shadow-obs-accent/20 transition-all active:scale-95"
-                >
-                  + Agregar Nuevo Preview
-                </button>
-                <div className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                  {previews.map(p => (
-                     <div key={`preview-manage-item-${p.id}`} className="flex flex-col gap-3 bg-[#1a1a1a] p-4 rounded-lg border border-white/5 shadow-inner">
-                       <div className="flex justify-between items-center bg-black/30 p-2 rounded border border-white/5">
-                         <div className="flex flex-col gap-0.5">
-                           <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Nombre del Monitor</span>
-                           <input 
-                             type="text" 
-                             value={p.name} 
-                             onChange={(e) => setPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, name: e.target.value } : pr))}
-                             className="bg-transparent border-none px-0 py-0.5 text-sm font-bold w-48 focus:text-obs-accent outline-none text-white transition-colors"
-                           />
-                         </div>
-                         <button onClick={() => setPreviews(previews.filter(pr => pr.id !== p.id))} className="w-8 h-8 flex items-center justify-center bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded transition-all">
-                           <Trash2 size={14} />
-                         </button>
-                       </div>
-                       
-                       <div className="grid grid-cols-2 gap-4">
-                         <div className="space-y-1.5">
-                           <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Salidas Disponibles</span>
-                           <div className="flex gap-1.5 flex-wrap">
-                             {outputs.map(out => (
-                                <button 
-                                  key={out.id}
-                                  onClick={() => {
-                                    setPreviews(prevs => prevs.map(pr => 
-                                      pr.id === p.id ? { 
-                                        ...pr, 
-                                        assignedOutputs: (pr.assignedOutputs || []).includes(out.id) 
-                                          ? pr.assignedOutputs.filter((o: string) => o !== out.id) 
-                                          : [...(pr.assignedOutputs || []), out.id]
-                                      } : pr
-                                    ));
-                                  }}
-                                  className={`w-7 h-7 rounded text-[10px] font-black transition-all border ${p.assignedOutputs?.includes(out.id) ? 'bg-[#00AAFF] border-[#00AAFF] text-white shadow-[0_0_8px_rgba(0,170,255,0.4)]' : 'bg-black/40 border-white/10 text-obs-muted hover:border-white/30'}`}
-                                >
-                                  {out.id}
-                                </button>
-                             ))}
-                           </div>
-                         </div>
-                         
-                         <div className="space-y-2">
-                           <div className="flex items-center justify-between">
-                             <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Mostrar Textos</span>
-                             <button 
-                               onClick={() => setPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, hideOverlay: !pr.hideOverlay } : pr))}
-                               className={`w-8 h-4 rounded-full relative transition-colors ${p.hideOverlay ? 'bg-red-500' : 'bg-green-500'}`}
-                             >
-                               <div className={`absolute top-0.5 bottom-0.5 w-3 bg-white rounded-full transition-all ${p.hideOverlay ? 'right-0.5' : 'left-0.5'}`} />
-                             </button>
-                           </div>
-                           <div className="flex items-center justify-between">
-                             <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted">Color Accent</span>
-                             <input 
-                               type="color" 
-                               value={p.overlayColor || '#00AAFF'} 
-                               onChange={(e) => setPreviews(prevs => prevs.map(pr => pr.id === p.id ? { ...pr, overlayColor: e.target.value } : pr))}
-                               className="w-10 h-5 bg-transparent border-none cursor-pointer"
-                             />
-                           </div>
-                         </div>
-                       </div>
-                     </div>
-                  ))}
-                </div>
-              </div>
-            </motion.div>
-          </div>
+          <PreviewManagerModal
+            previews={previews}
+            outputs={outputs}
+            onClose={() => setIsPreviewModalOpen(false)}
+            onApply={(newPreviews) => {
+              setPreviews(newPreviews);
+              setIsPreviewModalOpen(false);
+            }}
+          />
         )}
       </AnimatePresence>
 
       <AnimatePresence>
         {editingPlaylistId && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-obs-bg/90 backdrop-blur-sm">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -6962,7 +7522,7 @@ export default function App() {
                 </div>
                 <button 
                   onClick={() => setEditingPlaylistId(null)}
-                  className="p-2 hover:bg-white/10 rounded-full transition-colors text-obs-muted hover:text-white"
+                  className="p-2 hover:bg-obs-dark-1 rounded-full transition-colors text-obs-muted hover:text-white"
                 >
                   <X size={20} />
                 </button>
@@ -6986,7 +7546,7 @@ export default function App() {
                       <div className="text-obs-muted cursor-grab active:cursor-grabbing">
                         <GripVertical size={16} />
                       </div>
-                      <div className="w-24 aspect-video rounded overflow-hidden border border-obs-border bg-black/40">
+                      <div className="w-24 aspect-video rounded overflow-hidden border border-obs-border bg-obs-dark-1">
                         {clip.type === 'video' ? (
                           <video src={clip.url} className="w-full h-full object-cover" muted />
                         ) : clip.type === 'document' || clip.name.toLowerCase().endsWith('.pdf') ? (
