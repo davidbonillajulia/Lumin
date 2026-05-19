@@ -114,6 +114,8 @@ interface Playlist {
   speed: number;
   volume: number;
   pan: number;
+  transition?: 'cut' | 'fade' | 'wipe' | 'slide';
+  transitionDuration?: number;
   blendMode: 'Alpha' | 'Add' | 'Subtract' | 'Multiply';
   behavior: 'Cortar' | 'Mezclar' | 'Deslizar';
   curve: 'Lineal' | 'Seno' | 'Exponencial';
@@ -882,7 +884,7 @@ const Monitor = React.memo(({
                         onProgressUpdate={onProgressUpdate}
                         onLevelChange={onLevelChange}
                         onEnded={onEnded}
-                        transitionDuration={settings?.transitionDuration}
+                        transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                       />
                     )}
                     {(busBClip && crossfaderValue !== undefined && crossfaderValue > 0) && (
@@ -900,7 +902,7 @@ const Monitor = React.memo(({
                         isTransmitting={isTransmitting}
                         onProgressUpdate={onProgressUpdate}
                         onEnded={onEnded}
-                        transitionDuration={settings?.transitionDuration}
+                        transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                       />
                     )}
                   </AnimatePresence>
@@ -1026,7 +1028,7 @@ const Monitor = React.memo(({
                     onLevelChange={onLevelChange}
                     onEnded={onEnded}
                     transitionType={transitionType}
-                    transitionDuration={settings?.transitionDuration || 0.4}
+                    transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                   />
               ) : (
                 <motion.div 
@@ -1714,7 +1716,11 @@ const OutputView = React.memo(() => {
     const params = new URLSearchParams(window.location.search || window.location.hash.substring(window.location.hash.indexOf('?') !== -1 ? window.location.hash.indexOf('?') : window.location.hash.length));
     const screenId = params.get('screenId');
     
-    const { programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates, outputs, clips, allScreenSettings, crossfaderValue, isLive, isTransmitting, programVolume, masterVolume, transitionType } = state;
+    const { 
+      programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates, 
+      outputs, clips, allScreenSettings, crossfaderValue, isLive, isTransmitting, 
+      programVolume, masterVolume, transitionType, transitionDuration, externalScreenSettings 
+    } = state;
     
     // Find if this screen is mapped to a specific Lumin Output
     const mappedOutput = outputs?.find((o: any) => o.physicalScreenId === screenId);
@@ -1856,6 +1862,7 @@ const OutputView = React.memo(() => {
                     onEnded={() => {
                        channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busAClip.id } });
                     }}
+                    transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                   />
                 )}
  
@@ -1876,6 +1883,7 @@ const OutputView = React.memo(() => {
                     onEnded={() => {
                        channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busBClip.id } });
                     }}
+                    transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                   />
                 )}
 
@@ -2579,6 +2587,50 @@ const Inspector = React.memo(({
             </CollapsibleSection>
           )}
 
+          <CollapsibleSection 
+            title="TRANSICIONES" 
+            defaultOpen={true} 
+            onReset={() => onUpdateLayer(layer.id, { transition: 'cut', transitionDuration: 1 })}
+          >
+            <div className="space-y-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo de Transición</label>
+                <div className="grid grid-cols-4 gap-1">
+                  {(['fade', 'wipe', 'slide', 'cut'] as const).map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => onUpdateLayer(layer.id, { transition: type })}
+                      className={`py-1 rounded text-[9px] uppercase font-black tracking-tight border transition-all ${
+                        (layer.transition === type || (!layer.transition && type === 'fade'))
+                          ? 'bg-obs-accent border-obs-accent text-white shadow-lg shadow-obs-accent/20' 
+                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
+                      }`}
+                    >
+                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT / NONE'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <PropertyControl 
+                label="Duración"
+                value={(layer.transitionDuration !== undefined ? layer.transitionDuration : 1) * 1000}
+                displayValue={`${Math.round((layer.transitionDuration !== undefined ? layer.transitionDuration : 1) * 1000)}ms`}
+                min={500}
+                max={2000}
+                step={10}
+                onChange={(val) => onUpdateLayer(layer.id, { transitionDuration: val / 1000 })}
+              />
+              
+              <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
+                {(layer.transition === 'fade' || !layer.transition) && "Fundido cruzado de opacidad."}
+                {layer.transition === 'wipe' && "Cortinilla lateral."}
+                {layer.transition === 'slide' && "Desplazamiento lateral."}
+                {layer.transition === 'cut' && "Corte instantáneo."}
+              </div>
+            </div>
+          </CollapsibleSection>
+
           <CollapsibleSection title="Direccionamiento" defaultOpen={true} onReset={() => onUpdateLayer(layer.id, { outputId: null })}>
              <div className="space-y-2">
                <div className="flex flex-col gap-1">
@@ -2703,6 +2755,50 @@ const Inspector = React.memo(({
                 >
                   <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${(playlist.loop !== false) ? 'translate-x-6' : 'translate-x-1'}`} />
                 </button>
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection 
+            title="TRANSICIONES" 
+            defaultOpen={true} 
+            onReset={() => onUpdate(playlist.id, { transition: 'cut', transitionDuration: 1 })}
+          >
+            <div className="space-y-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo de Transición</label>
+                <div className="grid grid-cols-4 gap-1">
+                  {(['fade', 'wipe', 'slide', 'cut'] as const).map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => onUpdate(playlist.id, { transition: type })}
+                      className={`py-1 rounded text-[9px] uppercase font-black tracking-tight border transition-all ${
+                        (playlist.transition === type || (!playlist.transition && type === 'fade'))
+                          ? 'bg-obs-accent border-obs-accent text-white shadow-lg shadow-obs-accent/20' 
+                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
+                      }`}
+                    >
+                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT / NONE'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <PropertyControl 
+                label="Duración"
+                value={(playlist.transitionDuration !== undefined ? playlist.transitionDuration : 1) * 1000}
+                displayValue={`${Math.round((playlist.transitionDuration !== undefined ? playlist.transitionDuration : 1) * 1000)}ms`}
+                min={500}
+                max={2000}
+                step={10}
+                onChange={(val) => onUpdate(playlist.id, { transitionDuration: val / 1000 })}
+              />
+              
+              <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
+                {(playlist.transition === 'fade' || !playlist.transition) && "Fundido cruzado de opacidad."}
+                {playlist.transition === 'wipe' && "Cortinilla lateral."}
+                {playlist.transition === 'slide' && "Desplazamiento lateral."}
+                {playlist.transition === 'cut' && "Corte instantáneo."}
               </div>
             </div>
           </CollapsibleSection>
@@ -2869,49 +2965,6 @@ const Inspector = React.memo(({
               </div>
             </div>
           </div>
-          </CollapsibleSection>
-
-          <CollapsibleSection 
-            title="Transiciones"
-            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: 'cut', transitionDuration: 1000 })}
-          >
-            <div className="space-y-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo de Transición</label>
-                <div className="grid grid-cols-4 gap-1">
-                  {['fade', 'wipe', 'slide', 'cut'].map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: type as any })}
-                      className={`py-1 rounded text-[9px] uppercase font-black tracking-tight border transition-all ${
-                        externalScreenSettings.transitionType === type 
-                          ? 'bg-obs-accent border-obs-accent text-white shadow-lg shadow-obs-accent/20' 
-                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
-                      }`}
-                    >
-                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT / NONE'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <PropertyControl 
-                label="Duración"
-                value={externalScreenSettings.transitionDuration}
-                displayValue={`${externalScreenSettings.transitionDuration}ms`}
-                min={500}
-                max={2000}
-                step={10}
-                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, transitionDuration: Math.round(val) })}
-              />
-              
-              <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
-                {externalScreenSettings.transitionType === 'fade' && "Fundido cruzado de opacidad."}
-                {externalScreenSettings.transitionType === 'wipe' && "Cortinilla lateral usando crossfader."}
-                {externalScreenSettings.transitionType === 'slide' && "Desplazamiento lateral usando crossfader."}
-                {externalScreenSettings.transitionType === 'cut' && "Corte instantáneo."}
-              </div>
-            </div>
           </CollapsibleSection>
 
           <CollapsibleSection 
@@ -5174,8 +5227,8 @@ const PreviewManagerModal = ({
 export default function App() {
   const [clips, setClips] = useState<Clip[]>(MOCK_CLIPS);
   const [playlists, setPlaylists] = useState<Playlist[]>([
-    { id: 'playlist-1', name: 'Playlist 1', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
-    { id: 'playlist-2', name: 'Playlist 2', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
+    { id: 'playlist-1', name: 'Playlist 1', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, transition: 'fade', transitionDuration: 1, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
+    { id: 'playlist-2', name: 'Playlist 2', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, transition: 'fade', transitionDuration: 1, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
   ]);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<'clip' | 'playlist' | 'program' | 'preview' | 'layer' | 'pip' | 'pipManager' | null>(null);
@@ -5465,6 +5518,8 @@ export default function App() {
             programVolume,
             masterVolume,
             transitionType: externalScreenSettings.transitionType,
+            transitionDuration: externalScreenSettings.transitionDuration,
+            externalScreenSettings,
             layers,
             layerOutputs,
             pipLayers
@@ -5545,6 +5600,8 @@ export default function App() {
             programVolume,
             masterVolume,
             transitionType: externalScreenSettings.transitionType,
+            transitionDuration: externalScreenSettings.transitionDuration,
+            externalScreenSettings,
             layers,
             layerOutputs,
             pipLayers
@@ -5555,7 +5612,7 @@ export default function App() {
     return () => {
        if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     }
-  }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, layers, layerOutputs, pipLayers]);
+  }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, externalScreenSettings.transitionDuration, layers, layerOutputs, pipLayers]);
 
   // Screen Detection Logic
   const detectScreens = async (requestPermission = false) => {
@@ -5801,6 +5858,8 @@ export default function App() {
                 programVolume,
                 masterVolume,
                 transitionType: externalScreenSettings.transitionType,
+                transitionDuration: externalScreenSettings.transitionDuration,
+                externalScreenSettings,
                 layers,
                 layerOutputs,
                 pipLayers
@@ -7408,6 +7467,8 @@ export default function App() {
                     programVolume,
                     masterVolume,
                     transitionType: externalScreenSettings.transitionType,
+                    transitionDuration: externalScreenSettings.transitionDuration,
+                    externalScreenSettings,
                     layers,
                     layerOutputs,
                     pipLayers
