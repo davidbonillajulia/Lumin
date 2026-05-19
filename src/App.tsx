@@ -169,6 +169,7 @@ interface Layer {
   transition: 'cut' | 'fade' | 'wipe' | 'slide';
   transitionDuration: number;
   isPlaying?: boolean;
+  isActive?: boolean;
   loop?: boolean;
   playbackMode?: 'single' | 'sequence';
 }
@@ -3408,6 +3409,10 @@ const Inspector = React.memo(({
                       <video 
                         src={clip.url} 
                         className="w-full h-full object-contain" 
+                        style={{
+                          opacity: clip.opacity ?? 1,
+                          filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1})`
+                        }}
                         muted 
                         loop 
                         autoPlay 
@@ -4586,13 +4591,12 @@ const LayersSection = React.memo(({
                             onClick={(e) => {
                               e.stopPropagation();
                               setActiveColumnTrigger(null);
-                              setColumnUIStates({});
                               setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: 'play' }));
                               onUpdateLayer(layer.id, { isPlaying: true, playbackMode: 'sequence' });
                               const currentIdx = layer.activeSlotIndex !== null ? layer.activeSlotIndex : 0;
                               onTriggerClip(layer.id, currentIdx, 'sequence');
                             }}
-                            className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${layer.isPlaying && layer.playbackMode === 'sequence' ? 'border-green-500 bg-green-500 text-white' : 'border-white/80 bg-white text-black hover:bg-gray-200'}`}
+                            className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${layer.isPlaying && layer.playbackMode === 'sequence' ? 'border-green-500 bg-green-500 text-white' : 'border-white/80 bg-white text-black hover:bg-green-100 hover:border-green-500'}`}
                             title="Play Layer"
                           >
                             <Play size={8} fill="currentColor" />
