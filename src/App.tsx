@@ -4160,7 +4160,7 @@ const GridSection = React.memo(({
           <span className="text-[9px] uppercase font-bold tracking-widest">Agrega fuentes a esta baraja</span>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
           {deckClips[currentDeck].map(clip => (
             <ClipCard 
               key={clip.id} 
@@ -5302,6 +5302,7 @@ export default function App() {
   const [showPlaylists, setShowPlaylists] = useState(true);
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [showContentPanel, setShowContentPanel] = useState(true);
 
   useEffect(() => {
     if (isDarkMode) {
@@ -6748,6 +6749,13 @@ export default function App() {
             <span className="text-[11px] font-bold tracking-tight">LUMIN OBS</span>
           </div>
           <nav className="flex gap-1 items-center">
+            <button 
+              onClick={() => setShowContentPanel(!showContentPanel)}
+              className={`text-[10px] px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize flex items-center gap-1.5 ${!showContentPanel ? 'bg-obs-accent text-white' : 'text-obs-text hover:bg-obs-border'}`}
+            >
+              <Layout size={12} />
+              {showContentPanel ? 'Ocultar Contenido' : 'Mostrar Contenido'}
+            </button>
             <button className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize">Archivo</button>
             
             <div className="relative">
@@ -6826,7 +6834,14 @@ export default function App() {
       {/* Main Workspace */}
       <main className="flex-1 flex overflow-hidden">
         {/* Left Sidebar: Content Management */}
-        <div className="w-64 flex flex-col border-r border-obs-border bg-obs-bg overflow-hidden shadow-2xl z-20">
+        <AnimatePresence>
+          {showContentPanel && (
+            <motion.div 
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 256, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              className="flex flex-col border-r border-obs-border bg-obs-bg overflow-hidden shadow-2xl z-20"
+            >
           <div className="flex-1 flex flex-col min-h-0">
             <Library 
               onAddClip={handleAddClips} 
@@ -7023,14 +7038,16 @@ export default function App() {
               </div>
             </div>
           </div>
-        </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
 
-        {/* Center: Monitors & Controls */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+    {/* Center: Monitors & Controls */}
+    <div className="flex-1 flex flex-col overflow-hidden">
           {/* Monitors Area */}
-          <div className="flex-none p-4 flex flex-col lg:flex-row gap-4 items-start justify-between bg-obs-dark-m3 border-b border-obs-border z-10 relative overflow-y-auto" style={{ maxHeight: '60vh' }}>
+          <div className="flex-none p-2 flex flex-col lg:flex-row gap-4 items-start justify-center bg-obs-dark-m3 border-b border-obs-border z-10 relative overflow-x-hidden overflow-y-auto" style={{ maxHeight: '60vh' }}>
             
-            <div className="flex-none grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-max w-fit">
+            <div className="flex-none grid grid-cols-1 xl:grid-cols-2 gap-4 auto-rows-max w-fit shrink-0">
               {previews.map(preview => (
                 <div key={`monitor-preview-${preview.id}`} className="flex flex-col gap-1.5 group/mon relative w-[320px]">
                    <div className="flex justify-between items-end px-1">
@@ -7120,7 +7137,7 @@ export default function App() {
             </div>
             
             {/* Right: Program Monitor & Controls */}
-            <div className="w-[480px] flex flex-col flex-none ml-auto shrink-0 group/prog">
+            <div className="w-[480px] flex flex-col flex-none shrink-0 group/prog">
               <div className="flex justify-between items-end px-1 pb-0.5">
                  <span className="text-[9px] text-red-500 font-black uppercase tracking-[0.2em]">
                    PROGRAM SALIDA {activeOutputId}
@@ -7308,7 +7325,7 @@ export default function App() {
             <div className="flex-1 overflow-y-auto" />
 
             {/* Pinned area for layers and playlists pegged to docks */}
-              <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-4 py-2 space-y-4">
+              <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 px-2 py-2 space-y-4 scale-[0.95] origin-top mb-[-10px] w-full">
               {workMode === 'layers' && (
                 <CollapsibleSection title="Gestión de Capas" defaultOpen={true}>
                   <div className="max-h-[300px] overflow-y-auto no-scrollbar">
