@@ -875,7 +875,7 @@ const Monitor = React.memo(({
                         masterVolume={masterVolume}
                         opacity={transitionType === 'fade' ? audioOpacityA : (busAClip.opacity || 1) * (busAClip.master || 1)}
                         faderOpacity={audioOpacityA}
-                        isProgram={isProgram}
+                        isProgram={crossfaderValue === 0}
                         crossfaderValue={crossfaderValue}
                         transitionType={transitionType}
                         isTransmitting={isTransmitting}
@@ -894,7 +894,7 @@ const Monitor = React.memo(({
                         opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
                         style={{ clipPath: wipeTransform }}
                         faderOpacity={audioOpacityB}
-                        isProgram={isProgram}
+                        isProgram={crossfaderValue === 100}
                         crossfaderValue={crossfaderValue}
                         transitionType={transitionType}
                         isTransmitting={isTransmitting}
@@ -1433,8 +1433,8 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
             // If it's not looping, trigger early
            if (!isLooping && !earlyEndTriggered.current) {
              const actualTransition = transitionType || 'fade';
-             const fadeTriggerTime = (actualTransition !== 'cut') ? (transitionDuration || 0.4) : 0;
-             // Add 0.05s tolerance to make sure we don't freeze early on slow decoding
+             const fadeTriggerTime = (actualTransition !== 'cut') ? ((transitionDuration || 0.4) / 2) : 0;
+             // Add 0.1s tolerance to make sure we don't freeze early on slow decoding
              if (remaining > 0 && remaining <= fadeTriggerTime + 0.1) {
                earlyEndTriggered.current = true;
                onEndedRef.current?.();
@@ -1603,7 +1603,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
               <video 
                 ref={videoRef}
                 src={clip.url} 
-                className={`w-full h-full ${(!isProgram || clip.fitToScale) ? 'object-contain' : 'object-none'}`} 
+                className={`w-full h-full ${clip.fitToScale || !isProgram ? 'object-contain' : 'object-none'}`} 
                 autoPlay 
                 muted={true}
                 loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
@@ -1617,7 +1617,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
           ) : clip.type === 'document' ? (
             <DocumentLayer clip={clip} onUpdateClip={updateClip} />
           ) : (
-            <img src={clip.url} className={`w-full h-full ${(!isProgram || clip.fitToScale) ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
+            <img src={clip.url} className={`w-full h-full ${clip.fitToScale || !isProgram ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
           )}
         </motion.div>
     </>
@@ -1717,40 +1717,26 @@ const OutputView = React.memo(() => {
     const { programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates, outputs, clips, allScreenSettings, crossfaderValue, isLive, isTransmitting, programVolume, masterVolume, transitionType } = state;
     
     // Find if this screen is mapped to a specific Lumin Output
-    const mappedOutput = outputs?.find((o: any) => o && o.physicalScreenId === screenId);
-    
-    // Default fallback settings
-    const defaultSettings: ExternalScreenSettings = {
-      brightness: 1, contrast: 1, saturation: 1, opacity: 1, x: 0, y: 0, rotation: 0,
-      scalingW: 1, scalingH: 1, colorBalance: { r: 1, g: 1, b: 1 },
-      bgScalingW: 100, bgScalingH: 100,
-      transitionType: 'cut', transitionDuration: 1
-    };
-
-    const settings = (allScreenSettings && screenId && allScreenSettings[screenId]) 
-      ? allScreenSettings[screenId] 
-      : defaultSettings;
-    
-    // Ensure all required fields exist safely
-    const safeSettings = {
-       ...defaultSettings,
-       ...settings,
-       colorBalance: (settings && settings.colorBalance) ? settings.colorBalance : { r: 1, g: 1, b: 1 },
-       transitionDuration: (settings && settings.transitionDuration !== undefined) ? settings.transitionDuration : 1,
-       transitionType: (settings && settings.transitionType) ? settings.transitionType : 'cut'
-    };
-    
+    const mappedOutput = outputs?.find((o: any) => o.physicalScreenId === screenId);
     const mappedProgramClipId = (mappedOutput && outputPrograms) ? outputPrograms[mappedOutput.id] : programClipId;
     const mappedTargetClipId = (mappedOutput && outputTransitionTargets) ? outputTransitionTargets[mappedOutput.id] : previewClipId;
     const mappedOffState = (mappedOutput && outputOffStates) ? outputOffStates[mappedOutput.id] : false;
 
+    const settings = (allScreenSettings && screenId && allScreenSettings[screenId]) 
+      ? allScreenSettings[screenId] 
+      : (state.externalScreenSettings || {
+          brightness: 1, contrast: 1, saturation: 1, opacity: 1, x: 0, y: 0, rotation: 0,
+          scalingW: 1, scalingH: 1, colorBalance: { r: 1, g: 1, b: 1 },
+          bgScalingW: 100, bgScalingH: 100
+        });
+    
     const isContentActive = isLive && isTransmitting;
-    const busAClip = (clips || []).find((c: any) => c && c.id === mappedProgramClipId);
+    const busAClip = clips.find((c: any) => c.id === mappedProgramClipId);
     
     // Only use busB if this output is a target of the current transition, or if we're doing a global take
     const isTarget = (mappedOutput && outputTransitionTargets && outputTransitionTargets[mappedOutput.id]);
     const busBClip = (isTarget || !Object.keys(outputTransitionTargets || {}).length) 
-      ? (clips || []).find((c: any) => c && c.id === mappedTargetClipId) 
+      ? clips.find((c: any) => c.id === mappedTargetClipId) 
       : null;
     
     // In OutputView, we only show content if it's active.
@@ -1760,19 +1746,19 @@ const OutputView = React.memo(() => {
     const audioOpacityA = (() => {
       if (!busAClip) return 0;
       if (transitionType === 'cut') return mappedOffState ? 0 : 1;
-      const base = (1 - (crossfaderValue || 0) / 100);
+      const base = (1 - crossfaderValue / 100);
       return mappedOffState ? 0 : base;
     })();
     const audioOpacityB = (() => {
       if (!busBClip) return 0;
       if (transitionType === 'cut') return 0;
-      const base = ((crossfaderValue || 0) / 100);
+      const base = (crossfaderValue / 100);
       return mappedOffState ? 0 : base;
     })();
 
     const wipeTransformOut = (() => {
       if (transitionType !== 'wipe') return undefined;
-      return `inset(0 ${100 - (crossfaderValue || 0)}% 0 0)`;
+      return `inset(0 ${100 - crossfaderValue}% 0 0)`;
     })();
 
     return (
@@ -1785,10 +1771,10 @@ const OutputView = React.memo(() => {
         }}
       >
         {/* Background Layer - Always rendered if enabled */}
-        {safeSettings.showBackground && safeSettings.backgroundImage && (
+        {settings.showBackground && settings.backgroundImage && (
           <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none flex items-center justify-center bg-black">
             <img 
-              src={safeSettings.backgroundImage} 
+              src={settings.backgroundImage} 
               className="absolute pointer-events-none" 
               style={{
                 width: '100%',
@@ -1796,7 +1782,7 @@ const OutputView = React.memo(() => {
                 objectFit: 'fill',
                 top: '50%',
                 left: '50%',
-                transform: `translate(-50%, -50%) scale(${(safeSettings.bgScalingW ?? 100) / 100}, ${(safeSettings.bgScalingH ?? 100) / 100})`,
+                transform: `translate(-50%, -50%) scale(${(settings.bgScalingW ?? 100) / 100}, ${(settings.bgScalingH ?? 100) / 100})`,
                 display: 'block'
               }}
               referrerPolicy="no-referrer" 
@@ -1870,7 +1856,6 @@ const OutputView = React.memo(() => {
                     onEnded={() => {
                        channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busAClip.id } });
                     }}
-                    transitionDuration={safeSettings.transitionDuration}
                   />
                 )}
  
@@ -1884,22 +1869,20 @@ const OutputView = React.memo(() => {
                     opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
                     style={{ clipPath: wipeTransformOut }}
                     faderOpacity={audioOpacityB}
-                    isProgram={true}
+                    isProgram={false}
                     crossfaderValue={crossfaderValue}
                     transitionType={transitionType}
                     isTransmitting={isTransmitting}
                     onEnded={() => {
                        channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busBClip.id } });
                     }}
-                    transitionDuration={safeSettings.transitionDuration}
                   />
                 )}
 
                 {/* Layer Rendering - Multi-layer mixing */}
-                {state.layers && state.layers.filter((l: any) => l && l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
-                  const activeClip = l.activeClipId ? (state.clips || []).find((c: any) => c && c.id === l.activeClipId) : null;
+                {state.layers && state.layers.filter((l: any) => l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
+                  const activeClip = l.activeClipId ? (state.clips || []).find((c: any) => c.id === l.activeClipId) : null;
                   if (!activeClip) return null;
-                  const lb = l.colorBalance || { r: 1, g: 1, b: 1 };
                   return (
                     <div 
                       key={l.id} 
@@ -1913,9 +1896,9 @@ const OutputView = React.memo(() => {
                         <filter id={`rgbLayerOutput-${l.id}`} colorInterpolationFilters="sRGB">
                           <feColorMatrix 
                             type="matrix" 
-                            values={`${lb.r} 0 0 0 0
-                                    0 ${lb.g} 0 0 0
-                                    0 0 ${lb.b} 0 0
+                            values={`${l.colorBalance.r} 0 0 0 0
+                                    0 ${l.colorBalance.g} 0 0 0
+                                    0 0 ${l.colorBalance.b} 0 0
                                     0 0 0 1 0`} 
                           />
                         </filter>
@@ -1996,12 +1979,8 @@ const OutputView = React.memo(() => {
     );
   } catch (e: any) {
     console.error("Error crítico en OutputView:", e);
-    return (
-      <div className="bg-black h-screen w-screen flex flex-col items-center justify-center text-red-500 font-mono text-[10px] p-8 uppercase tracking-widest text-center gap-4">
-        <span>Error de Salida</span>
-        <div className="text-[7px] text-obs-muted max-w-xs">{e.message}</div>
-      </div>
-    );
+    setError(e.message);
+    return null;
   }
 });
 
@@ -2493,37 +2472,8 @@ const Inspector = React.memo(({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 custom-scrollbar">
-          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdateLayer(layer.id, { opacity: 1, rotation: 0, transition: 'fade', transitionDuration: 1 })}>
+          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdateLayer(layer.id, { opacity: 1, rotation: 0, transition: 'fade' })}>
             <div className="space-y-2">
-              <div className="flex flex-col gap-1 mb-2">
-                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo Transición</label>
-                <div className="grid grid-cols-4 gap-1">
-                  {['fade', 'wipe', 'slide', 'cut'].map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => onUpdateLayer(layer.id, { transition: type as any })}
-                      className={`py-1 rounded text-[8px] uppercase font-black tracking-tight border transition-all ${
-                        layer.transition === type 
-                          ? 'bg-obs-accent border-obs-accent text-white' 
-                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
-                      }`}
-                    >
-                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'NADA'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              
-              <PropertyControl 
-                label="Duración"
-                value={layer.transitionDuration || 1}
-                displayValue={`${(layer.transitionDuration || 1).toFixed(1)}s`}
-                min={0.5}
-                max={2.0}
-                step={0.1}
-                onChange={(val) => onUpdateLayer(layer.id, { transitionDuration: val })}
-              />
-
               <PropertyControl 
                 label="Opacidad"
                 value={layer.opacity * 100}
@@ -2923,7 +2873,7 @@ const Inspector = React.memo(({
 
           <CollapsibleSection 
             title="Transiciones"
-            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: 'cut', transitionDuration: 1 })}
+            onReset={() => onUpdateExternalScreen({ ...externalScreenSettings, transitionType: 'cut', transitionDuration: 1000 })}
           >
             <div className="space-y-3">
               <div className="flex flex-col gap-1">
@@ -2939,7 +2889,7 @@ const Inspector = React.memo(({
                           : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
                       }`}
                     >
-                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'NADA'}
+                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT'}
                     </button>
                   ))}
                 </div>
@@ -2948,11 +2898,11 @@ const Inspector = React.memo(({
               <PropertyControl 
                 label="Duración"
                 value={externalScreenSettings.transitionDuration}
-                displayValue={`${externalScreenSettings.transitionDuration.toFixed(1)}s`}
-                min={0.5}
-                max={2.0}
-                step={0.1}
-                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, transitionDuration: val })}
+                displayValue={`${externalScreenSettings.transitionDuration}ms`}
+                min={0}
+                max={5000}
+                step={100}
+                onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, transitionDuration: Math.round(val) })}
               />
               
               <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
@@ -5259,7 +5209,7 @@ export default function App() {
     bgScalingW: 100,
     bgScalingH: 100,
     transitionType: 'cut',
-    transitionDuration: 1
+    transitionDuration: 1000
   };
 
   const getExternalScreenSettings = (screenId: string | null): ExternalScreenSettings => {
@@ -5377,10 +5327,9 @@ export default function App() {
     clips,
     crossfaderValue,
     allScreenSettings,
-    externalScreenSettings,
     isLive,
     isTransmitting,
-    activeOutputId,
+    isProgramOff: outputOffStates[activeOutputId] || false,
     programVolume,
     masterVolume,
     transitionType: externalScreenSettings.transitionType,
@@ -5390,7 +5339,7 @@ export default function App() {
     playlists
   });
 
-  // Sync ref with state
+  // Sync state to ref
   useEffect(() => {
     stateRef.current = {
       programClipId,
@@ -5402,10 +5351,9 @@ export default function App() {
       clips,
       crossfaderValue,
       allScreenSettings,
-      externalScreenSettings,
       isLive,
       isTransmitting,
-      activeOutputId,
+      isProgramOff: outputOffStates[activeOutputId] || false,
       programVolume,
       masterVolume,
       transitionType: externalScreenSettings.transitionType,
@@ -5415,10 +5363,10 @@ export default function App() {
       playlists
     };
   }, [
-    programClipId, previewClipId, outputPrograms, outputTransitionTargets, 
-    outputOffStates, outputs, clips, crossfaderValue, allScreenSettings, 
-    externalScreenSettings, isLive, isTransmitting, activeOutputId, 
-    programVolume, masterVolume, layers, layerOutputs, pipLayers, playlists
+    programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates,
+    outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting,
+    activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType,
+    layers, layerOutputs, pipLayers, playlists
   ]);
 
   useEffect(() => {
@@ -5474,15 +5422,7 @@ export default function App() {
   // Initialize BroadcastChannel
   useEffect(() => {
     outputChannel.current = new BroadcastChannel('lumin-output');
-    
-    // Resync when window gets focus to prevent hangs/desync after minimize
-    const handleFocus = () => {
-      console.log("Window focused, requesting sync...");
-      outputChannel.current?.postMessage({ type: 'SYNC_STATE', payload: { isFocusResync: true } });
-    };
-    window.addEventListener('focus', handleFocus);
     return () => {
-      window.removeEventListener('focus', handleFocus);
       outputChannel.current?.close();
     };
   }, []);
@@ -5564,42 +5504,42 @@ export default function App() {
     pipLayers,
     playlists
   ]);
-  // Use a fixed interval for syncing instead of dependency-triggered timeouts
-  // This is much lighter on the main thread and prevents "freezing" during rapid state updates
+  // Throttle state mirroring to 30fps max to avoid locking the UI during smooth slider inputs
+  const syncTimeoutRef = useRef<any>(null);
+
   useEffect(() => {
-    const syncInterval = setInterval(() => {
-      if (outputChannel.current && document.visibilityState === 'visible') {
-        const s = stateRef.current;
-        outputChannel.current.postMessage({
+    if (outputChannel.current) {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = setTimeout(() => {
+        outputChannel.current?.postMessage({
           type: 'SYNC_STATE',
           payload: {
-            programClipId: s.programClipId,
-            previewClipId: s.previewClipId,
-            outputPrograms: s.outputPrograms,
-            outputTransitionTargets: s.outputTransitionTargets,
-            outputOffStates: s.outputOffStates,
-            outputs: s.outputs,
-            clips: s.clips,
-            crossfaderValue: s.crossfaderValue,
-            allScreenSettings: s.allScreenSettings,
-            externalScreenSettings: s.externalScreenSettings,
-            isLive: s.isLive,
-            isTransmitting: s.isTransmitting,
-            isProgramOff: s.outputOffStates[s.activeOutputId] || false,
-            programVolume: s.programVolume,
-            masterVolume: s.masterVolume,
-            transitionType: s.transitionType,
-            activeOutputId: s.activeOutputId,
-            layers: s.layers,
-            layerOutputs: s.layerOutputs,
-            pipLayers: s.pipLayers
+            programClipId,
+            previewClipId,
+            outputPrograms,
+            outputTransitionTargets,
+            outputOffStates,
+            outputs,
+            clips,
+            crossfaderValue,
+            allScreenSettings,
+            isLive,
+            isTransmitting,
+            isProgramOff: outputOffStates[activeOutputId] || false,
+            programVolume,
+            masterVolume,
+            transitionType: externalScreenSettings.transitionType,
+            layers,
+            layerOutputs,
+            pipLayers
           }
         });
-      }
-    }, 100); // 10fps is much more stable and prevents memory/CPU overload
-
-    return () => clearInterval(syncInterval);
-  }, []);
+      }, 30);
+    }
+    return () => {
+       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    }
+  }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, layers, layerOutputs, pipLayers]);
 
   // Screen Detection Logic
   const detectScreens = async (requestPermission = false) => {
@@ -6280,7 +6220,7 @@ export default function App() {
       }
 
       animate(0, 100, {
-        duration: tDuration,
+        duration: tDuration / 1000,
         ease: "linear",
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
@@ -6300,7 +6240,7 @@ export default function App() {
       }
 
       animate(0, 100, {
-        duration: tDuration,
+        duration: tDuration / 1000,
         ease: "linear",
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
