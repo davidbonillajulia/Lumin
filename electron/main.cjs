@@ -46,6 +46,11 @@ if (!gotTheLock) {
 
     mainWindow.on('closed', () => {
       mainWindow = null;
+      // Close all output windows when main interface is closed
+      outputWindows.forEach(win => {
+        if (!win.isDestroyed()) win.close();
+      });
+      outputWindows.clear();
     });
   }
 

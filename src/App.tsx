@@ -1603,7 +1603,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
               <video 
                 ref={videoRef}
                 src={clip.url} 
-                className={`w-full h-full ${clip.fitToScale || !isProgram ? 'object-contain' : 'object-none'}`} 
+                className={`w-full h-full ${clip.fitToScale ? 'object-contain' : 'object-none'}`} 
                 autoPlay 
                 muted={true}
                 loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
@@ -1617,7 +1617,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
           ) : clip.type === 'document' ? (
             <DocumentLayer clip={clip} onUpdateClip={updateClip} />
           ) : (
-            <img src={clip.url} className={`w-full h-full ${clip.fitToScale || !isProgram ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
+            <img src={clip.url} className={`w-full h-full ${clip.fitToScale ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
           )}
         </motion.div>
     </>
@@ -2889,7 +2889,7 @@ const Inspector = React.memo(({
                           : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
                       }`}
                     >
-                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT'}
+                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT / NONE'}
                     </button>
                   ))}
                 </div>
@@ -2899,9 +2899,9 @@ const Inspector = React.memo(({
                 label="Duración"
                 value={externalScreenSettings.transitionDuration}
                 displayValue={`${externalScreenSettings.transitionDuration}ms`}
-                min={0}
-                max={5000}
-                step={100}
+                min={500}
+                max={2000}
+                step={10}
                 onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, transitionDuration: Math.round(val) })}
               />
               
@@ -5315,6 +5315,22 @@ export default function App() {
   const outputWindowsRef = useRef<Record<string, Window | null>>({});
   const [launchedScreens, setLaunchedScreens] = useState<Record<string, boolean>>({});
   const outputChannel = useRef<BroadcastChannel | null>(null);
+
+  // Close external screens on unmount
+  useEffect(() => {
+    const handleUnload = () => {
+      Object.entries(outputWindowsRef.current).forEach(([_, win]) => {
+        if (win && !win.closed) {
+          win.close();
+        }
+      });
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      handleUnload();
+    };
+  }, []);
   
   // Ref to store latest state
   const stateRef = useRef({
