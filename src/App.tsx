@@ -940,7 +940,7 @@ const Monitor = React.memo(({
                         clip={busAClip}
                         volume={volume}
                         masterVolume={masterVolume}
-                        opacity={transitionType === 'fade' ? audioOpacityA : (busAClip.opacity || 1) * (busAClip.master || 1)}
+                        opacity={opacity}
                         faderOpacity={audioOpacityA}
                         isProgram={crossfaderValue === 0}
                         crossfaderValue={crossfaderValue}
@@ -958,7 +958,7 @@ const Monitor = React.memo(({
                         clip={busBClip}
                         volume={volume}
                         masterVolume={masterVolume}
-                        opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
+                        opacity={opacity}
                         style={{ clipPath: wipeTransform }}
                         faderOpacity={audioOpacityB}
                         isProgram={crossfaderValue === 100}
@@ -1009,7 +1009,7 @@ const Monitor = React.memo(({
                             clip={activeClip}
                             volume={l.muted ? 0 : volume}
                             masterVolume={masterVolume}
-                            opacity={1}
+                            opacity={opacity}
                             isProgram={!!isProgram}
                             isTransmitting={isTransmitting}
                             onProgressUpdate={onProgressUpdate}
@@ -1086,7 +1086,7 @@ const Monitor = React.memo(({
                     clip={activeClip}
                     volume={volume}
                     masterVolume={masterVolume}
-                    opacity={1}
+                    opacity={opacity}
                     isProgram={false}
                     isTransmitting={isTransmitting}
                     onProgressUpdate={onProgressUpdate}
@@ -1590,6 +1590,8 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   const brightness = clip.brightness ?? 1;
   const contrast = clip.contrast ?? 1;
   const saturation = clip.saturation ?? 1;
+  const clipOpacity = clip.opacity ?? 1;
+  const clipMaster = clip.master ?? 1;
 
   const clipPath = useMemo(() => {
     if (isProgram && transitionType === 'wipe' && crossfaderValue !== undefined) {
@@ -1621,7 +1623,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
       clipPath: type === 'wipe' ? 'inset(0 0 0 100%)' : 'inset(0 0 0 0)'
     }),
     animate: {
-      opacity: opacity * (faderOpacity !== undefined ? faderOpacity : 1),
+      opacity: opacity * (faderOpacity !== undefined ? faderOpacity : 1) * clipOpacity * clipMaster,
       x: xOffsetPercentage,
       clipPath: 'inset(0 0 0 0)',
       y: `${clip.transform.y}%`,
@@ -5997,19 +5999,21 @@ export default function App() {
 
   const onTriggerLayerClip = (layerId: string, slotIdx: number, mode: 'single' | 'sequence' = 'single') => {
     setActiveColumnTrigger(null);
-    if (mode === 'sequence') {
-      setActiveLayerTriggers({ [layerId]: 'play' });
-    } else {
-      setActiveLayerTriggers({});
-    }
     setColumnUIStates({});
     setLayers(prev => prev.map(l => {
       if (l.id !== layerId) return l;
       const clip = l.slots[slotIdx];
       if (clip) {
+        if (mode === 'sequence') {
+          setActiveLayerTriggers(prev => ({ ...prev, [layerId]: 'play' }));
+        } else {
+          setActiveLayerTriggers(prev => ({ ...prev, [layerId]: 'play' }));
+        }
         return { ...l, activeClipId: clip.id, activeSlotIndex: slotIdx, isPlaying: true, playbackMode: mode };
       }
-      return { ...l, activeClipId: null, activeSlotIndex: slotIdx, isPlaying: false };
+      // If empty slot, stop the layer
+      setActiveLayerTriggers(prev => ({ ...prev, [layerId]: 'stop' }));
+      return { ...l, activeClipId: null, activeSlotIndex: null, isPlaying: false };
     }));
   };
 
