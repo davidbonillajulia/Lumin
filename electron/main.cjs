@@ -25,7 +25,7 @@ if (!gotTheLock) {
     mainWindow = new BrowserWindow({
       width: 1920,
       height: 1080,
-      title: 'Lumin Media Server',
+      title: 'LUMIN Media Server',
       backgroundColor: '#000000',
       webPreferences: {
         nodeIntegration: false,
@@ -94,7 +94,7 @@ if (!gotTheLock) {
       height: targetDisplay.bounds.height,
       fullscreen: true,
       frame: false,
-      title: `Lumin Output - ${targetDisplay.label}`,
+      title: `LUMIN Output - ${targetDisplay.label}`,
       backgroundColor: '#000000',
       webPreferences: {
         nodeIntegration: false,

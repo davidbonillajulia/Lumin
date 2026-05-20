@@ -1,4 +1,4 @@
-# Lumina Media Server: Architecture & Design Specification
+# LUMIN Media Server: Architecture & Design Specification
 
 **Author:** Senior Multimedia Architect  
 **Date:** March 26, 2026  

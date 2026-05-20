@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.5",
   "description": "Professional Media Server",
-  "author": "Lumin Media",
+  "author": "LUMIN Media",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -17,7 +17,7 @@
   },
   "build": {
     "appId": "com.lumin.mediaserver",
-    "productName": "Lumin",
+    "productName": "LUMIN",
     "directories": {
       "output": "release"
     },
@@ -38,7 +38,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Lumin",
+      "shortcutName": "LUMIN",
       "guid": "5c90b39c-2c97-4e78-8386-3be3d44bc4c9",
       "runAfterFinish": true
     },

@@ -1801,7 +1801,7 @@ const OutputView = React.memo(() => {
       programVolume, masterVolume, transitionType, transitionDuration, externalScreenSettings 
     } = state;
     
-    // Find if this screen is mapped to a specific Lumin Output
+    // Find if this screen is mapped to a specific LUMIN Output
     const mappedOutput = outputs?.find((o: any) => o.physicalScreenId === screenId);
     const mappedProgramClipId = (mappedOutput && outputPrograms) ? outputPrograms[mappedOutput.id] : programClipId;
     const mappedTargetClipId = (mappedOutput && outputTransitionTargets) ? outputTransitionTargets[mappedOutput.id] : previewClipId;
@@ -5872,7 +5872,7 @@ export default function App() {
     }
 
     // Try to open the output window
-    const windowName = `LuminOutput_${screenKey}`;
+    const windowName = `LUMINOutput_${screenKey}`;
     
       try {
         const win = window.open(url.toString(), windowName, features);
@@ -6802,7 +6802,7 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <Zap size={14} className="text-obs-accent" />
-            <span className="text-[11px] font-bold tracking-tight">LUMIN OBS</span>
+            <span className="text-[11px] font-bold tracking-tight">LUMIN</span>
           </div>
           <nav className="flex gap-1 items-center">
             <button 
