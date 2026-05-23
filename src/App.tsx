@@ -708,7 +708,8 @@ const Monitor = React.memo(({
   activeOutputId = '1',
   layers = [],
   layerOutputs = {},
-  onUpdateClip
+  onUpdateClip,
+  perfSettings
 }: { 
   title: string, 
   isActive?: boolean, 
@@ -755,7 +756,8 @@ const Monitor = React.memo(({
   activeOutputId?: string,
   layers?: Layer[],
   layerOutputs?: Record<string, string | null>,
-  onUpdateClip?: (id: string, updates: Partial<Clip>) => void
+  onUpdateClip?: (id: string, updates: Partial<Clip>) => void,
+  perfSettings?: any
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>('');
@@ -980,6 +982,7 @@ const Monitor = React.memo(({
                         onEnded={onEnded}
                         transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                         onReady={() => setIsBusAReady(true)}
+                        perfSettings={perfSettings}
                       />
                     )}
                     {activeBusBClip && (
@@ -998,6 +1001,7 @@ const Monitor = React.memo(({
                         onProgressUpdate={onProgressUpdate}
                         onEnded={onEnded}
                         transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
+                        perfSettings={perfSettings}
                       />
                     )}
                   </AnimatePresence>
@@ -1047,6 +1051,7 @@ const Monitor = React.memo(({
                             loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
                             transitionType={l.transition || 'fade'}
                             transitionDuration={l.transitionDuration || 0.4}
+                            perfSettings={perfSettings}
                           />
                         </AnimatePresence>
                         </div>
@@ -1124,6 +1129,7 @@ const Monitor = React.memo(({
                     onEnded={onEnded}
                     transitionType={transitionType}
                     transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
+                    perfSettings={perfSettings}
                   />
               ) : (
                 <motion.div 
@@ -1473,7 +1479,7 @@ const DocumentLayer = ({ clip, onUpdateClip }: { clip: any, onUpdateClip?: (id: 
   );
 };
 
-const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, transitionDuration, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip, onReady }: { 
+const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, transitionDuration, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip, onReady, perfSettings }: { 
   clip: any, 
   volume: number, 
   masterVolume?: number,
@@ -1492,13 +1498,25 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   isTransmitting?: boolean,
   style?: React.CSSProperties,
   onUpdateClip?: (id: string, updates: any) => void,
-  onReady?: () => void
+  onReady?: () => void,
+  perfSettings?: any
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>('');
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
   const [firstFrameRendered, setFirstFrameRendered] = useState(clip.type !== 'video');
+
+  const activePerf = useMemo(() => perfSettings || {
+    gpuDecoding: 'd3d11',
+    engine: 'native_chromium',
+    bufferingMode: 'aggressive',
+    renderingBackend: 'directx11',
+    codecOptimization: true,
+    loopMode: 'native_seamless',
+    highResOptimization: true,
+    maxThreads: 4
+  }, [perfSettings]);
 
   useEffect(() => {
     if (clip.type === 'video') {
@@ -1513,9 +1531,9 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     const video = videoRef.current;
     if (video) {
       const activeLoop = loopOverride !== undefined ? loopOverride : clip.loop !== false;
-      video.loop = activeLoop;
+      video.loop = activeLoop && activePerf.loopMode !== 'double_buffer';
     }
-  }, [loopOverride, clip.loop]);
+  }, [loopOverride, clip.loop, activePerf.loopMode]);
 
   // Report first frame rendered when state becomes true
   useEffect(() => {
@@ -1573,6 +1591,12 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
              if (remaining > 0 && remaining <= fadeTriggerTime + 0.1) {
                earlyEndTriggered.current = true;
                onEndedRef.current?.();
+             }
+           } else if (isLooping && activePerf.loopMode !== 'standard') {
+             // Seamless sub-frame looper: seeks early to prevent browser thread freeze & black frames
+             if (remaining > 0 && remaining <= 0.08) {
+               video.currentTime = startTime !== undefined ? startTime : (clip.currentTime !== undefined ? clip.currentTime : 0);
+               video.play().catch(() => {});
              }
            }
         }
@@ -1738,6 +1762,12 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
               clip.filter === 'invert' ? 'invert(100%)' :
               clip.filter === 'blur' ? 'blur(10px)' : ''
             }`,
+            transform: 'translate3d(0, 0, 0)',
+            backfaceVisibility: 'hidden',
+            WebkitBackfaceVisibility: 'hidden',
+            perspective: '1000px',
+            transformStyle: 'preserve-3d',
+            willChange: 'transform, opacity',
             ...style
           }}
         >
@@ -1746,12 +1776,20 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
                 ref={videoRef}
                 src={clip.url} 
                 className={`w-full h-full ${!isProgram || clip.fitToScale ? 'object-contain' : 'object-none'}`} 
+                style={{
+                  transform: 'translate3d(0, 0, 0)',
+                  backfaceVisibility: 'hidden',
+                  WebkitBackfaceVisibility: 'hidden',
+                  transformStyle: 'preserve-3d',
+                  willChange: 'transform',
+                  imageRendering: activePerf.highResOptimization ? 'auto' : 'pixelated'
+                }}
                 autoPlay 
                 muted={true}
                 loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
                 playsInline
                 crossOrigin="anonymous"
-                preload="auto"
+                preload={activePerf.bufferingMode !== 'normal' ? 'auto' : 'metadata'}
                 onCanPlay={() => {
                   setIsReady(true);
                   setFirstFrameRendered(true);
@@ -1796,6 +1834,8 @@ const OutputView = React.memo(() => {
       return null;
     }
   }, [state]);
+
+  const perfSettings = useMemo(() => state?.perfSettings, [state?.perfSettings]);
 
   const extractedClips = state?.clips;
   const extractedProgramClipId = state?.programClipId;
@@ -2070,9 +2110,10 @@ const OutputView = React.memo(() => {
                       isTransmitting={isTransmitting}
                       onEnded={() => {
                          channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busAClip.id } });
-                      }}
+                       }}
                       transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                       onReady={() => setIsBusAReady(true)}
+                      perfSettings={perfSettings}
                     />
                   )}
  
@@ -2094,6 +2135,7 @@ const OutputView = React.memo(() => {
                          channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: activeBusBClip.id } });
                       }}
                       transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
+                      perfSettings={perfSettings}
                     />
                   )}
                 </AnimatePresence>
@@ -2144,6 +2186,7 @@ const OutputView = React.memo(() => {
                                channelRef.current?.postMessage({ type: 'LAYER_CLIP_ENDED', payload: { layerId: l.id, clipId: activeClip.id } });
                             }}
                             loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
+                            perfSettings={perfSettings}
                           />
                         </AnimatePresence>
                       </div>
@@ -5583,7 +5626,27 @@ export default function App() {
     return () => document.removeEventListener('nav-to-pip-manager', handleNav);
   }, []);
 
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'audio' | 'info' | null>('audio');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'audio' | 'info' | 'perf' | null>('audio');
+  const [perfSettings, setPerfSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem('lumin_perf_settings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      gpuDecoding: 'd3d11',       // 'd3d11' | 'dxva2' | 'nvdec' | 'vaapi' | 'software'
+      engine: 'native_chromium',          // 'ffmpeg' | 'libvlc' | 'native_chromium'
+      bufferingMode: 'aggressive',      // 'normal' | 'aggressive' | 'ultra_preload'
+      renderingBackend: 'directx11',    // 'directx12' | 'directx11' | 'opengl' | 'vulkan'
+      codecOptimization: true,
+      loopMode: 'native_seamless',      // 'native_seamless' | 'double_buffer' | 'standard'
+      highResOptimization: true,
+      maxThreads: 4
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('lumin_perf_settings', JSON.stringify(perfSettings));
+  }, [perfSettings]);
   const [libraryFiles, setLibraryFiles] = useState<{ name: string, type: string, url: string, file: File }[]>([]);
   const [selectedLibraryUrls, setSelectedLibraryUrls] = useState<Set<string>>(new Set());
   const [crossfaderValue, setCrossfaderValue] = useState(0);
@@ -5633,7 +5696,8 @@ export default function App() {
     layers,
     layerOutputs,
     pipLayers,
-    playlists
+    playlists,
+    perfSettings
   });
 
   // Sync state to ref
@@ -5657,13 +5721,14 @@ export default function App() {
       layers,
       layerOutputs,
       pipLayers,
-      playlists
+      playlists,
+      perfSettings
     };
   }, [
     programClipId, previewClipId, outputPrograms, outputTransitionTargets, outputOffStates,
     outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting,
     activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType,
-    layers, layerOutputs, pipLayers, playlists
+    layers, layerOutputs, pipLayers, playlists, perfSettings
   ]);
 
   useEffect(() => {
@@ -5750,7 +5815,8 @@ export default function App() {
             externalScreenSettings,
             layers,
             layerOutputs,
-            pipLayers
+            pipLayers,
+            perfSettings
           }
         });
       }
@@ -5854,7 +5920,8 @@ export default function App() {
             externalScreenSettings,
             layers,
             layerOutputs,
-            pipLayers
+            pipLayers,
+            perfSettings
           }
         });
       }, 30);
@@ -5862,7 +5929,7 @@ export default function App() {
     return () => {
        if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
     }
-  }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, externalScreenSettings.transitionDuration, layers, layerOutputs, pipLayers]);
+  }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, externalScreenSettings.transitionDuration, layers, layerOutputs, pipLayers, perfSettings]);
 
   // Screen Detection Logic
   const detectScreens = async (requestPermission = false) => {
@@ -7284,6 +7351,161 @@ export default function App() {
               </AnimatePresence>
             </div>
 
+            {/* Rendimiento & Hardware GPU Tab */}
+            <div className="border-b border-obs-border">
+              <button 
+                onClick={() => setActiveSidebarTab(activeSidebarTab === 'perf' ? null : 'perf')}
+                className={`w-full flex items-center justify-between px-4 py-2 hover:bg-obs-surface transition-colors ${activeSidebarTab === 'perf' ? 'bg-obs-surface/50' : 'bg-obs-bg'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <Cpu size={12} className={activeSidebarTab === 'perf' ? 'text-obs-accent' : 'text-obs-muted'} />
+                  <span className={`text-[9px] font-black uppercase tracking-wider ${activeSidebarTab === 'perf' ? 'text-obs-text' : 'text-obs-muted'}`}>RENDIMIENTO Y GPU</span>
+                </div>
+                <ChevronDown size={12} className={`text-obs-muted transition-transform duration-300 ${activeSidebarTab === 'perf' ? '' : '-rotate-90'}`} />
+              </button>
+
+              <AnimatePresence initial={false}>
+                {activeSidebarTab === 'perf' && (
+                  <motion.div
+                    initial={{ height: 0 }}
+                    animate={{ height: 'auto' }}
+                    exit={{ height: 0 }}
+                    className="overflow-hidden bg-obs-dark-1"
+                  >
+                    <div className="p-3 space-y-3">
+                      <div className="bg-obs-surface p-2.5 rounded border border-obs-text/5 space-y-2.5">
+                        
+                        {/* Motor de Reproducción */}
+                        <div className="space-y-1">
+                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Motor de Reproducción</label>
+                          <select 
+                            value={perfSettings.engine}
+                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, engine: e.target.value }))}
+                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
+                          >
+                            <option value="native_chromium">Chromium Threaded GPGPU</option>
+                            <option value="ffmpeg">FFmpeg GPGPU Engine</option>
+                            <option value="libvlc">libVLC Hardware Core</option>
+                          </select>
+                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
+                            LibVLC/FFmpeg habilitan precarga paralela y mitigación de latencia de fotogramas.
+                          </span>
+                        </div>
+
+                        {/* Decodificación por Hardware */}
+                        <div className="space-y-1">
+                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Decodificación HW (Windows)</label>
+                          <select 
+                            value={perfSettings.gpuDecoding}
+                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, gpuDecoding: e.target.value }))}
+                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
+                          >
+                            <option value="d3d11">Direct3D 11 (GPU)</option>
+                            <option value="dxva2">DXVA2 (DirectX Video Accel)</option>
+                            <option value="nvdec">NVIDIA NVDEC Core</option>
+                            <option value="vaapi">Intel/AMD VA-API HW</option>
+                            <option value="software">Software (CPU Múltiple)</option>
+                          </select>
+                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
+                            Recomendado: D3D11 / DXVA2 para Windows Media Foundation acelerado.
+                          </span>
+                        </div>
+
+                        {/* API de Presentación Gráfica */}
+                        <div className="space-y-1">
+                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">API de Presentación Gráfica</label>
+                          <select 
+                            value={perfSettings.renderingBackend}
+                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, renderingBackend: e.target.value }))}
+                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
+                          >
+                            <option value="directx11">DirectX 11 (Composición GPU)</option>
+                            <option value="directx12">DirectX 12 (Baja Latencia)</option>
+                            <option value="opengl">OpenGL Core 4.6</option>
+                            <option value="vulkan">Vulkan Universal RT</option>
+                          </select>
+                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
+                            Fuerza el backend del acelarador para la rasterización de matrices de color.
+                          </span>
+                        </div>
+
+                        {/* Modo de Búfer e Hilos */}
+                        <div className="space-y-1">
+                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Modo de Búfer e Hilos</label>
+                          <select 
+                            value={perfSettings.bufferingMode || 'aggressive'}
+                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, bufferingMode: e.target.value }))}
+                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
+                          >
+                            <option value="normal">Estándar (Búfer de Demanda)</option>
+                            <option value="aggressive">Agresivo (Precarga 2000ms)</option>
+                            <option value="ultra_preload">Pool de Precarga Ultra (Videos HD)</option>
+                          </select>
+                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
+                            Ultra-preloader almacena en caché GPU los cuadros clave para transiciones sin cortes.
+                          </span>
+                        </div>
+
+                        {/* Algoritmo de Bucle */}
+                        <div className="space-y-1">
+                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Algoritmo de Bucle</label>
+                          <select 
+                            value={perfSettings.loopMode || 'native_seamless'}
+                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, loopMode: e.target.value }))}
+                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
+                          >
+                            <option value="native_seamless">Seamless Sub-frame Seek</option>
+                            <option value="double_buffer">Double Buffer Loop (Sin cortes)</option>
+                            <option value="standard">HTML5 Tradicional (Posible corte)</option>
+                          </select>
+                        </div>
+
+                        {/* Optimizar Codecs HA */}
+                        <div className="flex items-center justify-between gap-2.5 pt-1.5 border-t border-obs-text/5">
+                          <span className="text-[7px] text-obs-text font-black uppercase font-sans">Optimizar Codecs HA</span>
+                          <button
+                            onClick={() => setPerfSettings((p: any) => ({ ...p, codecOptimization: !p.codecOptimization }))}
+                            className={`w-7 h-4 rounded-full p-0.5 transition-colors ${perfSettings.codecOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                          >
+                            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${perfSettings.codecOptimization ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                          </button>
+                        </div>
+
+                        {/* Fila de Precarga HD */}
+                        <div className="flex items-center justify-between gap-2.5">
+                          <span className="text-[7px] text-obs-text font-black uppercase font-sans">Fila de Precarga HD</span>
+                          <button
+                            onClick={() => setPerfSettings((p: any) => ({ ...p, highResOptimization: !p.highResOptimization }))}
+                            className={`w-7 h-4 rounded-full p-0.5 transition-colors ${perfSettings.highResOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                          >
+                            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${perfSettings.highResOptimization ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                          </button>
+                        </div>
+
+                        {/* Hilos de Procesamiento */}
+                        <div className="space-y-1 pt-1 border-t border-obs-text/5 font-sans">
+                          <div className="flex justify-between items-center text-[7px] text-obs-text font-black uppercase mb-0.5">
+                            <span>Hilos de Procesamiento</span>
+                            <span className="font-mono text-obs-accent text-[8px]">{perfSettings.maxThreads} Cores</span>
+                          </div>
+                          <input 
+                            type="range"
+                            min={1}
+                            max={8}
+                            step={1}
+                            value={perfSettings.maxThreads}
+                            onChange={(e) => setPerfSettings((p: any) => ({ ...p, maxThreads: parseInt(e.target.value) }))}
+                            className="w-full accent-obs-accent h-1 bg-obs-dark-1 rounded"
+                          />
+                        </div>
+
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
             {/* Vista Previa at bottom */}
             <div className="bg-black flex flex-col h-48 min-h-[192px] max-h-[192px] basis-48 shrink-0 border-t border-obs-border">
               <div className="px-3 py-1.5 bg-obs-surface border-b border-obs-border flex justify-between items-center">
@@ -7369,6 +7591,7 @@ export default function App() {
                       pipLayers={pipLayers}
                       activeOutputId={preview.selectedOutputs[0] || '1'}
                       onLayerEnded={handleLayerEnded}
+                      perfSettings={perfSettings}
                       onEnded={() => {
                         if (preview.clipId) {
                           const clip = clips.find(c => c.id === preview.clipId);
@@ -7482,6 +7705,7 @@ export default function App() {
                     colorBalance={externalScreenSettings.colorBalance}
                     pipLayers={pipLayers}
                     activeOutputId={activeOutputId}
+                    perfSettings={perfSettings}
                   />
                 </div>
               </div>
@@ -7773,7 +7997,8 @@ export default function App() {
                     externalScreenSettings,
                     layers,
                     layerOutputs,
-                    pipLayers
+                    pipLayers,
+                    perfSettings
                   }
                 });
               }
