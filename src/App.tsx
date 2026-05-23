@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { PDFRenderer } from './components/PDFRenderer';
+import { PerfManagerModal } from './components/PerfManagerModal';
 import { 
   Play, 
   Pause,
@@ -5618,6 +5619,7 @@ export default function App() {
   const [previews, setPreviews] = useState<any[]>([{ id: '1', name: 'Preview 1', selectedOutputs: [], isLive: false, clipId: null }]);
   const [isOutputModalOpen, setIsOutputModalOpen] = useState(false);
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+  const [isPerfModalOpen, setIsPerfModalOpen] = useState(false);
   // --------------------------------------------
 
   useEffect(() => {
@@ -7156,10 +7158,20 @@ export default function App() {
                           window.open('ms-settings:display');
                           setIsEditMenuOpen(false);
                         }} 
-                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between"
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
                       >
                         <span>Configuración Windows</span>
                         <ExternalLink size={12} />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setIsPerfModalOpen(true);
+                          setIsEditMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between"
+                      >
+                        <span>Rendimiento y CPU</span>
+                        <Cpu size={12} />
                       </button>
                     </motion.div>
                   </>
@@ -8044,6 +8056,20 @@ export default function App() {
             onApply={(newPreviews) => {
               setPreviews(newPreviews);
               setIsPreviewModalOpen(false);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Performance & GPU Modal */}
+      <AnimatePresence>
+        {isPerfModalOpen && (
+          <PerfManagerModal 
+            perfSettings={perfSettings}
+            onClose={() => setIsPerfModalOpen(false)}
+            onApply={(newSettings) => {
+              setPerfSettings(newSettings);
+              setIsPerfModalOpen(false);
             }}
           />
         )}
