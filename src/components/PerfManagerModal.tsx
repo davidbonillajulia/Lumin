@@ -8,6 +8,7 @@ interface PerfSettings {
   bufferingMode: string;
   renderingBackend: string;
   codecOptimization: boolean;
+  renderCodec: string;
   loopMode: string;
   highResOptimization: boolean;
   maxThreads: number;
@@ -183,7 +184,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
         initial={{ scale: 0.95, opacity: 0, y: 15 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 15 }}
-        className="bg-obs-bg border border-obs-border/80 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden text-obs-text font-sans relative"
+        className="bg-obs-bg border border-obs-border/80 rounded shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden text-obs-text font-sans relative"
       >
         {/* Overlay de Guardado Exitoso */}
         {saveStatus === 'saved' && (
@@ -191,13 +192,13 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
             <div className="w-14 h-14 rounded-full bg-emerald-500/15 flex items-center justify-center border border-emerald-500/30 text-emerald-400">
               <Check size={24} />
             </div>
-            <h3 className="text-xs font-black uppercase tracking-widest text-emerald-400">
+            <h3 className="text-[11px] font-black uppercase tracking-widest text-emerald-400">
               ¡Ajustes de Aceleración Aplicados en Windows!
             </h3>
-            <p className="max-w-md text-[9px] text-obs-muted leading-relaxed">
+            <p className="max-w-md text-[10px] text-obs-muted leading-relaxed">
               La configuración ha sido registrada con éxito en el archivo de entorno nativo (<span className="text-obs-text font-mono font-bold">lumin_perf.json</span>). Windows forzará este pipeline de render en el próximo inicio:
             </p>
-            <div className="bg-obs-surface p-3 rounded border border-obs-border max-w-xs w-full font-mono text-[8px] text-left space-y-1">
+            <div className="bg-obs-surface p-3 rounded border border-obs-border max-w-xs w-full font-mono text-[10px] text-left space-y-1">
               <div className="flex justify-between border-b border-obs-text/5 pb-1">
                 <span className="text-obs-muted">API DE PINTADO:</span> 
                 <span className="text-obs-accent font-bold uppercase">{localSettings.renderingBackend}</span>
@@ -219,7 +220,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
               <span className="font-bold uppercase block mb-1">⚠️ REINICIO DE SOFTWARE REQUERIDO</span>
               Para que Windows reasigne los búferes físicos de baja latencia con los controladores de NVIDIA/AMD a nivel de sistema operativo y los muestre en el Panel de Control, reinicie la aplicación de escritorio.
             </div>
-            <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted animate-pulse font-sans">
+            <span className="text-[10px] font-black uppercase tracking-widest text-obs-muted animate-pulse font-sans">
               Volviendo a la interfaz maestra en instantes...
             </span>
           </div>
@@ -229,10 +230,10 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
         {saveStatus === 'saving' && (
           <div className="absolute inset-0 bg-obs-bg/95 z-[110] flex flex-col items-center justify-center p-8 text-center space-y-3">
             <CpuIcon className="animate-spin text-obs-accent" size={32} />
-            <h3 className="text-xs font-black uppercase tracking-widest text-obs-text">
+            <h3 className="text-[11px] font-black uppercase tracking-widest text-obs-text">
               Sincronizando con el Registro de Windows...
             </h3>
-            <p className="max-w-xs text-[9px] text-obs-muted">
+            <p className="max-w-xs text-[10px] text-obs-muted">
               Escribiendo claves de optimización de hardware...
             </p>
           </div>
@@ -242,7 +243,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
         <div className="px-5 py-3.5 border-b border-obs-border bg-obs-surface flex justify-between items-center shrink-0">
           <div className="flex items-center gap-2">
             <Cpu className="text-obs-accent animate-pulse" size={16} />
-            <h2 className="text-xs font-black uppercase tracking-widest text-obs-text">
+            <h2 className="text-[11px] font-black uppercase tracking-widest text-obs-text">
               CENTRAL DE CONFIGURACIÓN DE RENDIMIENTO Y HARDWARE (GPU)
             </h2>
           </div>
@@ -257,53 +258,53 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
         {/* Modal Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {/* Welcome alert */}
-          <div className="bg-obs-surface/40 border border-obs-accent/20 rounded p-3 text-[10px] leading-relaxed text-obs-muted/90 flex gap-3">
-            <Settings size={18} className="text-obs-accent shrink-0 mt-0.5" />
+          <div className="bg-obs-surface/40 border border-obs-accent/20 rounded-sm p-3 text-[10px] leading-relaxed text-obs-muted flex gap-2">
+            <Settings size={14} className="text-obs-accent shrink-0 mt-0.5" />
             <div>
-              <p className="font-bold text-obs-text uppercase mb-1">Optimización de Motor de Ejecución en Windows Explorer</p>
+              <p className="font-bold text-obs-text uppercase mb-0.5 tracking-wider">Aceleración por Hardware</p>
               <span>
-                Para la decodificación por hardware de alta resolución y reproducción de múltiples transmisiones sincronizadas, Lumin utiliza un motor de aceleración paralela híbrida. Las siguientes opciones modifican cómo interactúa la aplicación web y los renderizadores nativos de Windows (como Chromium Webview2, Electron o los puentes multimedia nativos) con los componentes físicos de tu ordenador.
+                Configuración avanzada del subsistema de renderizado y decodificación nativa para optimizar el consumo de recursos de CPU y memoria instalada.
               </span>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
             {/* Column Left: Controls */}
-            <div className="md:col-span-7 space-y-4">
-              <div className="bg-obs-surface p-4 rounded border border-obs-border/50 space-y-4">
-                <div className="border-b border-obs-border pb-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-obs-accent flex items-center gap-1.5">
-                    <Layers size={13} /> Parámetros del Motor de Video
+            <div className="md:col-span-7 space-y-5">
+              <div className="bg-obs-surface p-5 rounded border border-obs-border/50 space-y-4">
+                <div className="border-b border-obs-border pb-2">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-obs-accent flex items-center gap-2">
+                    <Layers size={14} /> Parámetros del Motor de Video
                   </span>
                 </div>
 
                 {/* Motor de Reproducción */}
                 <div className="space-y-1.5">
                   <div className="flex justify-between items-center">
-                    <label className="text-[8px] text-obs-muted uppercase font-black tracking-widest block">Motor de Reproducción Integrado</label>
-                    <span className="text-[8px] font-mono text-obs-accent bg-obs-accent/10 px-1 py-0.2 rounded font-bold">RECOMENDADO</span>
+                    <label className="text-[10px] text-obs-muted uppercase font-black tracking-widest block">Motor de Reproducción Integrado</label>
+                    <span className="text-[10px] font-mono text-obs-accent bg-obs-accent/10 px-1 py-0.5 rounded font-bold">RECOMENDADO</span>
                   </div>
                   <select 
                     value={localSettings.engine}
                     onChange={(e) => setLocalSettings(prev => ({ ...prev, engine: e.target.value }))}
-                    className="w-full text-[10px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase tracking-wider"
+                    className="w-full text-[11px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase tracking-wider"
                   >
                     <option value="native_chromium">Chromium Threaded GPGPU Engine</option>
                     <option value="ffmpeg">FFmpeg GPGPU Accelerator Core</option>
                     <option value="libvlc">libVLC Hardware Core Native</option>
                   </select>
-                  <p className="text-[7.5px] text-obs-muted/70 leading-normal">
-                    Fuerza la pila de reproducción nativa. El motor FFmpeg y VLC gestionan buffering paralelo de audio y video externo en múltiples subprocesos aislados para suprimir colisiones críticas.
+                  <p className="text-[9px] text-obs-muted/60 leading-normal mt-1">
+                    Selecciona el motor de procesamiento preferido para medios.
                   </p>
                 </div>
 
                 {/* Decodificación por Hardware */}
                 <div className="space-y-1.5">
-                  <label className="text-[8px] text-obs-muted uppercase font-black tracking-widest block">Aceleración por Hardware de Video (Windows Media Accel)</label>
+                  <label className="text-[10px] text-obs-muted uppercase font-black tracking-widest block">Aceleración por Hardware de Video (Windows Media Accel)</label>
                   <select 
                     value={localSettings.gpuDecoding}
                     onChange={(e) => setLocalSettings(prev => ({ ...prev, gpuDecoding: e.target.value }))}
-                    className="w-full text-[10px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase tracking-wider"
+                    className="w-full text-[11px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase tracking-wider"
                   >
                     <option value="d3d11">Direct3D 11 (GPU Windows Dedicado)</option>
                     <option value="dxva2">DXVA2 (DirectX Video Acceleration 2.0)</option>
@@ -311,37 +312,55 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                     <option value="vaapi">Intel/AMD VA-API Hardware Layer</option>
                     <option value="software">Software (Multi-núcleo por CPU - No acelerado)</option>
                   </select>
-                  <p className="text-[7.5px] text-obs-muted/70 leading-normal">
-                    La selección activa el controlador decodificador de silicio en tu GPU Windows. **D3D11** y **DXVA2** usan las tuberías nativas de aceleración DirectX Media Foundation integradas en Windows.
+                  <p className="text-[9px] text-obs-muted/60 leading-normal mt-1">
+                    Driver de decodificación de video en GPU Windows. Direct3D 11 / DXVA2 son los predeterminados.
+                  </p>
+                </div>
+
+                {/* Algoritmo de renderizado/codec preferido */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] text-obs-muted uppercase font-black tracking-widest block">Códec Preferido de Renderizado (Formatos Soportados)</label>
+                  <select 
+                    value={localSettings.renderCodec}
+                    onChange={(e) => setLocalSettings(prev => ({ ...prev, renderCodec: e.target.value }))}
+                    className="w-full text-[11px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase tracking-wider"
+                  >
+                    <option value="dxv3">Resolume DXV 3 (Máximo Rendimiento de GPU)</option>
+                    <option value="h264">H.264 / AVC (Balanceado, Compatible con NVDEC)</option>
+                    <option value="hap">HAP Codec Series (Vidvox HAP / HAP-Q)</option>
+                    <option value="prores">Apple ProRes 422 / 4444</option>
+                  </select>
+                  <p className="text-[9px] text-obs-muted/60 leading-normal mt-1">
+                    Pre-configuración del decodificador de hardware para pre-carga de VRAM anticipada.
                   </p>
                 </div>
 
                 {/* API de Presentación Gráfica */}
                 <div className="space-y-1.5">
-                  <label className="text-[8px] text-obs-muted uppercase font-black tracking-widest block">API de Presentación Gráfica (Rasterización del Lienzo)</label>
+                  <label className="text-[10px] text-obs-muted uppercase font-black tracking-widest block">API de Presentación Gráfica (Rasterización del Lienzo)</label>
                   <select 
                     value={localSettings.renderingBackend}
                     onChange={(e) => setLocalSettings(prev => ({ ...prev, renderingBackend: e.target.value }))}
-                    className="w-full text-[10px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase tracking-wider"
+                    className="w-full text-[11px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase tracking-wider"
                   >
                     <option value="directx11">DirectX 11 (Composición por GPU principal)</option>
                     <option value="directx12">DirectX 12 (Baja latencia multihilo / D3D12)</option>
                     <option value="opengl">OpenGL Core 4.6 Native</option>
                     <option value="vulkan">Vulkan Universal RT Presentation Interface</option>
                   </select>
-                  <p className="text-[7.5px] text-obs-muted/70 leading-normal">
-                    Este motor asigna qué API de renderizado utilizará la aplicación de escritorio para pintar los efectos de mezcla, transiciones WebGL, filtros matriciales RGB y capas PIP.
+                  <p className="text-[9px] text-obs-muted/60 leading-normal mt-1">
+                    API nativa para renderizado y transiciones a nivel de hardware.
                   </p>
                 </div>
 
                 {/* Dos Columnas internas para buffering y loop */}
-                <div className="grid grid-cols-2 gap-3.5">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="text-[8px] text-obs-muted uppercase font-black tracking-widest block">Estrategia de Pool de Búfer</label>
+                    <label className="text-[10px] text-obs-muted uppercase font-black tracking-widest block">Estrategia de Pool de Búfer</label>
                     <select 
                       value={localSettings.bufferingMode || 'aggressive'}
                       onChange={(e) => setLocalSettings(prev => ({ ...prev, bufferingMode: e.target.value }))}
-                      className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-1.5 focus:outline-none focus:border-obs-accent font-black uppercase"
+                      className="w-full text-[10px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase"
                     >
                       <option value="normal">Demanda Simple</option>
                       <option value="aggressive">Agresivo (2000ms caché)</option>
@@ -350,23 +369,23 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                   </div>
                   
                   <div className="space-y-1">
-                    <label className="text-[8px] text-obs-muted uppercase font-black tracking-widest block">Algoritmo de Bucle</label>
+                    <label className="text-[10px] text-obs-muted uppercase font-black tracking-widest block">Algoritmo de Bucle</label>
                     <select 
                       value={localSettings.loopMode || 'native_seamless'}
                       onChange={(e) => setLocalSettings(prev => ({ ...prev, loopMode: e.target.value }))}
-                      className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-1.5 focus:outline-none focus:border-obs-accent font-black uppercase"
+                      className="w-full text-[10px] bg-obs-dark-1 text-obs-text border border-obs-border rounded p-2 focus:outline-none focus:border-obs-accent font-black uppercase"
                     >
-                      <option value="native_seamless">Sub-frame Loop</option>
+                      <option value="native_seamless">Sub-frame Loop (Nat)</option>
                       <option value="double_buffer">Double Buffer Loop</option>
-                      <option value="standard">HTML5 nativo (Estilo Web)</option>
+                      <option value="standard">Simple (Estilo Web)</option>
                     </select>
                   </div>
                 </div>
 
-                <div className="space-y-2 pt-2 border-t border-obs-border/40">
+                <div className="space-y-2 pt-3 border-t border-obs-border/40">
                   <div className="flex justify-between items-center">
-                    <label className="text-[8px] text-obs-muted uppercase font-black tracking-widest block">Hilos de procesamiento en paralelo de Video</label>
-                    <span className="font-mono text-obs-accent text-[9px] font-black">{localSettings.maxThreads} Cores asignados</span>
+                    <label className="text-[10px] text-obs-muted uppercase font-black tracking-widest block">Hilos de procesamiento en paralelo de Video</label>
+                    <span className="font-mono text-obs-accent text-[10px] font-black">{localSettings.maxThreads} Cores asignados</span>
                   </div>
                   <input 
                     type="range"
@@ -375,33 +394,33 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                     step={1}
                     value={localSettings.maxThreads}
                     onChange={(e) => setLocalSettings(prev => ({ ...prev, maxThreads: parseInt(e.target.value) }))}
-                    className="w-full accent-obs-accent h-1.5 bg-obs-dark-1 rounded-full cursor-pointer"
+                    className="w-full accent-obs-accent h-2 bg-obs-dark-1 rounded-full cursor-pointer"
                   />
-                  <div className="flex justify-between text-[6.5px] text-obs-muted/70 font-mono">
+                  <div className="flex justify-between text-[10px] text-obs-muted/70 font-mono">
                     <span>1 Hilo (Mínima carga)</span>
                     <span>{diagnosticsResult?.cpuCores || 8} Hilos (Diagnóstico óptimo)</span>
                   </div>
                 </div>
 
                 {/* Optimización de codecs */}
-                <div className="grid grid-cols-2 gap-3.5 pt-2 border-t border-obs-border/40">
-                  <div className="flex justify-between items-center bg-obs-dark-1 p-2 rounded">
-                    <span className="text-[8px] text-obs-text uppercase font-black tracking-wider leading-none">Optimizar Codecs HA</span>
+                <div className="grid grid-cols-2 gap-4 pt-3 border-t border-obs-border/40">
+                  <div className="flex justify-between items-center bg-obs-dark-1 p-3 rounded">
+                    <span className="text-[10px] text-obs-text uppercase font-black tracking-wider leading-none">Optimizar Codecs HA</span>
                     <button
                       onClick={() => setLocalSettings(prev => ({ ...prev, codecOptimization: !prev.codecOptimization }))}
-                      className={`w-8 h-4.5 rounded-full p-0.5 transition-colors ${localSettings.codecOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                      className={`w-10 h-5 rounded-full p-0.5 transition-colors ${localSettings.codecOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
                     >
-                      <div className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${localSettings.codecOptimization ? 'translate-x-[14px]' : 'translate-x-[1px]'}`} />
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${localSettings.codecOptimization ? 'translate-x-[20px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
 
-                  <div className="flex justify-between items-center bg-obs-dark-1 p-2 rounded">
-                    <span className="text-[8px] text-obs-text uppercase font-black tracking-wider leading-none">Precarga de Videos HD</span>
+                  <div className="flex justify-between items-center bg-obs-dark-1 p-3 rounded">
+                    <span className="text-[10px] text-obs-text uppercase font-black tracking-wider leading-none">Precarga de Videos HD</span>
                     <button
                       onClick={() => setLocalSettings(prev => ({ ...prev, highResOptimization: !prev.highResOptimization }))}
-                      className={`w-8 h-4.5 rounded-full p-0.5 transition-colors ${localSettings.highResOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                      className={`w-10 h-5 rounded-full p-0.5 transition-colors ${localSettings.highResOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
                     >
-                      <div className={`w-3.5 h-3.5 rounded-full bg-white transition-transform ${localSettings.highResOptimization ? 'translate-x-[14px]' : 'translate-x-[1px]'}`} />
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${localSettings.highResOptimization ? 'translate-x-[20px]' : 'translate-x-[2px]'}`} />
                     </button>
                   </div>
                 </div>
@@ -409,16 +428,16 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
             </div>
 
             {/* Column Right: Diagnostics & Windows Nvidia Banner */}
-            <div className="md:col-span-5 space-y-4">
+            <div className="md:col-span-5 space-y-5">
               {/* Diagnósticos del Sistema Windows */}
-              <div className="bg-obs-surface p-4 rounded border border-obs-border/50 space-y-3">
-                <div className="flex justify-between items-center border-b border-obs-border pb-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-obs-accent flex items-center gap-1.5">
-                    <RefreshCw size={13} className={isDiagnosing ? 'animate-spin' : ''} /> Diagnóstico de Windows
+              <div className="bg-obs-surface p-5 rounded border border-obs-border/50 space-y-3">
+                <div className="flex justify-between items-center border-b border-obs-border pb-2">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-obs-accent flex items-center gap-2">
+                    <RefreshCw size={14} className={isDiagnosing ? 'animate-spin' : ''} /> Diagnóstico de Windows
                   </span>
                   <button 
                     onClick={runDiagnostic}
-                    className="text-[8px] uppercase tracking-widest font-bold bg-obs-bg px-2 py-0.5 rounded border border-obs-border text-obs-text hover:bg-obs-border hover:text-white transition-all font-mono"
+                    className="text-[10px] uppercase tracking-widest font-bold bg-obs-bg px-2 py-1 rounded border border-obs-border text-obs-text hover:bg-obs-border hover:text-white transition-all font-mono"
                   >
                     Escanear
                   </button>
@@ -426,12 +445,12 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
 
                 {isDiagnosing ? (
                   <div className="py-8 flex flex-col items-center justify-center space-y-2">
-                    <CpuIcon className="animate-spin text-obs-accent" size={24} />
-                    <span className="text-[9px] font-bold text-obs-muted uppercase tracking-widest animate-pulse">Sondeando API DirectX/OpenGL...</span>
+                    <CpuIcon className="animate-spin text-obs-accent" size={28} />
+                    <span className="text-[10px] font-bold text-obs-muted uppercase tracking-widest animate-pulse">Sondeando API DirectX/OpenGL...</span>
                   </div>
                 ) : diagnosticsResult ? (
-                  <div className="space-y-2.5 font-mono text-[8px]">
-                    <div className="bg-obs-dark-1 p-2 rounded space-y-1.5">
+                  <div className="space-y-3 font-mono text-[10px]">
+                    <div className="bg-obs-dark-1 p-3 rounded space-y-2">
                       <div className="flex justify-between border-b border-obs-text/5 pb-1">
                         <span className="text-obs-muted">GPU PRINCIPAL:</span>
                         <span className="text-obs-text font-bold uppercase truncate max-w-[150px]" title={diagnosticsResult.gpuRenderer}>
@@ -453,31 +472,31 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                     </div>
 
                     {/* Matriz de compatibilidades */}
-                    <div className="bg-obs-dark-1 p-2 rounded space-y-1.5">
-                      <div className="text-[7.5px] font-black text-obs-muted uppercase border-b border-obs-text/5 pb-1 select-none">LISTA DE INTEGRIDAD DE CONTROLADORES</div>
+                    <div className="bg-obs-dark-1 p-3 rounded space-y-2">
+                      <div className="text-[10px] font-black text-obs-muted uppercase border-b border-obs-text/5 pb-1 select-none">LISTA DE INTEGRIDAD DE CONTROLADORES</div>
                       
-                      <div className="flex justify-between items-center text-[7.5px]">
+                      <div className="flex justify-between items-center text-[10px]">
                         <span>DirectX 11 (Composición)</span>
                         {diagnosticsResult.directX11Supported ? (
-                          <span className="text-emerald-500 font-bold flex items-center gap-0.5">● DISPONIBLE (D3D11)</span>
+                          <span className="text-emerald-500 font-bold flex items-center gap-1">● DISPONIBLE (D3D11)</span>
                         ) : (
                           <span className="text-red-500 font-bold">● NO COMPATIBLE</span>
                         )}
                       </div>
 
-                      <div className="flex justify-between items-center text-[7.5px]">
+                      <div className="flex justify-between items-center text-[10px]">
                         <span>DirectX 12 / Vulkan (Baja Latencia)</span>
                         {diagnosticsResult.directX12Supported ? (
-                          <span className="text-emerald-500 font-bold flex items-center gap-0.5">● INSTALADO EN WINDOWS</span>
+                          <span className="text-emerald-500 font-bold flex items-center gap-1">● INSTALADO EN WINDOWS</span>
                         ) : (
-                          <span className="text-amber-500 font-bold flex items-center gap-0.5">▲ SIN API WEBGPU (SIMULADA)</span>
+                          <span className="text-amber-500 font-bold flex items-center gap-1">▲ SIN API WEBGPU (SIMULADA)</span>
                         )}
                       </div>
 
-                      <div className="flex justify-between items-center text-[7.5px]">
+                      <div className="flex justify-between items-center text-[10px]">
                         <span>OpenGL Core API</span>
                         {diagnosticsResult.openglSupported ? (
-                          <span className="text-emerald-500 font-bold flex items-center gap-0.5">● DISPONIBLE (CON ARREGLO)</span>
+                          <span className="text-emerald-500 font-bold flex items-center gap-1">● DISPONIBLE (CON ARREGLO)</span>
                         ) : (
                           <span className="text-red-500 font-bold">● CONTROLADOR OBSOLETO</span>
                         )}
@@ -486,18 +505,18 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
 
                     {/* GPU Check and Nvidia Specific */}
                     {diagnosticsResult.isNvidia ? (
-                      <div className="bg-emerald-500/10 border border-emerald-500/30 rounded p-2.5 text-emerald-400">
-                        <div className="flex items-center gap-1.5 font-bold uppercase text-[8.5px] mb-1">
-                          <Zap size={10} className="fill-emerald-400" /> ¡GPU NVIDIA DETECTADA CON ÉXITO!
+                      <div className="bg-emerald-500/10 border border-emerald-500/30 rounded p-3 text-emerald-400">
+                        <div className="flex items-center gap-2 font-bold uppercase text-[10px] mb-1.5">
+                          <Zap size={12} className="fill-emerald-400" /> ¡GPU NVIDIA DETECTADA CON ÉXITO!
                         </div>
-                        <p className="leading-relaxed text-[7px] text-emerald-400/80">
-                          Tu aceleradora NVIDIA está acelerando activamente la rasterización matricial y efectos WebGL de Lumin. El decodificador NVDEC de hardware ha sido inicializado sobre la API de video de Windows.
+                        <p className="leading-relaxed text-[10px] text-emerald-400/90 font-sans">
+                          Tu aceleradora NVIDIA está acelerando activamente la rasterización matricial de Lumin. El decodificador NVDEC de hardware ha sido inicializado sobre la API de video de Windows.
                         </p>
                       </div>
                     ) : (
-                      <div className="bg-obs-dark-1 p-2 rounded text-[7px] text-obs-muted">
-                        <span className="font-bold text-[7.5px] text-obs-text uppercase block mb-0.5">Aviso de GPU Intel/AMD</span>
-                        Tu aceleradora integrada está disponible. Asegúrate de forzar la GPU dedicada de alto rendimiento para proyectos que manejen múltiples pantallas con contenido 4K.
+                      <div className="bg-obs-dark-1 p-3 rounded text-[10px] text-obs-muted font-sans gap-2">
+                        <span className="font-bold text-[10px] text-obs-text uppercase block mb-1">Aviso de GPU Intel/AMD</span>
+                        Tu aceleradora integrada está disponible. Asegúrate de forzar la GPU dedicada de alto rendimiento para proyectos que manejen múltiples pantallas con contenido nativo DXV/H264.
                       </div>
                     )}
                   </div>
@@ -505,19 +524,17 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
               </div>
 
               {/* Guard de Diagnóstico e Información de NVIDIA */}
-              <div className="bg-obs-surface p-4 rounded border border-obs-border/50 space-y-2.5">
-                <span className="text-[10px] font-black uppercase tracking-wider text-obs-accent flex items-center gap-1.5">
+              <div className="bg-obs-surface p-5 rounded border border-obs-border/50 space-y-3">
+                <span className="text-[11px] font-black uppercase tracking-wider text-obs-accent flex items-center gap-2">
                   <ShieldAlert size={14} /> Tareas de Integridad en Windows
                 </span>
-                <p className="text-[7.5px] text-obs-muted leading-relaxed">
-                  Para forzar al sistema operativo Windows a despachar esta aplicación usando la aceleradora GPU dedicada (por ejemplo, en el <span className="text-obs-text font-bold">Panel de Control de NVIDIA</span>):
+                <p className="text-[10px] text-obs-muted leading-relaxed">
+                  Para forzar el uso de la GPU dedicada:
                 </p>
-                <ol className="text-[7px] text-obs-muted/90 list-decimal pl-3 space-y-1 font-mono">
-                  <li>Abre el Panel de control de NVIDIA en Windows.</li>
-                  <li>Ve a <span className="text-white">"Controlar la configuración 3D"</span> &gt; <span className="text-white">"Configuración de programa"</span>.</li>
-                  <li>Pulsa <span className="text-white">"Agregar"</span> y localiza el ejecutable de <span className="text-obs-accent font-bold">Lumin.exe</span> (o tu navegador de confianza si corres en sandbox).</li>
-                  <li>Selecciona <span className="text-white">"Procesador NVIDIA de alto rendimiento"</span> como procesador gráfico preferido.</li>
-                  <li>Pulsa aplicar. Las lecturas de DirectX 11/12 se propagarán directamente en el Monitor de Tarea en Windows.</li>
+                <ol className="text-[9.5px] text-obs-muted/90 list-decimal pl-4 space-y-1.5 font-mono">
+                  <li>Panel de control de NVIDIA &gt; Configuración 3D.</li>
+                  <li>Añadir el ejecutable <span className="text-obs-accent font-bold">Lumin.exe</span>.</li>
+                  <li>Selecciona <span className="text-white">"Procesador NVIDIA de alto rendimiento"</span>.</li>
                 </ol>
               </div>
             </div>
@@ -526,7 +543,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
 
         {/* Modal Footer */}
         <div className="px-5 py-3 border-t border-obs-border bg-obs-surface flex justify-between items-center shrink-0">
-          <div className="text-[8px] uppercase tracking-wider text-obs-muted font-bold">
+          <div className="text-[10px] uppercase tracking-wider text-obs-muted font-bold">
             Configuración guardada en el Registro Local de Windows
           </div>
           <div className="flex gap-2">

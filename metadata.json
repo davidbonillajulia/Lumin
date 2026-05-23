@@ -1,5 +1,6 @@
 {
   "name": "LUMIN",
   "description": "High-performance live video server with minimalist UI and GPU-accelerated pipeline.",
-  "requestFramePermissions": ["window-management"]
+  "requestFramePermissions": ["window-management", "camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

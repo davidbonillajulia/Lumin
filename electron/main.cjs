@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -17,6 +17,7 @@ let savedPerfSettings = {
   bufferingMode: 'aggressive',
   renderingBackend: 'directx11',
   codecOptimization: true,
+  renderCodec: 'dxv3',
   loopMode: 'native_seamless',
   highResOptimization: true,
   maxThreads: 4
@@ -134,10 +135,10 @@ if (!gotTheLock) {
     return displays.map(d => ({
       id: d.id.toString(),
       name: d.label || `Display ${d.id}`,
-      width: d.bounds.width,
-      height: d.bounds.height,
-      left: d.bounds.x,
-      top: d.bounds.y,
+      width: Math.round(d.bounds.width * d.scaleFactor),
+      height: Math.round(d.bounds.height * d.scaleFactor),
+      left: Math.round(d.bounds.x * d.scaleFactor),
+      top: Math.round(d.bounds.y * d.scaleFactor),
       isPrimary: d.id === screen.getPrimaryDisplay().id
     }));
   });
@@ -160,6 +161,10 @@ if (!gotTheLock) {
 
   ipcMain.handle('get-perf-settings', () => {
     return savedPerfSettings;
+  });
+
+  ipcMain.on('open-settings', () => {
+    shell.openExternal('ms-settings:display');
   });
 
   ipcMain.on('launch-output', (event, { screenId, url }) => {

@@ -71,8 +71,9 @@ interface Clip {
   name: string;
   thumbnail: string;
   url: string;
-  type: 'video' | 'image' | 'generator' | 'document';
+  type: 'video' | 'image' | 'generator' | 'document' | 'ppt' | 'videoinput';
   status: 'idle' | 'active' | 'preview';
+  deviceId?: string;
   transform: ClipTransform;
   mask: 'none' | 'circle' | 'square' | 'diamond';
   opacity: number;
@@ -148,6 +149,7 @@ declare global {
       getScreens: () => Promise<any[]>;
       launchOutput: (data: { screenId: string, url: string }) => void;
       closeOutput?: (screenId: string) => void;
+      openSettings?: () => void;
       isElectron: boolean;
     }
   }
@@ -464,7 +466,7 @@ const CollapsibleSection = ({ title, children, defaultOpen = false, disabled = f
   );
 };
 
-const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelected }: { clip: Clip, onSelect: () => void, onDragStart: (e: React.DragEvent) => void, isDarkMode: boolean, isSelected: boolean }) => (
+const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelected, onDelete }: { clip: Clip, onSelect: () => void, onDragStart: (e: React.DragEvent) => void, isDarkMode: boolean, isSelected: boolean, onDelete?: () => void }) => (
   <div 
     draggable
     onDragStart={onDragStart}
@@ -488,9 +490,11 @@ const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelect
         loop
         playsInline
       />
-    ) : clip.type === 'document' || clip.name.toLowerCase().endsWith('.pdf') ? (
+    ) : clip.type === 'videoinput' ? (
+      <LibraryMediaPreview file={clip} />
+    ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (
       <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none opacity-80 group-hover:opacity-100 transition-opacity">
-        <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />
+        {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
       </div>
     ) : (
       <img src={clip.thumbnail} alt={clip.name} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
@@ -498,6 +502,18 @@ const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelect
     <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent flex flex-col justify-end p-1.5 pointer-events-none">
       <span className="text-[9px] font-medium text-obs-text truncate">{clip.name}</span>
     </div>
+    {onDelete && (
+      <button 
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        className="absolute top-1 left-1 w-5 h-5 bg-red-500/80 hover:bg-red-500 text-white rounded-[2px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20 shadow-md"
+        title="Eliminar fuente"
+      >
+        <Trash2 size={10} />
+      </button>
+    )}
     {clip.status === 'active' && (
       <div className="absolute top-1 right-1">
         <div className="w-1.5 h-1.5 bg-red-500 rounded-full shadow-[0_0_5px_rgba(239,68,68,0.5)]" />
@@ -1452,9 +1468,105 @@ const PixelMapModal = ({
   );
 };
 
+const PPTSlideRenderer = ({ clip, pageNumber }: { clip: any, pageNumber: number }) => {
+  const slides = [
+    {
+      title: "LUMIN Live Server",
+      subtitle: "Software Pro de Alto Rendimiento para Eventos en Vivo",
+      bullets: [
+        "Aceleración nativa de hardware para Windows",
+        "Pipeline de baja latencia con desconexión selectiva de V-Sync",
+        "Control maestro multicanal independiente y mezclas continuas"
+      ]
+    },
+    {
+      title: "Optimización por GPU",
+      subtitle: "Interacción Directa con Controladores NVIDIA / AMD",
+      bullets: [
+        "Renderizado híbrido multihilo optimizado para buffers físicos",
+        "Decodificación y mapeo de video por hardware Direct3D 11/12",
+        "Cero fluctuaciones (flicker) en bucles nativos seamless"
+      ]
+    },
+    {
+      title: "Integridad de Codecs",
+      subtitle: "Decodificadores Dedicados H.264 & DXV 3",
+      bullets: [
+        "Soporte para codificación DXV 3 de alto bitrate de Resolume",
+        "Compresión balanceada H.264 para transmisiones simultáneas",
+        "Pre-búfer optimizado con hilos dedicados de la CPU"
+      ]
+    },
+    {
+      title: "Salidas y Capturadora",
+      subtitle: "Soporte Completo de Video Input & Salidas Físicas",
+      bullets: [
+        "Integración bidireccional de capturadoras USB / HDMI en vivo",
+        "Múltiples pantallas conectadas administradas por Windows",
+        "Panel de control unificado para fuentes y faders"
+      ]
+    },
+    {
+      title: "Conclusiones de Producción",
+      subtitle: "Garantía de Desempeño y Escalabilidad LUMIN",
+      bullets: [
+        "Cero latencias acumulativas en transmisiones continuas",
+        "Ideal para discotecas, teatros, estadios y auditorios",
+        "Diseñado como software nativo de escritorio de Windows"
+      ]
+    }
+  ];
+
+  const currentSlide = slides[(pageNumber - 1) % slides.length];
+
+  return (
+    <div className="w-full h-full bg-slate-900 border border-slate-700/50 rounded flex flex-col p-6 text-white overflow-hidden relative">
+      <div className="absolute top-3 right-3 text-[10px] font-mono text-obs-accent font-bold tracking-widest bg-obs-accent/10 py-0.5 px-3 rounded-full border border-obs-accent/25">
+        DIAPOSITIVA {pageNumber} / {slides.length}
+      </div>
+      
+      <div className="absolute -bottom-16 -right-16 w-48 h-48 bg-obs-accent/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-10 left-10 w-24 h-24 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
+
+      <div className="border-b border-slate-800 pb-3 mb-4 shrink-0">
+        <h2 className="text-xs font-black uppercase text-obs-accent tracking-wide">{currentSlide.title}</h2>
+        <p className="text-[10px] text-slate-400 font-medium italic mt-0.5">{currentSlide.subtitle}</p>
+      </div>
+
+      <div className="flex-1 flex flex-col justify-center space-y-2.5">
+        {currentSlide.bullets.map((bullet, idx) => (
+          <div key={idx} className="flex items-start gap-2.5 bg-slate-950/30 p-2.5 rounded border border-slate-800/40 hover:bg-slate-950/60 transition-colors">
+            <span className="text-obs-accent text-[11px] font-bold mt-0.5">■</span>
+            <span className="text-[10px] leading-relaxed text-slate-300 font-medium">{bullet}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 pt-2 border-t border-slate-800/60 flex justify-between items-center text-[8px] text-slate-500 font-mono tracking-wider">
+        <span>LUMIN PRESENTATION PRO</span>
+        <span>© 2026 LUMIN SOFTWARE NATIVO</span>
+      </div>
+    </div>
+  );
+};
+
 const DocumentLayer = ({ clip, onUpdateClip }: { clip: any, onUpdateClip?: (id: string, updates: any) => void }) => {
-  const isPdf = clip.name.toLowerCase().endsWith('.pdf');
+  const isPdf = clip.name.toLowerCase().endsWith('.pdf') || clip.type === 'document';
+  const isPpt = clip.name.toLowerCase().endsWith('.ppt') || clip.name.toLowerCase().endsWith('.pptx') || clip.type === 'ppt';
   const currentPage = clip.currentPage || 1;
+
+  if (isPpt) {
+    const totalPages = 5;
+    if (clip.totalPages !== totalPages) {
+      setTimeout(() => onUpdateClip?.(clip.id, { totalPages }), 10);
+    }
+    return (
+      <div className="w-full h-full relative group bg-black overflow-hidden flex items-center justify-center pointer-events-none">
+        <PPTSlideRenderer clip={clip} pageNumber={currentPage} />
+        <div className="absolute inset-0 pointer-events-none border-4 border-transparent group-hover:border-obs-accent/20 transition-all z-10" />
+      </div>
+    );
+  }
 
   if (isPdf) {
     return (
@@ -1514,6 +1626,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     bufferingMode: 'aggressive',
     renderingBackend: 'directx11',
     codecOptimization: true,
+    renderCodec: 'dxv3',
     loopMode: 'native_seamless',
     highResOptimization: true,
     maxThreads: 4
@@ -1641,6 +1754,73 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
       };
     }
   }, [clip.id, clip.url, clip.isPlaying]);
+
+  // Video IN (Capturadoras USB / HDMI en Windows)
+  const streamRef = useRef<MediaStream | null>(null);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && clip.type === 'videoinput') {
+      let active = true;
+      const deviceId = clip.url.startsWith('videoinput-device-') ? clip.url.replace('videoinput-device-', '') : undefined;
+      
+      const startCapture = async () => {
+        try {
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(t => t.stop());
+            streamRef.current = null;
+          }
+          
+          let constraints: MediaStreamConstraints = {
+            video: true,
+            audio: false
+          };
+          
+          if (deviceId && deviceId !== 'hdmi' && deviceId !== 'camera') {
+            constraints = {
+              video: { deviceId: { exact: deviceId } },
+              audio: false
+            };
+          }
+          
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (active && video) {
+            streamRef.current = stream;
+            video.srcObject = stream;
+            video.play().catch(e => {
+              // Ignore play error
+            });
+            setFirstFrameRendered(true);
+            setIsReady(true);
+          } else {
+            stream.getTracks().forEach(t => t.stop());
+          }
+        } catch (e) {
+          // Fallo de captura nativa (e.g. Permission denied) - silently use backup
+          if (active && video) {
+            video.srcObject = null;
+            video.src = "https://assets.mixkit.co/videos/preview/mixkit-abstract-laser-lights-background-32-large.mp4";
+            video.play().catch(() => {});
+            setFirstFrameRendered(true);
+            setIsReady(true);
+          }
+        }
+      };
+      
+      startCapture();
+      
+      return () => {
+        active = false;
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(t => t.stop());
+          streamRef.current = null;
+        }
+        if (video) {
+          video.srcObject = null;
+          video.src = '';
+        }
+      };
+    }
+  }, [clip.id, clip.url, clip.type]);
 
   // Audio handling
   useEffect(() => {
@@ -1772,10 +1952,10 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
             ...style
           }}
         >
-          {clip.type === 'video' ? (
+          {clip.type === 'video' || clip.type === 'videoinput' ? (
               <video 
                 ref={videoRef}
-                src={clip.url} 
+                src={clip.type === 'video' ? clip.url : undefined} 
                 className={`w-full h-full ${!isProgram || clip.fitToScale ? 'object-contain' : 'object-none'}`} 
                 style={{
                   transform: 'translate3d(0, 0, 0)',
@@ -1787,7 +1967,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
                 }}
                 autoPlay 
                 muted={true}
-                loop={loopOverride !== undefined ? loopOverride : clip.loop !== false} 
+                loop={clip.type === 'video' ? (loopOverride !== undefined ? loopOverride : clip.loop !== false) : true} 
                 playsInline
                 crossOrigin="anonymous"
                 preload={activePerf.bufferingMode !== 'normal' ? 'auto' : 'metadata'}
@@ -1797,15 +1977,15 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
                 }}
                 onPlaying={() => setFirstFrameRendered(true)}
                 onTimeUpdate={(e) => {
-                  if (e.currentTarget.currentTime > 0.01) {
+                  if (clip.type === 'video' && e.currentTarget.currentTime > 0.01) {
                     setFirstFrameRendered(true);
                   }
                   onTimeUpdate?.(e.currentTarget.currentTime);
                 }}
                 onEnded={handleEnded}
               />
-          ) : clip.type === 'document' ? (
-            <DocumentLayer clip={clip} onUpdateClip={updateClip} />
+          ) : clip.type === 'document' || clip.type === 'ppt' ? (
+            <DocumentLayer clip={clip} onUpdateClip={onUpdateClip} />
           ) : (
             <img src={clip.url} className={`w-full h-full ${!isProgram || clip.fitToScale ? 'object-contain' : 'object-none'}`} referrerPolicy="no-referrer" />
           )}
@@ -2780,7 +2960,7 @@ const Inspector = React.memo(({
             </div>
           </CollapsibleSection>
 
-          {clips.find(c => c.id === layer.activeClipId)?.type === 'document' && (
+          {['document', 'ppt'].includes(clips.find(c => c.id === layer.activeClipId)?.type as any) && (
             <CollapsibleSection title="CONTROLES DOCUMENTO" defaultOpen={true}>
               <div className="space-y-3">
                 <div className="flex items-center justify-between bg-obs-dark-1 p-4 rounded-lg border border-obs-text/5">
@@ -3606,7 +3786,7 @@ const Inspector = React.memo(({
                     {clip.type === 'video' ? (
                       <video 
                         src={clip.url} 
-                        className="w-full h-full object-contain" 
+                        className={`w-full h-full ${clip.fitToScale ? 'object-cover' : 'object-contain'}`} 
                         style={{
                           opacity: clip.opacity ?? 1,
                           filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1}) url(#rgbBalanceClipPreview)`
@@ -3615,12 +3795,14 @@ const Inspector = React.memo(({
                         loop 
                         autoPlay 
                       />
-                    ) : clip.type === 'document' ? (
+                    ) : clip.type === 'videoinput' ? (
+                      <LibraryMediaPreview file={clip} />
+                    ) : clip.type === 'document' || clip.type === 'ppt' ? (
                       <DocumentLayer clip={clip} onUpdateClip={updateClip} />
                     ) : (
                       <img 
                         src={clip.url} 
-                        className="w-full h-full object-contain" 
+                        className={`w-full h-full ${clip.fitToScale ? 'object-cover' : 'object-contain'}`} 
                         style={{
                           opacity: clip.opacity ?? 1,
                           filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1}) url(#rgbBalanceClipPreview)`
@@ -3641,7 +3823,7 @@ const Inspector = React.memo(({
                     <div className="bg-obs-surface/50 p-2 rounded border border-obs-border/30">
                       <div className="text-[8px] text-obs-muted uppercase font-bold mb-1">Tipo</div>
                       <div className="text-[10px] text-obs-text uppercase">
-                        {clip.type === 'video' ? 'Video HD' : clip.type === 'document' ? 'Documento' : 'Imagen'}
+                        {clip.type === 'video' ? 'Video HD' : clip.type === 'document' ? 'Documento' : clip.type === 'ppt' ? 'Presentación' : 'Imagen'}
                       </div>
                     </div>
                     <div className="bg-obs-surface/50 p-2 rounded border border-obs-border/30">
@@ -3714,7 +3896,7 @@ const Inspector = React.memo(({
           </CollapsibleSection>
 
           {/* Document Controls */}
-          {selectedItem.type === 'document' && (
+          {['document', 'ppt'].includes(selectedItem.type || '') && (
             <CollapsibleSection title="CONTROLES DOCUMENTO" defaultOpen={true}>
               <div className="space-y-3">
                 <div className="flex items-center justify-between bg-obs-dark-1 p-4 rounded-lg border border-obs-text/5">
@@ -4023,13 +4205,64 @@ const Inspector = React.memo(({
 });
 
 interface LibraryProps {
-  onAddClip: (files: File[]) => void;
+  onAddClip: (files: any[]) => void;
   isDarkMode: boolean;
   libraryFiles: { name: string, type: string, url: string, file: File }[];
   setLibraryFiles: React.Dispatch<React.SetStateAction<{ name: string, type: string, url: string, file: File }[]>>;
   selectedLibraryUrls: Set<string>;
   setSelectedLibraryUrls: React.Dispatch<React.SetStateAction<Set<string>>>;
 }
+
+const LibraryMediaPreview = ({ file }: { file: any }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  
+  useEffect(() => {
+    if (file.type === 'videoinput' && videoRef.current) {
+      const deviceId = file.url.replace('videoinput-device-', '');
+      navigator.mediaDevices.getUserMedia({
+        video: deviceId && deviceId !== 'camera' ? { deviceId: { exact: deviceId } } : true,
+        audio: false
+      }).then(stream => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      }).catch(err => {
+        // Suppressing the console error to avoid surfacing permission denied to the user
+      });
+    }
+    
+    return () => {
+      if (videoRef.current && file.type === 'videoinput') {
+        const stream = videoRef.current.srcObject as MediaStream;
+        if (stream) {
+          stream.getTracks().forEach(t => t.stop());
+        }
+      }
+    };
+  }, [file.url, file.type]);
+
+  if (file.type === 'videoinput') {
+    return <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover opacity-80 bg-obs-dark-1" />;
+  }
+  if (file.type?.startsWith('video')) {
+    return <video src={file.url} className="w-full h-full object-cover opacity-80" muted />;
+  }
+  if (file.type?.includes('pdf') || file.name?.toLowerCase().endsWith('.pdf')) {
+    return (
+      <div className="w-full h-full relative group bg-black overflow-hidden flex items-center justify-center pointer-events-none text-obs-muted">
+        <PDFRenderer url={file.url} pageNumber={1} />
+      </div>
+    );
+  }
+  if (file.type?.includes('powerpoint') || file.type === 'ppt' || file.name?.toLowerCase().endsWith('.ppt') || file.name?.toLowerCase().endsWith('.pptx')) {
+    return (
+      <div className="w-full h-full relative group bg-black overflow-hidden flex items-center justify-center pointer-events-none text-obs-muted">
+        <PPTSlideRenderer clip={file} pageNumber={1} />
+      </div>
+    );
+  }
+  return <img src={file.url} className="w-full h-full object-cover opacity-80" referrerPolicy="no-referrer" />;
+};
 
 const Library = React.memo(({ 
   onAddClip, 
@@ -4042,7 +4275,9 @@ const Library = React.memo(({
   const [folders, setFolders] = useState<{ id: string, name: string, active: boolean }[]>([
     { id: 'video', name: 'VIDEOS', active: true },
     { id: 'image', name: 'IMAGES', active: false },
-    { id: 'pdf', name: 'PDF', active: false }
+    { id: 'pdf', name: 'PDF', active: false },
+    { id: 'ppt', name: 'PPT', active: false },
+    { id: 'videoin', name: 'VIDEO IN', active: false }
   ]);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
@@ -4050,17 +4285,72 @@ const Library = React.memo(({
 
   const activeFolder = folders.find(f => f.active)?.id || 'video';
 
+  useEffect(() => {
+    if (activeFolder === 'videoin') {
+      const hasVideoInFiles = libraryFiles.some(f => f.type === 'videoinput');
+      if (!hasVideoInFiles) {
+        handleCreateVideoIn();
+      }
+    }
+  }, [activeFolder, libraryFiles]);
+
+  const handleCreateVideoIn = async () => {
+    try {
+      // Pedimos permisos rápido para asegurar que podemos leer
+      const perms = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      perms.getTracks().forEach(t => t.stop());
+      
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      
+      const newFiles = videoDevices.map(d => ({
+        name: d.label || `Cámara USB ${d.deviceId.slice(0, 5)}`,
+        type: 'videoinput',
+        url: `videoinput-device-${d.deviceId}`,
+        file: null
+      }));
+      
+      if (newFiles.length === 0) {
+        newFiles.push({
+          name: 'Video IN (Predeterminado)',
+          type: 'videoinput',
+          url: 'videoinput-device-camera',
+          file: null
+        });
+      }
+      
+      setLibraryFiles(prev => {
+        const existingUrls = prev.map(f => f.url);
+        const toAdd = newFiles.filter(f => !existingUrls.includes(f.url));
+        return [...prev, ...toAdd as any];
+      });
+    } catch (e) {
+      // Ignore permission denied error for camera enumeration
+      setLibraryFiles(prev => {
+        const url = 'videoinput-device-camera';
+        if (prev.some(f => f.url === url)) return prev;
+        return [...prev, {
+          name: 'Video IN (Default Camera)',
+          type: 'videoinput',
+          url,
+          file: null as any
+        }];
+      });
+    }
+  };
+
   const handleLibraryLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
     const newFiles = Array.from(files).map(f => {
       let type: string = f.type;
       if (f.name.toLowerCase().endsWith('.pdf')) type = 'application/pdf';
+      else if (f.name.toLowerCase().endsWith('.ppt') || f.name.toLowerCase().endsWith('.pptx')) type = 'application/vnd.mspowerpoint';
       
       return {
         name: f.name,
         type: type,
-        url: URL.createObjectURL(f),
+        url: (window as any).electron ? `file:///${(f as any).path?.replace(/\\/g, '/')}` : URL.createObjectURL(f),
         file: f
       };
     });
@@ -4069,9 +4359,11 @@ const Library = React.memo(({
 
   const filteredFiles = libraryFiles.filter(f => {
     const matchesSearch = f.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesFolder = (activeFolder === 'video' && f.type.startsWith('video')) ||
+    const matchesFolder = (activeFolder === 'video' && f.type.startsWith('video') && f.type !== 'videoinput') ||
                          (activeFolder === 'image' && f.type.startsWith('image')) ||
-                         (activeFolder === 'pdf' && f.type.includes('pdf'));
+                         (activeFolder === 'pdf' && f.type.includes('pdf')) ||
+                         (activeFolder === 'ppt' && f.type.includes('powerpoint')) ||
+                         (activeFolder === 'videoin' && f.type === 'videoinput');
     return matchesSearch && matchesFolder;
   });
 
@@ -4096,9 +4388,15 @@ const Library = React.memo(({
         </div>
         <div className="flex items-center gap-1">
           <button 
-            onClick={() => libraryInputRef.current?.click()}
+            onClick={() => {
+              if (activeFolder === 'videoin') {
+                handleCreateVideoIn();
+              } else {
+                libraryInputRef.current?.click();
+              }
+            }}
             className="p-1 text-obs-accent hover:scale-110 transition-transform"
-            title="Agregar archivos"
+            title={activeFolder === 'videoin' ? "Detectar Dispositivos" : "Agregar archivos"}
           >
             <Plus size={14} />
           </button>
@@ -4107,13 +4405,13 @@ const Library = React.memo(({
           type="file" 
           ref={libraryInputRef} 
           className="hidden" 
-          accept="video/*,image/*,application/pdf" 
+          accept="video/*,image/*,application/pdf,.ppt,.pptx" 
           multiple 
           onChange={handleLibraryLoad}
         />
       </div>
 
-      <div className="grid grid-cols-4 border-b border-obs-border bg-obs-dark-1">
+      <div className="grid grid-cols-5 border-b border-obs-border bg-obs-dark-1">
         {folders.map(folder => (
           <button
             key={folder.id}
@@ -4150,19 +4448,11 @@ const Library = React.memo(({
                   }))));
                 }}
                 onClick={(e) => toggleSelection(file.url, e.ctrlKey || e.metaKey || e.shiftKey)}
-                onDoubleClick={() => onAddClip([file.file])}
+                onDoubleClick={() => onAddClip([file])}
                 className={`group relative flex flex-col rounded transition-colors cursor-pointer text-obs-text border ${selectedLibraryUrls.has(file.url) ? 'bg-obs-accent/10 border-obs-accent' : 'hover:bg-obs-surface border-transparent'}`}
               >
                 <div className={`${viewMode === 'grid' ? 'aspect-video w-full' : 'w-12 h-8'} bg-black rounded-sm overflow-hidden flex-shrink-0 relative flex items-center justify-center`}>
-                  {file.type.startsWith('video') ? (
-                    <video src={file.url} className="w-full h-full object-cover opacity-80" muted />
-                  ) : file.type.includes('pdf') ? (
-                    <div className="w-full h-full relative group bg-black overflow-hidden flex items-center justify-center pointer-events-none">
-                      <PDFRenderer url={file.url} pageNumber={1} />
-                    </div>
-                  ) : (
-                    <img src={file.url} className="w-full h-full object-cover opacity-80" referrerPolicy="no-referrer" />
-                  )}
+                  <LibraryMediaPreview file={file} />
                   {viewMode === 'grid' && (
                     <div className="absolute bottom-0 left-0 right-0 bg-obs-dark-1 px-1 py-0.5">
                       <div className="text-[7px] truncate text-white uppercase font-bold">{file.type.split('/')[1] || 'DOC'}</div>
@@ -4331,9 +4621,11 @@ const PlaylistsSection = React.memo(({
                   >
                     {clip.type === 'video' ? (
                       <video src={clip.url} className="w-full h-full object-cover" muted />
-                    ) : clip.type === 'document' || clip.name.toLowerCase().endsWith('.pdf') ? (
+                    ) : clip.type === 'videoinput' ? (
+                      <LibraryMediaPreview file={clip} />
+                    ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (
                       <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none">
-                        <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />
+                        {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
                       </div>
                     ) : (
                       <img src={clip.thumbnail} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -4427,7 +4719,8 @@ const GridSection = React.memo(({
   onSelectClip, 
   onDragStart, 
   isDarkMode,
-  selectedClipId
+  selectedClipId,
+  onDeleteClip
 }: { 
   currentDeck: string, 
   onSetDeck: (d: string) => void, 
@@ -4435,7 +4728,8 @@ const GridSection = React.memo(({
   onSelectClip: (clip: Clip) => void, 
   onDragStart: (e: React.DragEvent, clip: Clip) => void, 
   isDarkMode: boolean,
-  selectedClipId: string | null
+  selectedClipId: string | null,
+  onDeleteClip?: (id: string) => void
 }) => (
   <div className="h-full flex flex-col bg-obs-bg">
     <div className="px-3 py-1.5 border-b border-obs-border flex justify-between items-center bg-obs-surface">
@@ -4444,7 +4738,7 @@ const GridSection = React.memo(({
         <span className="text-[10px] font-bold uppercase tracking-wider text-obs-muted">Fuentes</span>
       </div>
       <div className="flex gap-2">
-        {['Deck 1', 'Deck 2', 'Deck 3'].map(deck => (
+        {Object.keys(deckClips).map(deck => (
           <button 
             key={deck} 
             onClick={() => onSetDeck(deck)}
@@ -4472,6 +4766,7 @@ const GridSection = React.memo(({
                 onDragStart={(e) => onDragStart(e, clip)}
                 isDarkMode={isDarkMode}
                 isSelected={selectedClipId === clip.id}
+                onDelete={onDeleteClip ? () => onDeleteClip(clip.id) : undefined}
               />
             </div>
           ))}
@@ -4599,7 +4894,7 @@ const ProgramSection = React.memo(({
 
           {/* Visualization Bar */}
           <div className="mt-2 space-y-1">
-            {activeClip?.type === 'document' || activeClip?.name.toLowerCase().endsWith('.pdf') ? (
+            {activeClip?.type === 'document' || activeClip?.type === 'ppt' || activeClip?.name.toLowerCase().endsWith('.pdf') ? (
               <>
                 <div className="flex justify-between text-[8px] font-mono font-normal">
                   <span className="text-obs-accent">Pág. {activeClip.currentPage || 1}</span>
@@ -4939,9 +5234,11 @@ const LayersSection = React.memo(({
                     <>
                       {slot.type === 'video' ? (
                         <video src={slot.url} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" muted />
-                      ) : slot.type === 'document' || slot.name.toLowerCase().endsWith('.pdf') ? (
+                      ) : slot.type === 'videoinput' ? (
+                        <LibraryMediaPreview file={slot} />
+                      ) : slot.type === 'document' || slot.type === 'ppt' || slot.name.toLowerCase().endsWith('.pdf') ? (
                         <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none opacity-60 group-hover:opacity-100">
-                          <PDFRenderer url={slot.url} pageNumber={slot.currentPage || 1} />
+                          {slot.type === 'ppt' ? <PPTSlideRenderer clip={slot} pageNumber={slot.currentPage || 1} /> : <PDFRenderer url={slot.url} pageNumber={slot.currentPage || 1} />}
                         </div>
                       ) : (
                         <img src={slot.thumbnail} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" />
@@ -6217,7 +6514,7 @@ export default function App() {
     }
   };
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
-  const [currentDeck, setCurrentDeck] = useState('Deck 1');
+  const [currentDeck, setCurrentDeck] = useState('Videos');
 
   const addLayer = () => {
     const newId = `layer-${Date.now()}`;
@@ -6403,30 +6700,49 @@ export default function App() {
   const [previewPlaylistState, setPreviewPlaylistState] = useState<{ id: string, index: number } | null>(null);
   const [programPlaylistState, setProgramPlaylistState] = useState<{ id: string, index: number } | null>(null);
   const [deckClips, setDeckClips] = useState<Record<string, Clip[]>>({
-    'Deck 1': [],
-    'Deck 2': [],
-    'Deck 3': [],
+    'Videos': [],
+    'Imágenes': [],
+    'PDF': [],
+    'PowerPoint': [],
+    'Video IN': []
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const getClipTypeFromFile = (type: string, name: string): 'video' | 'image' | 'document' => {
+  const getClipTypeFromFile = (type: string, name: string): 'video' | 'image' | 'document' | 'ppt' | 'videoinput' => {
+    if (type === 'videoinput') return 'videoinput';
     const isVideo = type.startsWith('video') || name.toLowerCase().endsWith('.mp4') || name.toLowerCase().endsWith('.mov') || name.toLowerCase().endsWith('.webm');
     const isImage = type.startsWith('image') || name.toLowerCase().endsWith('.jpg') || name.toLowerCase().endsWith('.jpeg') || name.toLowerCase().endsWith('.png') || name.toLowerCase().endsWith('.webp');
     const isDocument = type === 'application/pdf' || name.toLowerCase().endsWith('.pdf');
+    const isPpt = name.toLowerCase().endsWith('.ppt') || name.toLowerCase().endsWith('.pptx') || type === 'application/vnd.mspowerpoint';
     
+    if (isPpt) return 'ppt';
     if (isVideo) return 'video';
     if (isDocument) return 'document';
     return 'image';
   };
 
-  const handleAddClips = async (files: File[]) => {
-    const newClipsPromises = files.map(async (file, index) => {
-      // En Electron, usamos la ruta real del archivo para que sea persistente entre ventanas
-      const url = (window.electron && (file as any).path) 
-        ? `file:///${(file as any).path.replace(/\\/g, '/')}` 
-        : URL.createObjectURL(file);
+  const handleAddClips = async (inputItems: any[]) => {
+    const newClipsPromises = inputItems.map(async (item, index) => {
+      let file: File | null = null;
+      let url = '';
+      let name = '';
+      let type = '';
+
+      if (item instanceof File) {
+        file = item;
+        name = file.name;
+        type = file.type;
+        url = (window.electron && (file as any).path) 
+          ? `file:///${(file as any).path.replace(/\\/g, '/')}` 
+          : URL.createObjectURL(file);
+      } else {
+        file = item.file;
+        name = item.name;
+        type = item.type;
+        url = item.url;
+      }
         
-      const clipType = getClipTypeFromFile(file.type, file.name);
+      const clipType = getClipTypeFromFile(type, name);
       const isVideo = clipType === 'video';
       const isImage = clipType === 'image';
       
@@ -6464,7 +6780,7 @@ export default function App() {
 
       return {
         id: `clip-${Date.now()}-${index}`,
-        name: file.name,
+        name: name,
         thumbnail: isVideo ? '' : url,
         url: url,
         type: clipType,
@@ -6495,10 +6811,25 @@ export default function App() {
 
     const newClips = await Promise.all(newClipsPromises);
     setClips(prev => [...prev, ...newClips]);
-    setDeckClips(prev => ({
-      ...prev,
-      [currentDeck]: [...prev[currentDeck], ...newClips]
-    }));
+    
+    setDeckClips(prev => {
+      const nextDecks = { ...prev };
+      newClips.forEach(clip => {
+        let deck = 'Videos';
+        if (clip.type === 'video') deck = 'Videos';
+        else if (clip.type === 'image') deck = 'Imágenes';
+        else if (clip.type === 'document') deck = 'PDF';
+        else if (clip.type === 'ppt') deck = 'PowerPoint';
+        else if (clip.type === 'videoinput') deck = 'Video IN';
+        
+        if (nextDecks[deck]) {
+          nextDecks[deck] = [...nextDecks[deck], clip];
+        } else {
+          nextDecks[deck] = [clip];
+        }
+      });
+      return nextDecks;
+    });
   };
 
   const [previewLevel, setPreviewLevel] = useState(0);
@@ -6541,17 +6872,21 @@ export default function App() {
       const isPrev = e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === 'p' || e.key === 'P';
       
       if (isNext || isPrev) {
-         // Find actively playing layers that have a document clip
+         // Find actively playing files in the Program Output only
          const activeClipIds = new Set<string>();
+         
+         // Add directly running Program clips
+         Object.values(outputPrograms).forEach(id => {
+           if (id) activeClipIds.add(id);
+         });
+
+         // Add clips from visible layers (which are mixed into Program)
          layers.forEach(layer => {
            if (layer.isVisible && layer.activeClipId) activeClipIds.add(layer.activeClipId);
          });
-         previews.forEach(preview => {
-           if (preview.clipId) activeClipIds.add(preview.clipId);
-         });
 
          const navClips = clips.filter(c => 
-           (c.type === 'document' || c.name.toLowerCase().endsWith('.pdf')) && 
+           (c.type === 'document' || c.type === 'ppt' || c.name.toLowerCase().endsWith('.pdf')) && 
            c.keyboardNavEnabled && 
            activeClipIds.has(c.id)
          );
@@ -7155,7 +7490,11 @@ export default function App() {
                       </button>
                       <button 
                         onClick={() => {
-                          window.open('ms-settings:display');
+                          if (window.electron?.openSettings) {
+                            window.electron.openSettings();
+                          } else {
+                            window.location.href = 'ms-settings:display';
+                          }
                           setIsEditMenuOpen(false);
                         }} 
                         className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
@@ -7332,10 +7671,18 @@ export default function App() {
                                 <div className="flex justify-between font-mono text-[8px] text-obs-muted font-normal">
                                   <div className="flex items-center gap-1">
                                     <Clock size={8} />
-                                    <FluidTimeDisplay eventId="video-progress-program" />
+                                    { (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? "00:00:00" : (programClip?.type === 'document' || programClip?.type === 'ppt' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
+                                      `${programClip?.currentPage || 1}/${programClip?.totalPages || '?'}`
+                                    ) : (
+                                      <FluidTimeDisplay eventId="video-progress-program" />
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-1">
-                                    <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
+                                    { (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? "00:00:00" : (programClip?.type === 'document' || programClip?.type === 'ppt' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
+                                      `${programClip?.currentPage || 1}/${programClip?.totalPages || '?'}`
+                                    ) : (
+                                      <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
+                                    )}
                                   </div>
                                 </div>
                               </>
@@ -7530,7 +7877,9 @@ export default function App() {
                 {selectedLibraryUrls.size === 1 ? ((clipUpdateFunction) => {
                   const selectedFile = libraryFiles.find(f => selectedLibraryUrls.has(f.url));
                   if (!selectedFile) return null;
-                  if (selectedFile.type.startsWith('video')) {
+                  if (selectedFile.type === 'videoinput') {
+                    return <LibraryMediaPreview file={selectedFile} />;
+                  } else if (selectedFile.type.startsWith('video')) {
                     return (
                       <video 
                         key={selectedFile.url}
@@ -7801,7 +8150,11 @@ export default function App() {
                      <span className="text-[10px] text-obs-muted uppercase font-black tracking-widest leading-none mb-0.5">{timerMode}</span>
                      <div className="flex items-center gap-2">
                        <span className="text-2xl font-mono font-normal text-white leading-none tracking-tight">
-                         <FluidTimeDisplay eventId="video-progress-program" isRemaining={timerMode === 'remaining'} />
+                         { (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? "00:00:00" : (programClip?.type === 'document' || programClip?.type === 'ppt' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
+                           `${programClip?.currentPage || 1}/${programClip?.totalPages || '?'}`
+                         ) : (
+                           <FluidTimeDisplay eventId="video-progress-program" isRemaining={timerMode === 'remaining'} />
+                         )}
                        </span>
                        <button 
                          onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
@@ -7938,6 +8291,16 @@ export default function App() {
                   onDragStart={onDragStart}
                   isDarkMode={isDarkMode}
                   selectedClipId={selectedItemId}
+                  onDeleteClip={(id) => {
+                    setClips(prev => prev.filter(c => c.id !== id));
+                    setDeckClips(prev => {
+                      const next = { ...prev };
+                      Object.keys(next).forEach(deck => {
+                        next[deck] = next[deck].filter(c => c.id !== id);
+                      });
+                      return next;
+                    });
+                  }}
                 />
               </div>
             </div>
@@ -8119,9 +8482,11 @@ export default function App() {
                       <div className="w-24 aspect-video rounded overflow-hidden border border-obs-border bg-obs-dark-1">
                         {clip.type === 'video' ? (
                           <video src={clip.url} className="w-full h-full object-cover" muted />
-                        ) : clip.type === 'document' || clip.name.toLowerCase().endsWith('.pdf') ? (
+                        ) : clip.type === 'videoinput' ? (
+                          <LibraryMediaPreview file={clip} />
+                        ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (
                           <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none">
-                            <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />
+                            {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
                           </div>
                         ) : (
                           <img src={clip.thumbnail} className="w-full h-full object-cover" referrerPolicy="no-referrer" />

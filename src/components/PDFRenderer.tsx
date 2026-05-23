@@ -32,7 +32,9 @@ export const PDFRenderer = ({ url, pageNumber, onLoadSuccess }: { url: string, p
           if (onLoadSuccess) onLoadSuccess(pdf.numPages);
         }
       } catch (e: any) {
-        console.error("PDF Load Error details:", e);
+        if (!isCancelled && !e.message?.includes('Worker was destroyed')) {
+          console.error("PDF Load Error details:", e);
+        }
       }
     };
 
