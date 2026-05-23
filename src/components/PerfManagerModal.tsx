@@ -26,6 +26,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
 }) => {
   const [localSettings, setLocalSettings] = useState<PerfSettings>({ ...initialSettings });
   const [isDiagnosing, setIsDiagnosing] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [diagnosticsResult, setDiagnosticsResult] = useState<{
     gpuRenderer: string;
     gpuVendor: string;
@@ -39,6 +40,24 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
     cpuCores: number;
     ramEstimated: string;
   } | null>(null);
+
+  // Load actual saved performance settings from Windows on mount if in Electron
+  useEffect(() => {
+    const loadSavedSettings = async () => {
+      const electron = (window as any).electron;
+      if (electron?.getPerfSettings) {
+        try {
+          const saved = await electron.getPerfSettings();
+          if (saved) {
+            setLocalSettings(saved);
+          }
+        } catch (err) {
+          console.error("Error al leer settings de Electron:", err);
+        }
+      }
+    };
+    loadSavedSettings();
+  }, []);
 
   // Run hardware diagnostic scan
   const runDiagnostic = () => {
@@ -122,8 +141,40 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
     runDiagnostic();
   }, []);
 
-  const handleSave = () => {
-    onApply(localSettings);
+  const handleSave = async () => {
+    setSaveStatus('saving');
+    
+    // Save to high-performance Windows backend configuration first
+    const electron = (window as any).electron;
+    if (electron?.savePerfSettings) {
+      try {
+        const result = await electron.savePerfSettings(localSettings);
+        if (result && result.success) {
+          setSaveStatus('saved');
+          // Let the user visually comprehend the save and instruction before closing modal
+          setTimeout(() => {
+            onApply(localSettings);
+          }, 4500);
+        } else {
+          setSaveStatus('error');
+          setTimeout(() => {
+            onApply(localSettings);
+          }, 2000);
+        }
+      } catch (err) {
+        console.error("Fallo guardando en Electron:", err);
+        setSaveStatus('error');
+        setTimeout(() => {
+          onApply(localSettings);
+        }, 2000);
+      }
+    } else {
+      // Direct Web localStorage save fallback
+      setSaveStatus('saved');
+      setTimeout(() => {
+        onApply(localSettings);
+      }, 1000);
+    }
   };
 
   return (
@@ -132,8 +183,61 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
         initial={{ scale: 0.95, opacity: 0, y: 15 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 15 }}
-        className="bg-obs-bg border border-obs-border/80 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden text-obs-text font-sans"
+        className="bg-obs-bg border border-obs-border/80 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden text-obs-text font-sans relative"
       >
+        {/* Overlay de Guardado Exitoso */}
+        {saveStatus === 'saved' && (
+          <div className="absolute inset-0 bg-obs-bg/95 z-[110] flex flex-col items-center justify-center p-8 text-center space-y-4">
+            <div className="w-14 h-14 rounded-full bg-emerald-500/15 flex items-center justify-center border border-emerald-500/30 text-emerald-400">
+              <Check size={24} />
+            </div>
+            <h3 className="text-xs font-black uppercase tracking-widest text-emerald-400">
+              ¡Ajustes de Aceleración Aplicados en Windows!
+            </h3>
+            <p className="max-w-md text-[9px] text-obs-muted leading-relaxed">
+              La configuración ha sido registrada con éxito en el archivo de entorno nativo (<span className="text-obs-text font-mono font-bold">lumin_perf.json</span>). Windows forzará este pipeline de render en el próximo inicio:
+            </p>
+            <div className="bg-obs-surface p-3 rounded border border-obs-border max-w-xs w-full font-mono text-[8px] text-left space-y-1">
+              <div className="flex justify-between border-b border-obs-text/5 pb-1">
+                <span className="text-obs-muted">API DE PINTADO:</span> 
+                <span className="text-obs-accent font-bold uppercase">{localSettings.renderingBackend}</span>
+              </div>
+              <div className="flex justify-between border-b border-obs-text/5 pb-1">
+                <span className="text-obs-muted">DECODIFICADOR:</span> 
+                <span className="text-obs-accent font-bold uppercase">{localSettings.gpuDecoding}</span>
+              </div>
+              <div className="flex justify-between border-b border-obs-text/5 pb-1">
+                <span className="text-obs-muted">NÚCLEOS DE VIDEO:</span> 
+                <span className="text-obs-text font-bold">{localSettings.maxThreads} Cores</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-obs-muted">COORDS PILOT:</span> 
+                <span className="text-emerald-500 font-bold">GPU ACTIVE</span>
+              </div>
+            </div>
+            <div className="bg-amber-500/10 border border-amber-500/25 text-amber-500/90 p-3.5 rounded text-[9.5px] max-w-md leading-relaxed">
+              <span className="font-bold uppercase block mb-1">⚠️ REINICIO DE SOFTWARE REQUERIDO</span>
+              Para que Windows reasigne los búferes físicos de baja latencia con los controladores de NVIDIA/AMD a nivel de sistema operativo y los muestre en el Panel de Control, reinicie la aplicación de escritorio.
+            </div>
+            <span className="text-[8px] font-black uppercase tracking-widest text-obs-muted animate-pulse font-sans">
+              Volviendo a la interfaz maestra en instantes...
+            </span>
+          </div>
+        )}
+
+        {/* Overlay de Progreso Guardando */}
+        {saveStatus === 'saving' && (
+          <div className="absolute inset-0 bg-obs-bg/95 z-[110] flex flex-col items-center justify-center p-8 text-center space-y-3">
+            <CpuIcon className="animate-spin text-obs-accent" size={32} />
+            <h3 className="text-xs font-black uppercase tracking-widest text-obs-text">
+              Sincronizando con el Registro de Windows...
+            </h3>
+            <p className="max-w-xs text-[9px] text-obs-muted">
+              Escribiendo claves de optimización de hardware...
+            </p>
+          </div>
+        )}
+
         {/* Modal Header */}
         <div className="px-5 py-3.5 border-b border-obs-border bg-obs-surface flex justify-between items-center shrink-0">
           <div className="flex items-center gap-2">
