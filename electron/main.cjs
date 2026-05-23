@@ -116,4 +116,13 @@ if (!gotTheLock) {
       outputWindows.delete(screenId || 'primary');
     });
   });
+
+  ipcMain.on('close-output', (event, screenId) => {
+    const key = screenId || 'primary';
+    const outputWindow = outputWindows.get(key);
+    if (outputWindow && !outputWindow.isDestroyed()) {
+      outputWindow.close();
+      outputWindows.delete(key);
+    }
+  });
 }

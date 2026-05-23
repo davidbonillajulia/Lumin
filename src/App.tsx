@@ -146,6 +146,7 @@ declare global {
     electron: {
       getScreens: () => Promise<any[]>;
       launchOutput: (data: { screenId: string, url: string }) => void;
+      closeOutput?: (screenId: string) => void;
       isElectron: boolean;
     }
   }
@@ -171,6 +172,7 @@ interface Layer {
   isPlaying?: boolean;
   isActive?: boolean;
   loop?: boolean;
+  loopVideo?: boolean;
   playbackMode?: 'single' | 'sequence';
 }
 
@@ -760,6 +762,10 @@ const Monitor = React.memo(({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
+  // Buffer transition handshake states:
+  const [isBusAReady, setIsBusAReady] = useState(true);
+  const [activeBusBClip, setActiveBusBClip] = useState<Clip | null>(null);
+
   const audioLevel = useAudioLevel(videoRef, !!activeClip && activeClip.type === 'video' && !isProgram, volume, false);
 
   useEffect(() => {
@@ -840,14 +846,36 @@ const Monitor = React.memo(({
     // Global Take Fallback: use the global preview clip
     return clips.find(c => c.id === previewClipId);
   }, [isProgram, clips, targetClipId, previewClipId, hasTransitionTargets]);
+
+  // Keep previous transition video mounted and playing until the new target video renders its first frame
+  useEffect(() => {
+    if (busBClip) {
+      setActiveBusBClip(busBClip);
+    } else if (isBusAReady) {
+      setActiveBusBClip(null);
+    }
+  }, [busBClip, isBusAReady]);
+
+  // When a new program clip enters Bus A, we reset ready handshake until first frame renders
+  useEffect(() => {
+    if (busAClip) {
+      if (busAClip.type === 'video') {
+        setIsBusAReady(false);
+      } else {
+        setIsBusAReady(true);
+      }
+    } else {
+      setIsBusAReady(true);
+    }
+  }, [busAClip?.id]);
   
   const isContentActive = isActive && isTransmitting;
   
-  // Decide if we should show ANY content in Program
+  // Decide if we should show ANY content in Program (including transition buffer)
   const hasActiveContent = (isProgram 
     ? (isContentActive && (
         (busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) || 
-        (busBClip && crossfaderValue !== undefined && crossfaderValue > 0)
+        (activeBusBClip && (crossfaderValue !== undefined && (crossfaderValue > 0 || !isBusAReady)))
       )) 
     : !!activeClip) && !isProgramOff;
 
@@ -860,12 +888,13 @@ const Monitor = React.memo(({
   }, [busAClip, crossfaderValue, transitionType, isProgram, isProgramOff]);
 
   const audioOpacityB = useMemo(() => {
-    if (!busBClip) return 0;
+    if (!activeBusBClip) return 0;
+    if (!isBusAReady) return 1; // Show at full opacity during the transition handshake
     if (transitionType === 'cut') return 0; 
     const fader = crossfaderValue === undefined ? 0 : crossfaderValue;
     const base = (fader / 100);
     return isProgramOff && isProgram ? 0 : base;
-  }, [busBClip, crossfaderValue, transitionType, isProgram, isProgramOff]);
+  }, [activeBusBClip, isBusAReady, crossfaderValue, transitionType, isProgram, isProgramOff]);
 
   const wipeTransform = useMemo(() => {
     if (transitionType !== 'wipe') return undefined;
@@ -936,7 +965,7 @@ const Monitor = React.memo(({
                   <AnimatePresence custom={transitionType}>
                     {(busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) && (
                       <VideoLayer 
-                        key="bus-A"
+                        key={`bus-A-${busAClip.id}`}
                         clip={busAClip}
                         volume={volume}
                         masterVolume={masterVolume}
@@ -950,18 +979,19 @@ const Monitor = React.memo(({
                         onLevelChange={onLevelChange}
                         onEnded={onEnded}
                         transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
+                        onReady={() => setIsBusAReady(true)}
                       />
                     )}
-                    {(busBClip && crossfaderValue !== undefined && crossfaderValue > 0) && (
+                    {activeBusBClip && (
                       <VideoLayer 
-                        key="bus-B"
-                        clip={busBClip}
+                        key={`bus-B-${activeBusBClip.id}`}
+                        clip={activeBusBClip}
                         volume={volume}
                         masterVolume={masterVolume}
                         opacity={opacity}
                         style={{ clipPath: wipeTransform }}
                         faderOpacity={audioOpacityB}
-                        isProgram={crossfaderValue === 100}
+                        isProgram={crossfaderValue === 100 || !isBusAReady}
                         crossfaderValue={crossfaderValue}
                         transitionType={transitionType}
                         isTransmitting={isTransmitting}
@@ -1014,7 +1044,7 @@ const Monitor = React.memo(({
                             isTransmitting={isTransmitting}
                             onProgressUpdate={onProgressUpdate}
                             onEnded={() => onLayerEnded?.(l.id, activeClip.id)}
-                            loopOverride={l.playbackMode === 'single'}
+                            loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
                             transitionType={l.transition || 'fade'}
                             transitionDuration={l.transitionDuration || 0.4}
                           />
@@ -1443,7 +1473,7 @@ const DocumentLayer = ({ clip, onUpdateClip }: { clip: any, onUpdateClip?: (id: 
   );
 };
 
-const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, transitionDuration, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip }: { 
+const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, transitionDuration, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip, onReady }: { 
   clip: any, 
   volume: number, 
   masterVolume?: number,
@@ -1461,12 +1491,38 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   loopOverride?: boolean,
   isTransmitting?: boolean,
   style?: React.CSSProperties,
-  onUpdateClip?: (id: string, updates: any) => void
+  onUpdateClip?: (id: string, updates: any) => void,
+  onReady?: () => void
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>('');
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
+  const [firstFrameRendered, setFirstFrameRendered] = useState(clip.type !== 'video');
+
+  useEffect(() => {
+    if (clip.type === 'video') {
+      setFirstFrameRendered(false);
+    } else {
+      setFirstFrameRendered(true);
+    }
+  }, [clip.id, clip.url, clip.type]);
+
+  // Sync native video loop property directly when clip loop state changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) {
+      const activeLoop = loopOverride !== undefined ? loopOverride : clip.loop !== false;
+      video.loop = activeLoop;
+    }
+  }, [loopOverride, clip.loop]);
+
+  // Report first frame rendered when state becomes true
+  useEffect(() => {
+    if (firstFrameRendered) {
+      onReady?.();
+    }
+  }, [firstFrameRendered, onReady]);
   
   const handleEnded = () => {
     onEndedRef.current?.();
@@ -1529,13 +1585,18 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
         video.src = clip.url;
         lastSrc.current = clip.url;
 
-        // One-time initialization on source change
-        const handleReady = () => {
+        // Use loadedmetadata for seeking to avoid frame 0 flicker, and canplay for playing
+        const handleMetadata = () => {
           if (startTime !== undefined) {
             video.currentTime = startTime;
           } else if (clip.currentTime !== undefined) {
             video.currentTime = clip.currentTime;
           }
+          video.removeEventListener('loadedmetadata', handleMetadata);
+        };
+        video.addEventListener('loadedmetadata', handleMetadata);
+
+        const handleReady = () => {
           if (clip.isPlaying !== false) {
             video.play().catch(() => {});
           }
@@ -1623,7 +1684,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
       clipPath: type === 'wipe' ? 'inset(0 0 0 100%)' : 'inset(0 0 0 0)'
     }),
     animate: {
-      opacity: opacity * (faderOpacity !== undefined ? faderOpacity : 1) * clipOpacity * clipMaster,
+      opacity: firstFrameRendered ? (opacity * (faderOpacity !== undefined ? faderOpacity : 1) * clipOpacity * clipMaster) : 0,
       x: xOffsetPercentage,
       clipPath: 'inset(0 0 0 0)',
       y: `${clip.transform.y}%`,
@@ -1691,8 +1752,17 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
                 playsInline
                 crossOrigin="anonymous"
                 preload="auto"
-                onCanPlay={() => setIsReady(true)}
-                onTimeUpdate={(e) => onTimeUpdate?.(e.currentTarget.currentTime)}
+                onCanPlay={() => {
+                  setIsReady(true);
+                  setFirstFrameRendered(true);
+                }}
+                onPlaying={() => setFirstFrameRendered(true)}
+                onTimeUpdate={(e) => {
+                  if (e.currentTarget.currentTime > 0.01) {
+                    setFirstFrameRendered(true);
+                  }
+                  onTimeUpdate?.(e.currentTarget.currentTime);
+                }}
                 onEnded={handleEnded}
               />
           ) : clip.type === 'document' ? (
@@ -1712,6 +1782,64 @@ const OutputView = React.memo(() => {
   const hasTriedFullscreen = useRef(false);
   const lastStateRef = useRef<any>(null);
   const channelRef = useRef<BroadcastChannel | null>(null);
+
+  // Transition handshake states for OutputView
+  const [isBusAReady, setIsBusAReady] = useState(true);
+  const [activeBusBClip, setActiveBusBClip] = useState<any>(null);
+
+  // Sync transitions on external screen output:
+  const screenId = useMemo(() => {
+    try {
+      const params = new URLSearchParams(window.location.search || window.location.hash.substring(window.location.hash.indexOf('?') !== -1 ? window.location.hash.indexOf('?') : window.location.hash.length));
+      return params.get('screenId');
+    } catch {
+      return null;
+    }
+  }, [state]);
+
+  const extractedClips = state?.clips;
+  const extractedProgramClipId = state?.programClipId;
+  const extractedPreviewClipId = state?.previewClipId;
+  const extractedOutputs = state?.outputs;
+  const extractedOutputPrograms = state?.outputPrograms;
+  const extractedOutputTransitionTargets = state?.outputTransitionTargets;
+
+  const resolvedBusAClip = useMemo(() => {
+    if (!extractedClips) return null;
+    const mappedOutput = extractedOutputs?.find((o: any) => o.physicalScreenId === screenId);
+    const mappedProgramClipId = (mappedOutput && extractedOutputPrograms) ? extractedOutputPrograms[mappedOutput.id] : extractedProgramClipId;
+    return extractedClips.find((c: any) => c.id === mappedProgramClipId);
+  }, [extractedClips, extractedOutputs, extractedOutputPrograms, extractedProgramClipId, screenId]);
+
+  const resolvedBusBClip = useMemo(() => {
+    if (!extractedClips) return null;
+    const mappedOutput = extractedOutputs?.find((o: any) => o.physicalScreenId === screenId);
+    const mappedTargetClipId = (mappedOutput && extractedOutputTransitionTargets) ? extractedOutputTransitionTargets[mappedOutput.id] : extractedPreviewClipId;
+    const isTarget = (mappedOutput && extractedOutputTransitionTargets && extractedOutputTransitionTargets[mappedOutput.id]);
+    const finalBusBId = (isTarget || !Object.keys(extractedOutputTransitionTargets || {}).length) ? mappedTargetClipId : null;
+    return extractedClips.find((c: any) => c.id === finalBusBId);
+  }, [extractedClips, extractedOutputs, extractedOutputTransitionTargets, extractedPreviewClipId, screenId]);
+
+  // Sync transition handshake state on external screen outputs:
+  useEffect(() => {
+    if (resolvedBusBClip) {
+      setActiveBusBClip(resolvedBusBClip);
+    } else if (isBusAReady) {
+      setActiveBusBClip(null);
+    }
+  }, [resolvedBusBClip, isBusAReady]);
+
+  useEffect(() => {
+    if (resolvedBusAClip) {
+      if (resolvedBusAClip.type === 'video') {
+        setIsBusAReady(false);
+      } else {
+        setIsBusAReady(true);
+      }
+    } else {
+      setIsBusAReady(true);
+    }
+  }, [resolvedBusAClip?.id]);
 
   useEffect(() => {
     console.log("OutputView: Montado.");
@@ -1826,7 +1954,7 @@ const OutputView = React.memo(() => {
     
     // In OutputView, we only show content if it's active.
     // Transition handles the mix.
-    const hasActiveContent = isContentActive && (busAClip || (crossfaderValue > 0 && busBClip)) && !mappedOffState;
+    const hasActiveContent = isContentActive && (busAClip || (activeBusBClip && (crossfaderValue > 0 || !isBusAReady))) && !mappedOffState;
 
     const audioOpacityA = (() => {
       if (!busAClip) return 0;
@@ -1835,7 +1963,8 @@ const OutputView = React.memo(() => {
       return mappedOffState ? 0 : base;
     })();
     const audioOpacityB = (() => {
-      if (!busBClip) return 0;
+      if (!activeBusBClip) return 0;
+      if (!isBusAReady) return 1; // Show at full opacity during the transition handshake
       if (transitionType === 'cut') return 0;
       const base = (crossfaderValue / 100);
       return mappedOffState ? 0 : base;
@@ -1925,46 +2054,49 @@ const OutputView = React.memo(() => {
                 transition={{ duration: 1.5, ease: "easeInOut" }}
                 className="w-full h-full flex items-start justify-start relative"
               >
-                {/* Bus A Layer */}
-                {busAClip && (
-                  <VideoLayer 
-                    key="bus-A"
-                    clip={busAClip}
-                    volume={programVolume}
-                    masterVolume={masterVolume}
-                    opacity={transitionType === 'fade' ? audioOpacityA : (busAClip.opacity || 1) * (busAClip.master || 1)}
-                    faderOpacity={audioOpacityA}
-                    isProgram={true}
-                    crossfaderValue={crossfaderValue}
-                    transitionType={transitionType}
-                    isTransmitting={isTransmitting}
-                    onEnded={() => {
-                       channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busAClip.id } });
-                    }}
-                    transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
-                  />
-                )}
+                <AnimatePresence custom={transitionType}>
+                  {/* Bus A Layer */}
+                  {(busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) && (
+                    <VideoLayer 
+                      key={`bus-A-${busAClip.id}`}
+                      clip={busAClip}
+                      volume={programVolume}
+                      masterVolume={masterVolume}
+                      opacity={1}
+                      faderOpacity={audioOpacityA}
+                      isProgram={crossfaderValue === 0}
+                      crossfaderValue={crossfaderValue}
+                      transitionType={transitionType}
+                      isTransmitting={isTransmitting}
+                      onEnded={() => {
+                         channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busAClip.id } });
+                      }}
+                      transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
+                      onReady={() => setIsBusAReady(true)}
+                    />
+                  )}
  
-                {/* Bus B Layer */}
-                {busBClip && (
-                  <VideoLayer 
-                    key="bus-B"
-                    clip={busBClip}
-                    volume={programVolume}
-                    masterVolume={masterVolume}
-                    opacity={transitionType === 'fade' ? audioOpacityB : (busBClip.opacity || 1) * (busBClip.master || 1)}
-                    style={{ clipPath: wipeTransformOut }}
-                    faderOpacity={audioOpacityB}
-                    isProgram={false}
-                    crossfaderValue={crossfaderValue}
-                    transitionType={transitionType}
-                    isTransmitting={isTransmitting}
-                    onEnded={() => {
-                       channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: busBClip.id } });
-                    }}
-                    transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
-                  />
-                )}
+                  {/* Bus B Layer */}
+                  {activeBusBClip && (
+                    <VideoLayer 
+                      key={`bus-B-${activeBusBClip.id}`}
+                      clip={activeBusBClip}
+                      volume={programVolume}
+                      masterVolume={masterVolume}
+                      opacity={1}
+                      style={{ clipPath: wipeTransformOut }}
+                      faderOpacity={audioOpacityB}
+                      isProgram={crossfaderValue === 100 || !isBusAReady}
+                      crossfaderValue={crossfaderValue}
+                      transitionType={transitionType}
+                      isTransmitting={isTransmitting}
+                      onEnded={() => {
+                         channelRef.current?.postMessage({ type: 'CLIP_ENDED', payload: { outputId: mappedOutput?.id, clipId: activeBusBClip.id } });
+                      }}
+                      transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
+                    />
+                  )}
+                </AnimatePresence>
 
                 {/* Layer Rendering - Multi-layer mixing */}
                 {state.layers && state.layers.filter((l: any) => l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
@@ -2011,7 +2143,7 @@ const OutputView = React.memo(() => {
                             onEnded={() => {
                                channelRef.current?.postMessage({ type: 'LAYER_CLIP_ENDED', payload: { layerId: l.id, clipId: activeClip.id } });
                             }}
-                            loopOverride={l.playbackMode === 'single'}
+                            loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
                           />
                         </AnimatePresence>
                       </div>
@@ -2590,6 +2722,15 @@ const Inspector = React.memo(({
                   className={`w-10 h-5 rounded-full transition-colors relative ${layer.loop !== false ? 'bg-obs-accent' : 'bg-gray-600'}`}
                 >
                   <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${layer.loop !== false ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              <div className="flex items-center justify-between bg-obs-dark-1 p-2 rounded border border-obs-text/5">
+                <span className="text-[9px] font-bold text-obs-muted uppercase">Loop Video</span>
+                <button 
+                  onClick={() => onUpdateLayer(layer.id, { loopVideo: !(layer.loopVideo !== false) })}
+                  className={`w-10 h-5 rounded-full transition-colors relative ${layer.loopVideo !== false ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                >
+                  <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${layer.loopVideo !== false ? 'translate-x-6' : 'translate-x-1'}`} />
                 </button>
               </div>
             </div>
@@ -3407,13 +3548,24 @@ const Inspector = React.memo(({
               return (
                 <>
                   <div className="aspect-video w-full bg-black rounded border border-obs-border overflow-hidden relative group">
+                    <svg width="0" height="0" className="absolute">
+                      <filter id="rgbBalanceClipPreview">
+                        <feColorMatrix 
+                          type="matrix" 
+                          values={`${clip.colorBalance?.r ?? 1} 0 0 0 0
+                                  0 ${clip.colorBalance?.g ?? 1} 0 0 0
+                                  0 0 ${clip.colorBalance?.b ?? 1} 0 0
+                                  0 0 0 1 0`} 
+                        />
+                      </filter>
+                    </svg>
                     {clip.type === 'video' ? (
                       <video 
                         src={clip.url} 
                         className="w-full h-full object-contain" 
                         style={{
                           opacity: clip.opacity ?? 1,
-                          filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1})`
+                          filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1}) url(#rgbBalanceClipPreview)`
                         }}
                         muted 
                         loop 
@@ -3422,7 +3574,15 @@ const Inspector = React.memo(({
                     ) : clip.type === 'document' ? (
                       <DocumentLayer clip={clip} onUpdateClip={updateClip} />
                     ) : (
-                      <img src={clip.url} className="w-full h-full object-contain" referrerPolicy="no-referrer" />
+                      <img 
+                        src={clip.url} 
+                        className="w-full h-full object-contain" 
+                        style={{
+                          opacity: clip.opacity ?? 1,
+                          filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1}) url(#rgbBalanceClipPreview)`
+                        }}
+                        referrerPolicy="no-referrer" 
+                      />
                     )}
                     <div className="absolute top-2 left-2 bg-obs-dark-1 px-1.5 py-0.5 rounded text-[8px] font-bold text-obs-accent uppercase tracking-widest border border-obs-accent/30">
                       Preview
@@ -3475,9 +3635,9 @@ const Inspector = React.memo(({
             </div>
           </CollapsibleSection>
 
-          {/* VIDEO Section (Opacity) */}
-          <CollapsibleSection title="VIDEO" onReset={() => onUpdate(selectedItem.id, { opacity: 1 })}>
-            <div className="space-y-2">
+          {/* VIDEO Section (Opacity & Loop) */}
+          <CollapsibleSection title="VIDEO" onReset={() => onUpdate(selectedItem.id, { opacity: 1, loop: true })}>
+            <div className="space-y-4">
               <PropertyControl 
                 label="Opacidad"
                 value={(selectedItem.opacity || 1) * 100}
@@ -3491,6 +3651,21 @@ const Inspector = React.memo(({
                   if (!isNaN(num)) onUpdate(selectedItem.id, { opacity: num });
                 }}
               />
+
+              {selectedItem.type === 'video' && (
+                <div className="flex items-center justify-between bg-obs-dark-1 p-2 rounded border border-obs-border/30">
+                  <span className="text-[10px] font-bold text-obs-muted uppercase">Bucle de Video (Loop)</span>
+                  <button 
+                    onClick={() => {
+                      if (onUpdateClip) onUpdateClip(selectedItem.id, { loop: !(selectedItem.loop !== false) });
+                      else onUpdate(selectedItem.id, { loop: !(selectedItem.loop !== false) });
+                    }}
+                    className={`w-10 h-5 rounded-full transition-colors relative ${selectedItem.loop !== false ? 'bg-obs-accent' : 'bg-gray-600'}`}
+                  >
+                    <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${selectedItem.loop !== false ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+              )}
             </div>
           </CollapsibleSection>
 
@@ -4558,7 +4733,7 @@ const LayersSection = React.memo(({
             </div>
           </div>
 
-          <div className="space-y-2 relative">
+          <div className="space-y-2 relative max-h-[200px] overflow-y-auto custom-scrollbar pr-1">
             {layers.map((layer, lIdx) => (
               <div key={layer.id} className={`flex gap-2 items-center group/row relative ${activeOutputMenu === layer.id ? 'z-50' : 'z-10'}`}>
                 <div 
@@ -5585,6 +5760,18 @@ export default function App() {
         const playlist = playlists.find((p: any) => p.id === clip?.playlistId || p.clips.some((c: any) => c.id === clipId));
         if (playlist && playlist.clips.length > 0) {
            const currentIndex = playlist.clips.findIndex((c: any) => c.id === clipId);
+           const isAtEnd = currentIndex === playlist.clips.length - 1;
+
+           if (isAtEnd && playlist.loop === false) {
+             if (outputId) {
+               setOutputPrograms(prev => ({ ...prev, [outputId]: null }));
+               if (outputId === activeOutputId) {
+                 handleStop();
+               }
+             }
+             return;
+           }
+
            const nextIndex = (currentIndex + 1) % playlist.clips.length;
            const nextClip = playlist.clips[nextIndex];
            
@@ -5594,6 +5781,16 @@ export default function App() {
                 setProgramClipId(nextClip.id);
              }
            }
+        } else {
+          // Direct individual clip playing (no playlist)
+          if (clip && clip.loop === false) {
+            if (outputId) {
+              setOutputPrograms(prev => ({ ...prev, [outputId]: null }));
+              if (outputId === activeOutputId) {
+                handleStop();
+              }
+            }
+          }
         }
       }
       if (event.data.type === 'LAYER_CLIP_ENDED') {
@@ -5833,12 +6030,36 @@ export default function App() {
     // Check if window is already open
     const screenKey = selectedScreenId || 'default';
     const existingWin = outputWindowsRef.current[screenKey];
-    if (existingWin && !existingWin.closed) {
-      existingWin.close();
+    const isAlreadyLaunched = launchedScreens[screenKey];
+
+    if (isAlreadyLaunched || (existingWin && !existingWin.closed)) {
+      // Close standard web window
+      if (existingWin && !existingWin.closed) {
+        try {
+          existingWin.close();
+        } catch (e) {
+          console.error("Error closing window ref:", e);
+        }
+      }
       outputWindowsRef.current[screenKey] = null;
+      
+      // Close in Electron if available
+      if (window.electron && (window.electron.closeOutput || window.electron.launchOutput)) {
+        if (typeof window.electron.closeOutput === 'function') {
+          window.electron.closeOutput(selectedScreenId || 'primary');
+        } else {
+          // Fallback legacy behavior if IPC not registered or just toggle state
+          console.warn("Electron closeOutput is not exposed yet. State toggled.");
+        }
+      }
+
       setLaunchedScreens(prev => ({ ...prev, [screenKey]: false }));
-      // Optional: If electron has a close API we would call it here, 
-      // but without standard electron API exposed we only rely on window.close
+      
+      // Notify output channels if any
+      outputChannel.current?.postMessage({
+        type: 'CLOSE_WINDOW',
+        payload: { screenId: selectedScreenId }
+      });
       return;
     }
 
@@ -5971,8 +6192,13 @@ export default function App() {
       if (layer.id !== layerId) return layer;
       if (layer.activeClipId !== clipId) return layer; // ALREADY HANDLED
       
-      // Mode Single: Only loop the current clip indefinitely
+      // Mode Single: Only loop the current clip indefinitely if loopVideo is true
       if (layer.playbackMode === 'single') {
+        if (layer.loopVideo === false) {
+          // Loop video disabled: Go to black (clear clip)
+          setActiveLayerTriggers(prev => ({ ...prev, [layer.id]: 'stop' }));
+          return { ...layer, activeClipId: null, activeSlotIndex: null, isPlaying: false };
+        }
         return layer; // VideoLayer handles video loop tag
       }
 
@@ -6475,6 +6701,13 @@ export default function App() {
       setProgramClipId(nextClip.id);
       setProgramPlaylistState({ id: playlist.id, index: nextIndex });
       setOutputPrograms(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
+    } else {
+      // Direct individual clip playing (no playlist)
+      if (clip && clip.loop === false) {
+        // Stop playing and clear output programs to go to black!
+        handleStop();
+        setOutputPrograms(prev => ({ ...prev, [activeOutputId]: null }));
+      }
     }
   };
 
@@ -7378,7 +7611,7 @@ export default function App() {
             {/* Pinned area for layers and playlists pegged to docks */}
               <div className="flex flex-col bg-obs-bg border-t border-obs-border shrink-0 py-1 space-y-4 w-full">
               {workMode === 'layers' && (
-                <div className="max-h-[350px] overflow-y-auto no-scrollbar px-2">
+                <div className="max-h-[290px] px-2">
                   <LayersSection 
                     layers={layers}
                     activeColumnTrigger={activeColumnTrigger}
