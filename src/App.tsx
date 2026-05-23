@@ -192,6 +192,10 @@ interface PiPLayer {
   targetOutputId: string | null;
   showFrame?: boolean;
   showInPreview?: boolean;
+  borderWidth?: number;
+  borderColor?: string;
+  transition?: 'fade' | 'wipe' | 'none';
+  transitionDuration?: number;
 }
 
 interface ExternalScreenSettings {
@@ -338,6 +342,15 @@ const PropertyControl = ({
                 value={isAudio ? actualDisplayValue.split(' ')[0] : displayValue.replace(/[^\d.-]/g, '')}
                 onChange={(e) => onInputChange(e.target.value)}
                 onMouseDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key === '+' || e.key === '=') {
+                     onChange(Math.min(max, value + step));
+                     e.preventDefault();
+                  } else if (e.key === '-' || e.key === '_') {
+                     onChange(Math.max(min, value - step));
+                     e.preventDefault();
+                  }
+                }}
                 className="w-10 bg-transparent border-none p-0 text-[10px] font-black text-obs-accent outline-none text-right placeholder:text-obs-accent/30"
               />
               <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">{isAudio ? 'dB' : (displayValue.replace(/[\d.-]/g, '') || 'PX')}</span>
@@ -1080,7 +1093,7 @@ const Monitor = React.memo(({
                     {pipLayers?.filter(p => ((isProgram && (p.isActive || p.showInPreview)) && (p.targetOutputId === activeOutputId || (!p.targetOutputId && activeOutputId === '1') || p.targetOutputId === 'program')) || (!isProgram && p.showInPreview && (p.targetOutputId === activeOutputId || (!p.targetOutputId && activeOutputId === '1') || p.targetOutputId === 'program'))).map(pip => (
                       <motion.div
                         key={pip.id}
-                        className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-obs-text/20' : 'border-none'}`}
+                        className={`absolute overflow-hidden pointer-events-none ${pip.showFrame ? 'border' : ''}`}
                         initial={{ opacity: 0 }}
                         animate={{ opacity: pip.opacity }}
                         exit={{ opacity: 0 }}
@@ -1090,27 +1103,22 @@ const Monitor = React.memo(({
                           top: `${(pip.y / 1080) * 100}%`,
                           width: `${(pip.width / 1920) * 100}%`,
                           height: `${(pip.height / 1080) * 100}%`,
-                          borderRadius: 0
+                          borderRadius: 0,
+                          background: 'transparent',
+                          borderColor: pip.borderColor || '#000000',
+                          borderWidth: pip.showFrame ? `${pip.borderWidth || 1}px` : '0px'
                         }}
                       >
                         {pip.clipId && clips?.find(c => c.id === pip.clipId) && (
-                          clips.find(c => c.id === pip.clipId)!.type === 'video' ? (
-                            <video 
-                              src={clips.find(c => c.id === pip.clipId)!.url} 
-                              autoPlay 
-                              muted 
-                              loop 
-                              className="w-full h-full object-contain" 
-                            />
-                          ) : clips.find(c => c.id === pip.clipId)!.type === 'document' ? (
-                            <DocumentLayer clip={clips.find(c => c.id === pip.clipId)!} onUpdateClip={updateClip} />
-                          ) : (
-                            <img 
-                              src={clips.find(c => c.id === pip.clipId)!.url} 
-                              className="w-full h-full object-contain" 
-                              referrerPolicy="no-referrer"
-                            />
-                          )
+                          <div className="w-full h-full"> 
+                             <VideoLayer 
+                              clip={clips.find(c => c.id === pip.clipId)!}
+                              volume={0}
+                              opacity={pip.opacity}
+                              isProgram={false}
+                              onUpdateClip={updateClip}
+                             />
+                          </div>
                         )}
                       </motion.div>
                     ))}
@@ -2379,7 +2387,7 @@ const OutputView = React.memo(() => {
                   {state.pipLayers && state.pipLayers.filter((p: any) => p.isActive && (p.targetOutputId === mappedOutput?.id || (!p.targetOutputId && mappedOutput?.id === '1') || p.targetOutputId === 'program')).map((pip: any) => (
                     <motion.div
                       key={pip.id}
-                      className={`absolute overflow-hidden pointer-events-none shadow-2xl ${pip.showFrame ? 'border border-obs-text/20' : ''}`}
+                      className={`absolute overflow-hidden pointer-events-none ${pip.showFrame ? 'border' : ''}`}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: pip.opacity }}
                       exit={{ opacity: 0 }}
@@ -2389,25 +2397,20 @@ const OutputView = React.memo(() => {
                         top: `${(pip.y / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.height || 1080) : 1080)) * 100}%`,
                         width: `${(pip.width / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.width || 1920) : 1920)) * 100}%`,
                         height: `${(pip.height / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.height || 1080) : 1080)) * 100}%`,
-                        borderRadius: 0
+                        borderRadius: 0,
+                        borderWidth: pip.showFrame ? `${pip.borderWidth || 1}px` : '0px',
+                        borderColor: pip.borderColor || '#000000'
                       }}
                     >
                       {pip.clipId && (state.clips || []).find((c: any) => c.id === pip.clipId) && (
-                        (state.clips.find((c: any) => c.id === pip.clipId)!).type === 'video' ? (
-                          <video 
-                            src={state.clips.find((c: any) => c.id === pip.clipId)!.url} 
-                            autoPlay 
-                            muted 
-                            loop 
-                            className="w-full h-full object-contain" 
-                          />
-                        ) : (
-                          <img 
-                            src={state.clips.find((c: any) => c.id === pip.clipId)!.url} 
-                            className="w-full h-full object-contain" 
-                            referrerPolicy="no-referrer"
-                          />
-                        )
+                        <div className="w-full h-full"> 
+                             <VideoLayer 
+                              clip={state.clips.find((c: any) => c.id === pip.clipId)!}
+                              volume={0}
+                              opacity={pip.opacity}
+                              isProgram={false}
+                             />
+                        </div>
                       )}
                     </motion.div>
                   ))}
@@ -2446,13 +2449,15 @@ const Inspector = React.memo(({
   onSync,
   onUpdateLayer,
   onUpdatePiP,
+  onRemovePiP,
   onAddPiP,
   onSelectPiP,
   onUpdateClip,
   clips,
   allScreenSettings,
   isDarkMode,
-  isOutputLaunched
+  isOutputLaunched,
+  pipLayers
 }: { 
   selectedItem: Clip | Playlist | any | null, 
   selectedItemType: 'clip' | 'playlist' | 'program' | 'preview' | 'layer' | 'pip' | 'pipManager' | null,
@@ -2472,13 +2477,15 @@ const Inspector = React.memo(({
   onSync?: () => void,
   onUpdateLayer: (id: string, updates: Partial<Layer>) => void,
   onUpdatePiP?: (id: string, updates: Partial<PiPLayer>) => void,
+  onRemovePiP: (id: string) => void,
   onAddPiP?: () => void,
   onSelectPiP?: (pip: PiPLayer) => void,
   onUpdateClip?: (id: string, updates: Partial<Clip>) => void,
   clips?: Clip[],
   allScreenSettings: Record<string, ExternalScreenSettings>,
   isDarkMode: boolean,
-  isOutputLaunched?: boolean
+  isOutputLaunched?: boolean,
+  pipLayers?: PiPLayer[]
 }) => {
   const handleReset = () => {
     if ((selectedItemType === 'clip' || selectedItemType === 'playlist') && selectedItem) {
@@ -2553,6 +2560,15 @@ const Inspector = React.memo(({
                   </button>
                 </div>
                 <div className="flex gap-1">
+                  {pips.length > 1 && (
+                    <button 
+                      onClick={() => onRemovePiP?.(layer.id)}
+                      className="text-obs-muted hover:text-red-500 transition-colors"
+                      title="Borrar PIP"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  )}
                   <button 
                     onClick={() => onUpdatePiP?.(layer.id, { isActive: !layer.isActive })}
                     className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest transition-all ${layer.isActive ? 'bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.3)]' : 'bg-obs-accent text-white hover:bg-obs-accent/80'}`}
@@ -2648,7 +2664,7 @@ const Inspector = React.memo(({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2.5 custom-scrollbar">
-          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdatePiP?.(pip.id, { opacity: 1, showFrame: true, showInPreview: false })}>
+          <CollapsibleSection title="Ajustes Generales" defaultOpen={true} onReset={() => onUpdatePiP?.(pip.id, { opacity: 1, showFrame: false, showInPreview: false, borderWidth: 1, borderColor: '#000000' })}>
             <div className="space-y-4">
               <PropertyControl 
                 label="Opacidad"
@@ -2683,63 +2699,120 @@ const Inspector = React.memo(({
                   </button>
                 </div>
               </div>
+              <PropertyControl 
+                label="Grosor Marco"
+                value={pip.borderWidth || 1}
+                displayValue={`${pip.borderWidth || 1}px`}
+                min={0}
+                max={20}
+                step={1}
+                onChange={(val) => onUpdatePiP?.(pip.id, { borderWidth: val })}
+                onInputChange={(val) => {
+                  const n = parseInt(val);
+                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { borderWidth: Math.max(0, Math.min(20, n)) });
+                }}
+              />
+              <div className="flex flex-col gap-1">
+                <span className="text-[8px] font-black uppercase text-obs-muted">Color Marco</span>
+                <input 
+                  type="color"
+                  value={pip.borderColor || '#000000'}
+                  onChange={(e) => onUpdatePiP?.(pip.id, { borderColor: e.target.value })}
+                  className="w-full h-8 bg-obs-dark-1 rounded border border-obs-dark-2 cursor-pointer"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[8px] font-black uppercase text-obs-muted">Transición</span>
+                <select 
+                  value={pip.transition || 'none'}
+                  onChange={(e) => onUpdatePiP?.(pip.id, { transition: e.target.value as any })}
+                  className="w-full bg-obs-dark-1 border border-obs-dark-2 rounded px-2 py-1 text-[9px] text-obs-text uppercase"
+                >
+                   <option value="none">Ninguna</option>
+                   <option value="fade">Fade</option>
+                   <option value="wipe">Wipe</option>
+                </select>
+              </div>
+              <PropertyControl 
+                label="Duración Trans."
+                value={pip.transitionDuration || 0.4}
+                displayValue={`${(pip.transitionDuration || 0.4).toFixed(1)}s`}
+                min={0}
+                max={5}
+                step={0.1}
+                onChange={(val) => onUpdatePiP?.(pip.id, { transitionDuration: val })}
+                onInputChange={(val) => {
+                  const n = parseFloat(val);
+                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { transitionDuration: Math.max(0, Math.min(5, n)) });
+                }}
+              />
             </div>
           </CollapsibleSection>
 
           <CollapsibleSection title="Posición y Tamaño" defaultOpen={true} onReset={() => onUpdatePiP?.(pip.id, { x: 50, y: 50, width: 400, height: 225 })}>
-            <div className="grid grid-cols-2 gap-3">
-              <PropertyControl 
-                label="Posición X"
-                value={pip.x}
-                displayValue={`${Math.round(pip.x)}px`}
-                min={0}
-                max={maxW}
-                step={1}
-                onChange={(val) => onUpdatePiP?.(pip.id, { x: val })}
-                onInputChange={(val) => {
-                  const n = parseInt(val);
-                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { x: Math.max(0, Math.min(maxW, n)) });
-                }}
-              />
-              <PropertyControl 
-                label="Posición Y"
-                value={pip.y}
-                displayValue={`${Math.round(pip.y)}px`}
-                min={0}
-                max={maxH}
-                step={1}
-                onChange={(val) => onUpdatePiP?.(pip.id, { y: val })}
-                onInputChange={(val) => {
-                  const n = parseInt(val);
-                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { y: Math.max(0, Math.min(maxH, n)) });
-                }}
-              />
-              <PropertyControl 
-                label="Ancho"
-                value={pip.width}
-                displayValue={`${Math.round(pip.width)}px`}
-                min={10}
-                max={maxW}
-                step={1}
-                onChange={(val) => onUpdatePiP?.(pip.id, { width: val })}
-                onInputChange={(val) => {
-                  const n = parseInt(val);
-                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { width: Math.max(10, Math.min(maxW, n)) });
-                }}
-              />
-              <PropertyControl 
-                label="Alto"
-                value={pip.height}
-                displayValue={`${Math.round(pip.height)}px`}
-                min={10}
-                max={maxH}
-                step={1}
-                onChange={(val) => onUpdatePiP?.(pip.id, { height: val })}
-                onInputChange={(val) => {
-                  const n = parseInt(val);
-                  if (!isNaN(n)) onUpdatePiP?.(pip.id, { height: Math.max(10, Math.min(maxH, n)) });
-                }}
-              />
+            <div className="space-y-3">
+              <div>
+                <span className="text-[9px] font-bold text-obs-accent uppercase block mb-2">Tamaño Ventana</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <PropertyControl 
+                    label="Ancho"
+                    value={pip.width}
+                    displayValue={`${Math.round(pip.width)}px`}
+                    min={10}
+                    max={maxW}
+                    step={1}
+                    onChange={(val) => onUpdatePiP?.(pip.id, { width: val })}
+                    onInputChange={(val) => {
+                      const n = parseInt(val);
+                      if (!isNaN(n)) onUpdatePiP?.(pip.id, { width: Math.max(10, Math.min(maxW, n)) });
+                    }}
+                  />
+                  <PropertyControl 
+                    label="Alto"
+                    value={pip.height}
+                    displayValue={`${Math.round(pip.height)}px`}
+                    min={10}
+                    max={maxH}
+                    step={1}
+                    onChange={(val) => onUpdatePiP?.(pip.id, { height: val })}
+                    onInputChange={(val) => {
+                      const n = parseInt(val);
+                      if (!isNaN(n)) onUpdatePiP?.(pip.id, { height: Math.max(10, Math.min(maxH, n)) });
+                    }}
+                  />
+                </div>
+              </div>
+              <div>
+                <span className="text-[9px] font-bold text-obs-accent uppercase block mb-2">Posición Ventana</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <PropertyControl 
+                    label="Posición X"
+                    value={pip.x}
+                    displayValue={`${Math.round(pip.x)}px`}
+                    min={0}
+                    max={maxW}
+                    step={1}
+                    onChange={(val) => onUpdatePiP?.(pip.id, { x: val })}
+                    onInputChange={(val) => {
+                      const n = parseInt(val);
+                      if (!isNaN(n)) onUpdatePiP?.(pip.id, { x: Math.max(0, Math.min(maxW, n)) });
+                    }}
+                  />
+                  <PropertyControl 
+                    label="Posición Y"
+                    value={pip.y}
+                    displayValue={`${Math.round(pip.y)}px`}
+                    min={0}
+                    max={maxH}
+                    step={1}
+                    onChange={(val) => onUpdatePiP?.(pip.id, { y: val })}
+                    onInputChange={(val) => {
+                      const n = parseInt(val);
+                      if (!isNaN(n)) onUpdatePiP?.(pip.id, { y: Math.max(0, Math.min(maxH, n)) });
+                    }}
+                  />
+                </div>
+              </div>
             </div>
           </CollapsibleSection>
 
@@ -2762,12 +2835,12 @@ const Inspector = React.memo(({
             </div>
           </CollapsibleSection>
         </div>
-        <div className="p-3 border-t border-obs-border">
+        <div className="flex flex-col gap-2 p-3 border-t border-obs-border">
           <button 
             onClick={() => onUpdatePiP?.(pip.id, { isActive: !pip.isActive })}
             className={`w-full py-2 rounded text-[11px] font-black uppercase tracking-widest transition-all ${pip.isActive ? 'bg-red-600 text-white animate-pulse' : 'bg-obs-accent text-white hover:bg-obs-accent/80'}`}
           >
-            {pip.isActive ? 'QUITYAR DE PROGRAMA' : 'LANZAR A PROGRAMA'}
+            {pip.isActive ? 'QUITAR DE PROGRAMA' : 'LANZAR A PROGRAMA'}
           </button>
         </div>
       </div>
@@ -4738,7 +4811,7 @@ const GridSection = React.memo(({
         <span className="text-[10px] font-bold uppercase tracking-wider text-obs-muted">Fuentes</span>
       </div>
       <div className="flex gap-2">
-        {Object.keys(deckClips).map(deck => (
+        {['TODOS', ...Object.keys(deckClips)].map(deck => (
           <button 
             key={deck} 
             onClick={() => onSetDeck(deck)}
@@ -4751,14 +4824,14 @@ const GridSection = React.memo(({
     </div>
     
     <div className="flex-1 overflow-y-auto p-4">
-      {deckClips[currentDeck].length === 0 ? (
+      {(currentDeck === 'TODOS' ? Object.values(deckClips).flat() : deckClips[currentDeck]).length === 0 ? (
         <div className="h-full flex flex-col items-center justify-center text-obs-muted opacity-30 gap-2">
           <Plus size={24} strokeWidth={1} />
           <span className="text-[9px] uppercase font-bold tracking-widest">Agrega fuentes a esta baraja</span>
         </div>
       ) : (
         <div className="flex flex-wrap gap-2 content-start">
-          {deckClips[currentDeck].map(clip => (
+          {(currentDeck === 'TODOS' ? Object.values(deckClips).flat() : deckClips[currentDeck]).map(clip => (
             <div key={clip.id} className="w-[110px] shrink-0">
               <ClipCard 
                 clip={clip} 
@@ -5891,12 +5964,20 @@ export default function App() {
   const [activeOutputId, setActiveOutputId] = useState<string>('1');
   const [layerOutputs, setLayerOutputs] = useState<Record<string, string | null>>({});
   const [pipLayers, setPipLayers] = useState<PiPLayer[]>([
-    { id: 'pip-1', name: 'PIP 1', clipId: null, x: 50, y: 50, width: 400, height: 225, opacity: 1, isActive: false, targetOutputId: '1', showFrame: true, showInPreview: false },
+    { id: 'pip-1', name: 'PIP 1', clipId: null, x: 50, y: 50, width: 400, height: 225, opacity: 1, isActive: false, targetOutputId: '1', showFrame: false, showInPreview: false, borderWidth: 1, borderColor: '#000000' },
   ]);
 
   const handleSelectPiP = (pip: PiPLayer) => {
     setSelectedItemType('pip' as any);
     setSelectedItemId(pip.id);
+  };
+
+  const removePiP = (id: string) => {
+    setPipLayers(prev => prev.filter(p => p.id !== id));
+    if (selectedItemId === id) {
+       setSelectedItemType('pipManager');
+       setSelectedItemId(null);
+    }
   };
 
   const addPiP = () => {
@@ -7671,18 +7752,10 @@ export default function App() {
                                 <div className="flex justify-between font-mono text-[8px] text-obs-muted font-normal">
                                   <div className="flex items-center gap-1">
                                     <Clock size={8} />
-                                    { (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? "00:00:00" : (programClip?.type === 'document' || programClip?.type === 'ppt' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
-                                      `${programClip?.currentPage || 1}/${programClip?.totalPages || '?'}`
-                                    ) : (
-                                      <FluidTimeDisplay eventId="video-progress-program" />
-                                    )}
+                                    <FluidTimeDisplay eventId="video-progress-program" />
                                   </div>
                                   <div className="flex items-center gap-1">
-                                    { (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? "00:00:00" : (programClip?.type === 'document' || programClip?.type === 'ppt' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
-                                      `${programClip?.currentPage || 1}/${programClip?.totalPages || '?'}`
-                                    ) : (
-                                      <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
-                                    )}
+                                    <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
                                   </div>
                                 </div>
                               </>
@@ -8337,6 +8410,7 @@ export default function App() {
             onLaunchOutput={handleLaunchOutput}
             onDetectScreens={() => detectScreens(true)}
             isOutputLaunched={launchedScreens[selectedScreenId || 'default'] || false}
+            pipLayers={pipLayers}
             onUpdateLayer={(lid, updates) => {
               setLayers(prev => prev.map(l => l.id === lid ? { ...l, ...updates } : l));
               if (updates.outputId !== undefined) {
@@ -8346,6 +8420,7 @@ export default function App() {
             onUpdatePiP={(pid, updates) => {
               setPipLayers(prev => prev.map(p => p.id === pid ? { ...p, ...updates } : p));
             }}
+            onRemovePiP={removePiP}
             onAddPiP={addPiP}
             onSelectPiP={handleSelectPiP}
             onUpdateClip={updateClip}
