@@ -234,6 +234,35 @@ const formatTime = (seconds: number) => {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${cs.toString().padStart(2, '0')}`;
 };
 
+const getFileUrl = (file: File) => {
+  const filePath = (file as any).path;
+  if (!filePath) return URL.createObjectURL(file);
+  
+  try {
+    // Normalizar barras de Windows a barras de URL
+    const normalized = filePath.replace(/\\/g, '/');
+    const parts = normalized.split('/');
+    
+    // Codificar correctamente cada segmento del path guardando la letra de unidad intacta
+    const encodedParts = parts.map((part: string, index: number) => {
+      if (index === 0 && part.endsWith(':')) {
+        return part;
+      }
+      return encodeURIComponent(part);
+    });
+    
+    let joined = encodedParts.join('/');
+    if (!joined.startsWith('/')) {
+      joined = '/' + joined;
+    }
+    
+    return `file://${joined}`;
+  } catch (err) {
+    console.error("Error formatting native file path, using ObjectURL fallback:", err);
+    return URL.createObjectURL(file);
+  }
+};
+
 const FluidTimeDisplay = ({ eventId, isRemaining, className }: { eventId: string, isRemaining?: boolean, className?: string }) => {
   const spanRef = useRef<HTMLSpanElement>(null);
 
@@ -331,55 +360,80 @@ const PropertyControl = ({
   const actualDisplayValue = isAudio ? volToDb(value) : displayValue;
 
   return (
-    <div className="flex flex-col gap-1 p-2 bg-obs-dark-1 rounded border border-obs-dark-2 group select-none min-w-0">
+    <div 
+      tabIndex={0}
+      onKeyDown={(e) => {
+        // Prevent trigger if physically typing inside input box
+        if (document.activeElement?.tagName === 'INPUT') return;
+        const amount = e.shiftKey ? step * 10 : step;
+        if (e.key === '+' || e.key === '=' || e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+           onChange(Math.min(max, value + amount));
+           e.preventDefault();
+        } else if (e.key === '-' || e.key === '_' || e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+           onChange(Math.max(min, value - amount));
+           e.preventDefault();
+        }
+      }}
+      className="flex flex-col gap-1 p-2 bg-obs-dark-1 rounded border border-obs-dark-2 group select-none min-w-0 outline-none focus-within:border-obs-accent/70 focus:border-obs-accent"
+    >
       <div className="flex items-center justify-between gap-1 overflow-hidden h-5">
         <span className="text-[8px] font-black uppercase tracking-tighter text-obs-muted truncate flex-1">{label}</span>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
+          {/* MINUS BUTTON */}
+          <button 
+            type="button"
+            onClick={(e) => {
+              const amount = e.shiftKey ? step * 10 : step;
+              onChange(Math.max(min, value - amount));
+            }}
+            className="text-white hover:text-white bg-obs-bg hover:bg-obs-surface rounded transition-colors w-4.5 h-4.5 flex items-center justify-center border border-white/5 active:scale-90 shrink-0"
+            title="Decrementar"
+          >
+            <Minus size={10} strokeWidth={2.5} />
+          </button>
+
+          {/* VALUE ELEMENT */}
           {onInputChange ? (
-            <div className="flex items-center gap-1.5 bg-obs-bg/50 px-2 py-0.5 rounded border border-white/5">
+            <div className="flex items-center gap-1 bg-obs-bg/50 px-1 py-0.5 rounded border border-white/5 h-4.5">
               <input 
                 type="text"
                 value={isAudio ? actualDisplayValue.split(' ')[0] : displayValue.replace(/[^\d.-]/g, '')}
                 onChange={(e) => onInputChange(e.target.value)}
                 onMouseDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => {
+                  const amount = e.shiftKey ? step * 10 : step;
                   if (e.key === '+' || e.key === '=') {
-                     onChange(Math.min(max, value + step));
+                     onChange(Math.min(max, value + amount));
                      e.preventDefault();
                   } else if (e.key === '-' || e.key === '_') {
-                     onChange(Math.max(min, value - step));
+                     onChange(Math.max(min, value - amount));
                      e.preventDefault();
                   }
                 }}
-                className="w-10 bg-transparent border-none p-0 text-[10px] font-black text-obs-accent outline-none text-right placeholder:text-obs-accent/30"
+                className="w-10 bg-transparent border-none p-0 text-[10px] font-black text-obs-accent outline-none text-right placeholder:text-obs-accent/30 pr-0.5"
               />
-              <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">{isAudio ? 'dB' : (displayValue.replace(/[\d.-]/g, '') || 'PX')}</span>
+              <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest leading-none">{isAudio ? 'dB' : (displayValue.replace(/[\d.-]/g, '') || 'PX')}</span>
             </div>
           ) : (
-            <span className="text-[10px] font-black text-obs-accent whitespace-nowrap">
-              {actualDisplayValue.includes('.') && !isAudio ? Number.parseFloat(actualDisplayValue.replace(/[^\d.-]/g, '')).toFixed(1) + (actualDisplayValue.replace(/[\d.-]/g, '') || '') : actualDisplayValue}
-            </span>
+            <div className="flex items-center justify-center bg-obs-bg/50 px-2 rounded border border-white/5 h-4.5">
+              <span className="text-[10px] font-black text-obs-accent whitespace-nowrap">
+                {actualDisplayValue.includes('.') && !isAudio ? Number.parseFloat(actualDisplayValue.replace(/[^\d.-]/g, '')).toFixed(1) + (actualDisplayValue.replace(/[\d.-]/g, '') || '') : actualDisplayValue}
+              </span>
+            </div>
           )}
-          <div className="flex items-center gap-0.5 shrink-0">
-            <button 
-              onClick={(e) => {
-                const amount = e.shiftKey ? step * 10 : step;
-                onChange(Math.max(min, value - amount));
-              }}
-              className="text-obs-text hover:text-white bg-obs-bg hover:bg-obs-surface rounded transition-colors p-0.5 border border-white/5 active:scale-90"
-            >
-              <Minus size={10} />
-            </button>
-            <button 
-              onClick={(e) => {
-                const amount = e.shiftKey ? step * 10 : step;
-                onChange(Math.min(max, value + amount));
-              }}
-              className="text-obs-text hover:text-white bg-obs-bg hover:bg-obs-surface rounded transition-colors p-0.5 border border-white/5 active:scale-90"
-            >
-              <Plus size={10} />
-            </button>
-          </div>
+
+          {/* PLUS BUTTON */}
+          <button 
+            type="button"
+            onClick={(e) => {
+              const amount = e.shiftKey ? step * 10 : step;
+              onChange(Math.min(max, value + amount));
+            }}
+            className="text-white hover:text-white bg-obs-bg hover:bg-obs-surface rounded transition-colors w-4.5 h-4.5 flex items-center justify-center border border-white/5 active:scale-90 shrink-0"
+            title="Incrementar"
+          >
+            <Plus size={10} strokeWidth={2.5} />
+          </button>
         </div>
       </div>
       
@@ -1094,9 +1148,25 @@ const Monitor = React.memo(({
                       <motion.div
                         key={pip.id}
                         className={`absolute overflow-hidden pointer-events-none ${pip.showFrame ? 'border' : ''}`}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: pip.opacity }}
-                        exit={{ opacity: 0 }}
+                        initial={
+                          pip.transition === 'fade' 
+                            ? { opacity: 0 } 
+                            : pip.transition === 'wipe' 
+                              ? { clipPath: 'inset(0 100% 0 0)', opacity: pip.opacity } 
+                              : { opacity: pip.opacity }
+                        }
+                        animate={{ 
+                          opacity: pip.opacity,
+                          clipPath: 'inset(0 0% 0 0)'
+                        }}
+                        exit={
+                          pip.transition === 'fade' 
+                            ? { opacity: 0 } 
+                            : pip.transition === 'wipe' 
+                              ? { clipPath: 'inset(0 0 0 100%)', opacity: 0 } 
+                              : { opacity: 0 }
+                        }
+                        transition={{ duration: pip.transitionDuration ?? 0.4, ease: 'easeInOut' }}
                         style={{ 
                           zIndex: 100,
                           left: `${(pip.x / 1920) * 100}%`,
@@ -2388,9 +2458,25 @@ const OutputView = React.memo(() => {
                     <motion.div
                       key={pip.id}
                       className={`absolute overflow-hidden pointer-events-none ${pip.showFrame ? 'border' : ''}`}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: pip.opacity }}
-                      exit={{ opacity: 0 }}
+                      initial={
+                        pip.transition === 'fade' 
+                          ? { opacity: 0 } 
+                          : pip.transition === 'wipe' 
+                            ? { clipPath: 'inset(0 100% 0 0)', opacity: pip.opacity } 
+                            : { opacity: pip.opacity }
+                      }
+                      animate={{ 
+                        opacity: pip.opacity,
+                        clipPath: 'inset(0 0% 0 0)'
+                      }}
+                      exit={
+                        pip.transition === 'fade' 
+                          ? { opacity: 0 } 
+                          : pip.transition === 'wipe' 
+                            ? { clipPath: 'inset(0 0 0 100%)', opacity: 0 } 
+                            : { opacity: 0 }
+                      }
+                      transition={{ duration: pip.transitionDuration ?? 0.4, ease: 'easeInOut' }}
                       style={{ 
                         zIndex: 100,
                         left: `${(pip.x / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.width || 1920) : 1920)) * 100}%`,
@@ -4423,7 +4509,7 @@ const Library = React.memo(({
       return {
         name: f.name,
         type: type,
-        url: (window as any).electron ? `file:///${(f as any).path?.replace(/\\/g, '/')}` : URL.createObjectURL(f),
+        url: (window as any).electron ? getFileUrl(f) : URL.createObjectURL(f),
         file: f
       };
     });
@@ -6814,7 +6900,7 @@ export default function App() {
         name = file.name;
         type = file.type;
         url = (window.electron && (file as any).path) 
-          ? `file:///${(file as any).path.replace(/\\/g, '/')}` 
+          ? getFileUrl(file)
           : URL.createObjectURL(file);
       } else {
         file = item.file;
