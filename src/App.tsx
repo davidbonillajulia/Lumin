@@ -96,12 +96,13 @@ interface Clip {
   duration?: number;
   width?: number;
   height?: number;
-  transition?: 'cut' | 'fade' | 'wipe';
+  transition?: 'fade';
   playlistId?: string;
   currentPage?: number;
   totalPages?: number;
   keyboardNavEnabled?: boolean;
   fitToScale?: boolean;
+  parsedSlides?: any[];
 }
 
 interface Playlist {
@@ -119,7 +120,7 @@ interface Playlist {
   speed: number;
   volume: number;
   pan: number;
-  transition?: 'cut' | 'fade' | 'wipe' | 'slide';
+  transition?: 'fade';
   transitionDuration?: number;
   blendMode: 'Alpha' | 'Add' | 'Subtract' | 'Multiply';
   behavior: 'Cortar' | 'Mezclar' | 'Deslizar';
@@ -171,7 +172,7 @@ interface Layer {
   saturation: number;
   colorBalance: { r: number, g: number, b: number };
   rotation: number;
-  transition: 'cut' | 'fade' | 'wipe' | 'slide';
+  transition: 'fade';
   transitionDuration: number;
   isPlaying?: boolean;
   isActive?: boolean;
@@ -195,7 +196,7 @@ interface PiPLayer {
   showInPreview?: boolean;
   borderWidth?: number;
   borderColor?: string;
-  transition?: 'fade' | 'wipe' | 'none';
+  transition?: 'fade' | 'none';
   transitionDuration?: number;
 }
 
@@ -218,7 +219,7 @@ interface ExternalScreenSettings {
   showBackground?: boolean;
   bgScalingW?: number;
   bgScalingH?: number;
-  transitionType: 'fade' | 'wipe' | 'slide' | 'cut';
+  transitionType: 'fade';
   transitionDuration: number;
 }
 
@@ -1122,7 +1123,7 @@ const Monitor = React.memo(({
                             transform: `rotate(${l.rotation}deg)`
                           }}
                         >
-                        <AnimatePresence mode="popLayout" initial={true}>
+                        <AnimatePresence mode="popLayout" initial={false}>
                           <VideoLayer 
                             key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}`}
                             clip={activeClip}
@@ -1134,8 +1135,8 @@ const Monitor = React.memo(({
                             onProgressUpdate={onProgressUpdate}
                             onEnded={() => onLayerEnded?.(l.id, activeClip.id)}
                             loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
-                            transitionType={l.transition || 'fade'}
-                            transitionDuration={l.transitionDuration || 0.4}
+                            transitionType="fade"
+                            transitionDuration={Math.min(1.5, l.transitionDuration || 0.4)}
                             perfSettings={perfSettings}
                             onUpdateClip={updateClip}
                           />
@@ -1150,25 +1151,12 @@ const Monitor = React.memo(({
                       <motion.div
                         key={pip.id}
                         className={`absolute overflow-hidden pointer-events-none ${pip.showFrame ? 'border' : ''}`}
-                        initial={
-                          pip.transition === 'fade' 
-                            ? { opacity: 0 } 
-                            : pip.transition === 'wipe' 
-                              ? { clipPath: 'inset(0% 100% 0% 0%)', opacity: pip.opacity } 
-                              : { opacity: pip.opacity }
-                        }
+                        initial={{ opacity: 0 }}
                         animate={{ 
                           opacity: pip.opacity,
-                          clipPath: 'inset(0% 0% 0% 0%)'
                         }}
-                        exit={
-                          pip.transition === 'fade' 
-                            ? { opacity: 0 } 
-                            : pip.transition === 'wipe' 
-                              ? { clipPath: 'inset(0% 0% 0% 100%)', opacity: 0 } 
-                              : { opacity: 0 }
-                        }
-                        transition={{ duration: pip.transitionDuration ?? 0.4, ease: 'easeInOut' }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: Math.min(1.5, pip.transitionDuration ?? 0.4), ease: 'easeInOut' }}
                         style={{ 
                           zIndex: 100,
                           left: `${(pip.x / 1920) * 100}%`,
@@ -1667,6 +1655,18 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
           throw new Error("No slides found in .pptx ZIP container");
         }
 
+        const mediaFiles: Record<string, string> = {};
+        const mediaPromises: Promise<void>[] = [];
+        zip.forEach((path, entry) => {
+          if (path.startsWith('ppt/media/')) {
+            const p = entry.async('blob').then(blob => {
+              mediaFiles[path] = URL.createObjectURL(blob);
+            });
+            mediaPromises.push(p);
+          }
+        });
+        await Promise.all(mediaPromises);
+
         slideFiles.sort((a, b) => a.index - b.index);
         const parsed: any[] = [];
         const parser = new DOMParser();
@@ -1705,10 +1705,34 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
             }
           }
 
+          // Relationship lookup for images
+          let slideImage: string | undefined;
+          try {
+            const relsPath = `ppt/slides/_rels/slide${sf.index}.xml.rels`;
+            const relsEntry = zip.file(relsPath);
+            if (relsEntry) {
+              const relsXml = await relsEntry.async("string");
+              const relsDoc = parser.parseFromString(relsXml, "application/xml");
+              const relationships = relsDoc.getElementsByTagName("Relationship");
+              for (const rel of Array.from(relationships)) {
+                const target = rel.getAttribute("Target");
+                const type = rel.getAttribute("Type");
+                if (type?.includes("image") && target) {
+                  const fullMediaTarget = target.replace("../media/", "ppt/media/");
+                  if (mediaFiles[fullMediaTarget]) {
+                    slideImage = mediaFiles[fullMediaTarget];
+                    break;
+                  }
+                }
+              }
+            }
+          } catch(e) {}
+
           parsed.push({
             title: title || `Slide ${sf.index}`,
             subtitle: subtitle || undefined,
-            bullets: bullets.slice(0, 10)
+            bullets: bullets.slice(0, 10),
+            image: slideImage
           });
         }
 
@@ -1759,21 +1783,27 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
 
   return (
     <div className="w-full h-full bg-slate-900 border border-slate-700/50 rounded flex flex-col p-6 text-white overflow-hidden relative">
-      <div className="absolute top-3 right-3 text-[10px] font-mono text-obs-accent font-bold tracking-widest bg-obs-accent/10 py-0.5 px-3 rounded-full border border-obs-accent/25">
+      {currentSlide.image && (
+        <div className="absolute inset-0 z-0">
+          <img src={currentSlide.image} className="w-full h-full object-cover opacity-30" alt="Slide" />
+          <div className="absolute inset-0 bg-slate-900/60" />
+        </div>
+      )}
+      <div className="absolute top-3 right-3 z-10 text-[10px] font-mono text-obs-accent font-bold tracking-widest bg-obs-accent/10 py-0.5 px-3 rounded-full border border-obs-accent/25">
         DIAPOSITIVA {pageNumber} / {slides.length}
       </div>
       
       <div className="absolute -bottom-16 -right-16 w-48 h-48 bg-obs-accent/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute top-10 left-10 w-24 h-24 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
 
-      <div className="border-b border-slate-800 pb-3 mb-4 shrink-0">
+      <div className="border-b border-slate-800 pb-3 mb-4 shrink-0 relative z-10">
         <h2 className="text-xs font-black uppercase text-obs-accent tracking-wide">{currentSlide.title}</h2>
         {currentSlide.subtitle && (
           <p className="text-[10px] text-slate-400 font-medium italic mt-0.5">{currentSlide.subtitle}</p>
         )}
       </div>
 
-      <div className="flex-1 flex flex-col justify-center space-y-2.5">
+      <div className="flex-1 flex flex-col justify-center space-y-2.5 relative z-10">
         {currentSlide.bullets.map((bullet: string, idx: number) => (
           <div key={idx} className="flex items-start gap-2.5 bg-slate-950/30 p-2.5 rounded border border-slate-800/40 hover:bg-slate-950/60 transition-colors">
             <span className="text-obs-accent text-[11px] font-bold mt-0.5">■</span>
@@ -1782,7 +1812,7 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
         ))}
       </div>
 
-      <div className="mt-4 pt-2 border-t border-slate-800/60 flex justify-between items-center text-[8px] text-slate-500 font-mono tracking-wider">
+      <div className="mt-4 pt-2 border-t border-slate-800/60 flex justify-between items-center text-[8px] text-slate-500 font-mono tracking-wider relative z-10">
         <span>LUMIN PRESENTATION PRO</span>
         <span>© 2026 LUMIN SOFTWARE NATIVO</span>
       </div>
@@ -2077,20 +2107,25 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     }
   }, [volume, masterVolume, opacity, faderOpacity, isTransmitting, isProgram, clip.volume, clip.id, clip.url]);
 
-  // Speed and sync - BE CAREFUL with sync to prevent rebound
+  useEffect(() => {
+    return () => {
+      if (videoRef.current) {
+        const v = videoRef.current;
+        v.pause();
+        v.src = "";
+        v.load();
+        v.removeAttribute('src');
+      }
+    };
+  }, []);
+
+  // Speed and sync
   useEffect(() => {
     const video = videoRef.current;
     if (video && clip.type === 'video' && video.readyState >= 2) {
       video.playbackRate = clip.speed || 1;
-      
-      // Precision sync if needed - avoid oscillation by using a wider deadband
-      const diff = Math.abs(video.currentTime - (clip.currentTime || 0));
-      if (clip.currentTime !== undefined && diff > 1.2 && !isProgram) { 
-        // Only force sync on Preview to avoid jumps on Program
-        video.currentTime = clip.currentTime;
-      }
     }
-  }, [clip.speed, clip.currentTime, clip.id]);
+  }, [clip.speed, clip.id]);
 
   const colorBalance = clip.colorBalance || { r: 1, g: 1, b: 1 };
   const brightness = clip.brightness ?? 1;
@@ -2123,36 +2158,32 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   }, [clip.transform.x, isProgram, transitionType, crossfaderValue]);
 
   const variants: any = {
-    initial: (type: string) => ({
+    initial: {
       opacity: 0,
-      x: type === 'slide' ? '100.1%' : 0,
-      clipPath: type === 'wipe' ? 'inset(0 0 0 100%)' : 'inset(0 0 0 0)'
-    }),
+    },
     animate: {
       opacity: firstFrameRendered ? (opacity * (faderOpacity !== undefined ? faderOpacity : 1) * clipOpacity * clipMaster) : 0,
-      x: xOffsetPercentage,
-      clipPath: 'inset(0 0 0 0)',
+      x: `${clip.transform.x}%`,
+      clipPath: clip.mask === 'circle' ? 'circle(50%)' : clip.mask === 'square' ? 'inset(0%)' : clip.mask === 'diamond' ? 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' : 'none',
       y: `${clip.transform.y}%`,
       scaleX: clip.transform.scaleW,
       scaleY: clip.transform.scaleH,
       rotate: clip.transform.rotation,
       rotateX: clip.transform.rotationX,
       transition: { 
-        duration: transitionType === 'cut' ? 0.001 : (transitionDuration || 0.2), 
+        duration: Math.min(1.5, transitionDuration || 0.4), 
         ease: "easeInOut",
-        opacity: { duration: (transitionDuration || 0.2) * 0.8 } // Slightly faster opacity for smoothness
+        opacity: { duration: Math.min(1.5, (transitionDuration || 0.4) * 0.8) } 
       }
     },
-    exit: (type: string) => ({
-      opacity: type === 'cut' ? 0 : 0, // Always fade out slightly unless cut
-      x: type === 'slide' ? '-100.2%' : 0,
-      clipPath: type === 'wipe' ? 'inset(0 100% 0 0)' : 'inset(0 0 0 0)',
+    exit: {
+      opacity: 0,
       zIndex: -1,
       transition: { 
-        duration: transitionType === 'cut' ? 0.001 : (transitionDuration || 0.2), 
+        duration: Math.min(1.5, transitionDuration || 0.4), 
         ease: "easeInOut" 
       }
-    })
+    }
   };
 
   return (
@@ -3360,30 +3391,18 @@ const Inspector = React.memo(({
           >
             <div className="space-y-3">
               <div className="flex flex-col gap-1">
-                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo de Transición</label>
-                <div className="grid grid-cols-4 gap-1">
-                  {(['fade', 'wipe', 'slide', 'cut'] as const).map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => onUpdateLayer(layer.id, { transition: type })}
-                      className={`py-1 rounded text-[9px] uppercase font-black tracking-tight border transition-all ${
-                        (layer.transition === type || (!layer.transition && type === 'fade'))
-                          ? 'bg-obs-accent border-obs-accent text-white shadow-lg shadow-obs-accent/20' 
-                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
-                      }`}
-                    >
-                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT / NONE'}
-                    </button>
-                  ))}
+                <label className="text-[8px] text-obs-muted uppercase font-black">Transición Fundido</label>
+                <div className="bg-obs-accent/20 border border-obs-accent/40 rounded py-1 px-3 text-[10px] text-obs-accent font-black uppercase text-center shadow-[0_0_10px_rgba(0,163,245,0.2)]">
+                  CROSSFADE (ESTÁNDAR)
                 </div>
               </div>
 
               <PropertyControl 
                 label="Duración"
-                value={(layer.transitionDuration !== undefined ? layer.transitionDuration : 1) * 1000}
-                displayValue={`${Math.round((layer.transitionDuration !== undefined ? layer.transitionDuration : 1) * 1000)}ms`}
-                min={500}
-                max={2000}
+                value={(layer.transitionDuration !== undefined ? layer.transitionDuration : 0.4) * 1000}
+                displayValue={`${Math.round((layer.transitionDuration !== undefined ? layer.transitionDuration : 0.4) * 1000)}ms`}
+                min={0}
+                max={1500}
                 step={10}
                 onChange={(val) => onUpdateLayer(layer.id, { transitionDuration: val / 1000 })}
               />
@@ -8548,13 +8567,14 @@ export default function App() {
 
                 {/* Work Mode Selectors & Timer */}
                 <div className="flex justify-between items-center mt-2">
-                  {(() => {
-                    const activeDocOrPptClip = (programClip && (programClip.type === 'document' || programClip.type === 'ppt' || programClip.name?.toLowerCase().endsWith('.pdf')))
+                    {(() => {
+                    const isProgramVideo = programClip && (programClip.type === 'video' || programClip.type === 'videoinput');
+                    const activeDocOrPptClip = (!isProgramVideo && (programClip && (programClip.type === 'document' || programClip.type === 'ppt' || programClip.name?.toLowerCase().endsWith('.pdf'))))
                       ? programClip
-                      : clips?.find(c => {
+                      : (!isProgramVideo ? clips?.find(c => {
                           const hasLayer = layers?.some(l => l.activeClipId === c.id);
                           return hasLayer && (c.type === 'document' || c.type === 'ppt' || c.name?.toLowerCase().endsWith('.pdf'));
-                        });
+                        }) : null);
 
                     return (
                       <div className="flex flex-col">
