@@ -8145,7 +8145,7 @@ export default function App() {
               >
                 <div className="flex items-center gap-2">
                   <Cpu size={12} className={activeSidebarTab === 'perf' ? 'text-obs-accent' : 'text-obs-muted'} />
-                  <span className={`text-[9px] font-black uppercase tracking-wider ${activeSidebarTab === 'perf' ? 'text-obs-text' : 'text-obs-muted'}`}>RENDIMIENTO Y GPU</span>
+                  <span className={`text-[9px] font-black uppercase tracking-wider ${activeSidebarTab === 'perf' ? 'text-obs-text' : 'text-obs-muted'}`}>RENDIMIENTO Y MOTOR NATIVO</span>
                 </div>
                 <ChevronDown size={12} className={`text-obs-muted transition-transform duration-300 ${activeSidebarTab === 'perf' ? '' : '-rotate-90'}`} />
               </button>
@@ -8235,16 +8235,29 @@ export default function App() {
                         {/* Additional telemetry stats */}
                         <div className="bg-obs-dark-2 p-2 rounded space-y-1.5 text-[6.5px] uppercase font-mono border border-obs-text/5 text-obs-text">
                           <div className="flex justify-between items-center">
-                            <span className="text-obs-muted">Rendimiento</span>
-                            <span className="text-emerald-400 font-bold">✓ Óptimo</span>
+                            <span className="text-obs-muted">Modo de Ejecución</span>
+                            <span className={`${window.electron?.isElectron ? 'text-amber-500' : 'text-blue-400'} font-black flex items-center gap-1`}>
+                              {window.electron?.isElectron && <span className="w-1 h-1 rounded-full bg-amber-500 animate-ping" />}
+                              {window.electron?.isElectron ? 'NATIVO WINDOWS' : 'REMOTA (BROWSER)'}
+                            </span>
                           </div>
                           <div className="flex justify-between items-center border-t border-obs-text/5 pt-1.5">
                             <span className="text-obs-muted">VRAM Persistente</span>
-                            <span className="text-obs-accent font-bold">ACTIVO</span>
+                            <span className={`${window.electron?.isElectron ? 'text-obs-accent' : 'text-obs-muted'} font-bold`}>
+                              {window.electron?.isElectron ? 'ACTIVO D3D12' : 'ESTÁNDAR (WEB)'}
+                            </span>
                           </div>
                           <div className="flex justify-between items-center border-t border-obs-text/5 pt-1.5">
                             <span className="text-obs-muted">Decodificador GPU</span>
-                            <span className="text-obs-accent font-bold">NVDEC (HW)</span>
+                            <span className={`${window.electron?.isElectron ? 'text-emerald-400' : 'text-obs-muted'} font-bold`}>
+                              {window.electron?.isElectron ? 'NVDEC (HW CUDA)' : 'GENÉRICO HWA'}
+                            </span>
+                          </div>
+                          <div className="flex justify-between items-center border-t border-obs-text/5 pt-1.5">
+                            <span className="text-obs-muted">Chromium Render Bypass</span>
+                            <span className={`${window.electron?.isElectron ? 'text-emerald-400' : 'text-obs-muted'} font-bold`}>
+                              {window.electron?.isElectron ? 'COMPLETO' : 'NO DISPONIBLE'}
+                            </span>
                           </div>
                         </div>
                       </div>

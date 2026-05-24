@@ -16,11 +16,28 @@ To achieve ultra-low latency and high-throughput video processing (multiple 4K s
 *   **Video Decoding:** 
     *   **FFmpeg (libavcodec):** For H.264/H.265 hardware-accelerated decoding (NVDEC/QuickSync).
     *   **Native HAP Support:** Custom Snappy-based decompressor that uploads DXT-compressed textures directly to the GPU.
-*   **Networking:** **NDI SDK** for high-quality network video and **Spout (Windows) / Syphon (macOS)** for inter-app texture sharing.
+*   **Electron Wrapper:** Used for the desktop interface, providing deep Win32 API access and hardware acceleration flags.
 
 ---
 
-## 2. Processing Logic (Data Flow)
+## 2. Windows Native Core Bridge (Bypass Engine)
+
+To achieve maximum performance and bypass the overhead of the Chromium rendering engine (HTML/CSS layout engine), LUMIN includes a **Native Core Bridge** written in **C++ and Rust**.
+
+### Architecture Overview:
+1.  **Frontend (Electron/React):** Handles the complex UI, library management, and user interaction.
+2.  **OS-Independent Scheduler (Rust):** A high-priority system thread that manages the frame pacing and ensures constant 60fps presentation regardless of UI complexity.
+3.  **Hardware Video Decoder (C++/FFmpeg):** Uses **NVDEC (Nvidia Codec SDK)** or **QuickSync (Intel)** to decode video streams directly in VRAM. This avoids copying frame data back to system RAM.
+4.  **DirectX 12 Swapchain (C++):** A dedicated Win32 window attachment that receives decoded buffers from NVDEC and presents them to the screen using a triple-buffering flip-discard swapchain.
+
+### Implementation Status:
+- [x] **Electron Hardware Flags:** Configured in `electron/main.cjs` to force GPU rasterization and zero-copy transfers.
+- [x] **Telemetry Integration:** Real-time monitoring of VRAM and GPU decoder state.
+- [x] **Native Source Boilerplates:** Provided in `win32_native/` for rapid compilation on Windows 10/11 using Visual Studio 2022 and Cargo.
+
+---
+
+## 3. Processing Logic (Data Flow)
 
 The system follows a "Pull-based" architecture driven by the Output Refresh Rate (VSync).
 
