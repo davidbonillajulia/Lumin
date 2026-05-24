@@ -227,7 +227,7 @@ const DEFAULT_TRANSFORM: ClipTransform = { x: 0, y: 0, scale: 1, scaleW: 1, scal
 const MOCK_CLIPS: Clip[] = [];
 
 const formatTime = (seconds: number) => {
-  if (isNaN(seconds) || seconds < 0) seconds = 0;
+  if (isNaN(seconds) || !isFinite(seconds) || seconds < 0) seconds = 0;
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   const cs = Math.floor((seconds % 1) * 100);
@@ -1152,18 +1152,18 @@ const Monitor = React.memo(({
                           pip.transition === 'fade' 
                             ? { opacity: 0 } 
                             : pip.transition === 'wipe' 
-                              ? { clipPath: 'inset(0 100% 0 0)', opacity: pip.opacity } 
+                              ? { clipPath: 'inset(0% 100% 0% 0%)', opacity: pip.opacity } 
                               : { opacity: pip.opacity }
                         }
                         animate={{ 
                           opacity: pip.opacity,
-                          clipPath: 'inset(0 0% 0 0)'
+                          clipPath: 'inset(0% 0% 0% 0%)'
                         }}
                         exit={
                           pip.transition === 'fade' 
                             ? { opacity: 0 } 
                             : pip.transition === 'wipe' 
-                              ? { clipPath: 'inset(0 0 0 100%)', opacity: 0 } 
+                              ? { clipPath: 'inset(0% 0% 0% 100%)', opacity: 0 } 
                               : { opacity: 0 }
                         }
                         transition={{ duration: pip.transitionDuration ?? 0.4, ease: 'easeInOut' }}
@@ -2462,18 +2462,18 @@ const OutputView = React.memo(() => {
                         pip.transition === 'fade' 
                           ? { opacity: 0 } 
                           : pip.transition === 'wipe' 
-                            ? { clipPath: 'inset(0 100% 0 0)', opacity: pip.opacity } 
+                            ? { clipPath: 'inset(0% 100% 0% 0%)', opacity: pip.opacity } 
                             : { opacity: pip.opacity }
                       }
                       animate={{ 
                         opacity: pip.opacity,
-                        clipPath: 'inset(0 0% 0 0)'
+                        clipPath: 'inset(0% 0% 0% 0%)'
                       }}
                       exit={
                         pip.transition === 'fade' 
                           ? { opacity: 0 } 
                           : pip.transition === 'wipe' 
-                            ? { clipPath: 'inset(0 0 0 100%)', opacity: 0 } 
+                            ? { clipPath: 'inset(0% 0% 0% 100%)', opacity: 0 } 
                             : { opacity: 0 }
                       }
                       transition={{ duration: pip.transitionDuration ?? 0.4, ease: 'easeInOut' }}
@@ -7269,9 +7269,37 @@ export default function App() {
 
       const nextIndex = (currentIndex + 1) % playlist.clips.length;
       const nextClip = playlist.clips[nextIndex];
-      setProgramClipId(nextClip.id);
-      setProgramPlaylistState({ id: playlist.id, index: nextIndex });
-      setOutputPrograms(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
+      
+      const tType = externalScreenSettings.transitionType || 'fade';
+      const tDuration = externalScreenSettings.transitionDuration || 400;
+
+      if (tType === 'cut') {
+        setProgramClipId(nextClip.id);
+        setProgramPlaylistState({ id: playlist.id, index: nextIndex });
+        setOutputPrograms(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
+        return;
+      }
+
+      // Perform smooth A/B transition swap
+      setOutputTransitionTargets(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
+      handleRewind(nextClip.id);
+
+      animate(0, 100, {
+        duration: tDuration / 1000,
+        ease: "linear",
+        onUpdate: (latest) => setCrossfaderValue(latest),
+        onComplete: () => {
+          setProgramClipId(nextClip.id);
+          setProgramPlaylistState({ id: playlist.id, index: nextIndex });
+          setOutputPrograms(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
+          setCrossfaderValue(0);
+          setOutputTransitionTargets(prev => {
+            const next = { ...prev };
+            delete next[activeOutputId];
+            return next;
+          });
+        }
+      });
     } else {
       // Direct individual clip playing (no playlist)
       if (clip && clip.loop === false) {
@@ -7810,42 +7838,55 @@ export default function App() {
                           </div>
                           
                           <div className="space-y-1">
-                            {(programClip?.totalPages || programClip?.type === 'document' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
-                              <>
-                                <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
-                                  <div 
-                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
-                                    style={{ width: `${(programClip.totalPages && programClip.totalPages > 0) ? ((programClip.currentPage || 1) / programClip.totalPages) * 100 : 100}%` }} 
-                                  />
-                                </div>
-                                <div className="flex justify-between font-mono text-[8px] text-obs-muted font-black">
-                                  <div className="flex items-center gap-1">
-                                    <span>Pág. {programClip.currentPage || 1}</span>
+                            {(() => {
+                              const activeDocOrPpt = (programClip && (programClip.totalPages || programClip.type === 'document' || programClip.type === 'ppt' || programClip.name?.toLowerCase().endsWith('.pdf')))
+                                ? programClip
+                                : clips?.find(c => {
+                                    const hasLayer = layers?.some(l => l.activeClipId === c.id);
+                                    return hasLayer && (c.type === 'document' || c.type === 'ppt' || c.name?.toLowerCase().endsWith('.pdf'));
+                                  });
+
+                              if (activeDocOrPpt) {
+                                return (
+                                  <>
+                                    <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
+                                      <div 
+                                        className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
+                                        style={{ width: `${(activeDocOrPpt.totalPages && activeDocOrPpt.totalPages > 0) ? ((activeDocOrPpt.currentPage || 1) / activeDocOrPpt.totalPages) * 100 : 100}%` }} 
+                                      />
+                                    </div>
+                                    <div className="flex justify-between font-mono text-[8px] text-obs-muted font-black">
+                                      <div className="flex items-center gap-1">
+                                        <span>Pág. {activeDocOrPpt.currentPage || 1}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <span>{activeDocOrPpt.totalPages ? `de ${activeDocOrPpt.totalPages}` : ''}</span>
+                                      </div>
+                                    </div>
+                                  </>
+                                );
+                              }
+
+                              return (
+                                <>
+                                  <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
+                                    <div 
+                                      className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
+                                      style={{ width: `${programProgress.total > 0 ? (programProgress.current / programProgress.total) * 100 : 0}%` }} 
+                                    />
                                   </div>
-                                  <div className="flex items-center gap-1">
-                                    <span>{programClip.totalPages ? `de ${programClip.totalPages}` : ''}</span>
+                                  <div className="flex justify-between font-mono text-[8px] text-obs-muted font-normal">
+                                    <div className="flex items-center gap-1">
+                                      <Clock size={8} />
+                                      <FluidTimeDisplay eventId="video-progress-program" />
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
+                                    </div>
                                   </div>
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
-                                  <div 
-                                    className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
-                                    style={{ width: `${programProgress.total > 0 ? (programProgress.current / programProgress.total) * 100 : 0}%` }} 
-                                  />
-                                </div>
-                                <div className="flex justify-between font-mono text-[8px] text-obs-muted font-normal">
-                                  <div className="flex items-center gap-1">
-                                    <Clock size={8} />
-                                    <FluidTimeDisplay eventId="video-progress-program" />
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
-                                  </div>
-                                </div>
-                              </>
-                            )}
+                                </>
+                              );
+                            })()}
                           </div>
 
                           <div className="pt-2 border-t border-obs-text/5">
@@ -7892,129 +7933,89 @@ export default function App() {
                   >
                     <div className="p-3 space-y-3">
                       <div className="bg-obs-surface p-2.5 rounded border border-obs-text/5 space-y-2.5">
-                        
-                        {/* Motor de Reproducción */}
-                        <div className="space-y-1">
-                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Motor de Reproducción</label>
-                          <select 
-                            value={perfSettings.engine}
-                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, engine: e.target.value }))}
-                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
-                          >
-                            <option value="native_chromium">Chromium Threaded GPGPU</option>
-                            <option value="ffmpeg">FFmpeg GPGPU Engine</option>
-                            <option value="libvlc">libVLC Hardware Core</option>
-                          </select>
-                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
-                            LibVLC/FFmpeg habilitan precarga paralela y mitigación de latencia de fotogramas.
-                          </span>
+                        <div className="text-[8px] bg-emerald-950/40 text-emerald-400 border border-emerald-500/10 p-2 rounded leading-relaxed font-black uppercase tracking-wide">
+                          ✓ Configuración de fluidos activa: El sistema se ha optimizado para evitar cortes o pausas al reproducir video.
                         </div>
 
-                        {/* Decodificación por Hardware */}
-                        <div className="space-y-1">
-                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Decodificación HW (Windows)</label>
-                          <select 
-                            value={perfSettings.gpuDecoding}
-                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, gpuDecoding: e.target.value }))}
-                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
-                          >
-                            <option value="d3d11">Direct3D 11 (GPU)</option>
-                            <option value="dxva2">DXVA2 (DirectX Video Accel)</option>
-                            <option value="nvdec">NVIDIA NVDEC Core</option>
-                            <option value="vaapi">Intel/AMD VA-API HW</option>
-                            <option value="software">Software (CPU Múltiple)</option>
-                          </select>
-                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
-                            Recomendado: D3D11 / DXVA2 para Windows Media Foundation acelerado.
-                          </span>
-                        </div>
-
-                        {/* API de Presentación Gráfica */}
-                        <div className="space-y-1">
-                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">API de Presentación Gráfica</label>
-                          <select 
-                            value={perfSettings.renderingBackend}
-                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, renderingBackend: e.target.value }))}
-                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
-                          >
-                            <option value="directx11">DirectX 11 (Composición GPU)</option>
-                            <option value="directx12">DirectX 12 (Baja Latencia)</option>
-                            <option value="opengl">OpenGL Core 4.6</option>
-                            <option value="vulkan">Vulkan Universal RT</option>
-                          </select>
-                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
-                            Fuerza el backend del acelarador para la rasterización de matrices de color.
-                          </span>
-                        </div>
-
-                        {/* Modo de Búfer e Hilos */}
-                        <div className="space-y-1">
-                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Modo de Búfer e Hilos</label>
-                          <select 
-                            value={perfSettings.bufferingMode || 'aggressive'}
-                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, bufferingMode: e.target.value }))}
-                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
-                          >
-                            <option value="normal">Estándar (Búfer de Demanda)</option>
-                            <option value="aggressive">Agresivo (Precarga 2000ms)</option>
-                            <option value="ultra_preload">Pool de Precarga Ultra (Videos HD)</option>
-                          </select>
-                          <span className="text-[6px] text-obs-muted/70 block leading-normal">
-                            Ultra-preloader almacena en caché GPU los cuadros clave para transiciones sin cortes.
-                          </span>
-                        </div>
-
-                        {/* Algoritmo de Bucle */}
-                        <div className="space-y-1">
-                          <label className="text-[7px] text-obs-muted uppercase font-black tracking-widest block font-sans">Algoritmo de Bucle</label>
-                          <select 
-                            value={perfSettings.loopMode || 'native_seamless'}
-                            onChange={(e) => setPerfSettings((prev: any) => ({ ...prev, loopMode: e.target.value }))}
-                            className="w-full text-[9px] bg-obs-dark-1 text-obs-text border border-obs-border rounded px-1.5 py-1 focus:outline-none focus:border-obs-accent font-black uppercase"
-                          >
-                            <option value="native_seamless">Seamless Sub-frame Seek</option>
-                            <option value="double_buffer">Double Buffer Loop (Sin cortes)</option>
-                            <option value="standard">HTML5 Tradicional (Posible corte)</option>
-                          </select>
-                        </div>
-
-                        {/* Optimizar Codecs HA */}
-                        <div className="flex items-center justify-between gap-2.5 pt-1.5 border-t border-obs-text/5">
-                          <span className="text-[7px] text-obs-text font-black uppercase font-sans">Optimizar Codecs HA</span>
+                        {/* Aceleración por Hardware GPU */}
+                        <div className="flex items-center justify-between gap-2.5 pt-1 border-t border-obs-text/5">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[7px] text-obs-text font-black uppercase font-sans">Aceleración por GPU (Windows)</span>
+                            <span className="text-[6px] text-obs-muted leading-tight">Usa DirectX11/D3D11 para acelerar la decodificación.</span>
+                          </div>
                           <button
-                            onClick={() => setPerfSettings((p: any) => ({ ...p, codecOptimization: !p.codecOptimization }))}
-                            className={`w-7 h-4 rounded-full p-0.5 transition-colors ${perfSettings.codecOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                            onClick={() => setPerfSettings((p: any) => ({ ...p, gpuDecoding: p.gpuDecoding === 'software' ? 'd3d11' : 'software' }))}
+                            className={`w-7 h-4 rounded-full p-0.5 transition-colors ${perfSettings.gpuDecoding !== 'software' ? 'bg-obs-accent' : 'bg-obs-border'}`}
                           >
-                            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${perfSettings.codecOptimization ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${perfSettings.gpuDecoding !== 'software' ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                           </button>
                         </div>
 
-                        {/* Fila de Precarga HD */}
-                        <div className="flex items-center justify-between gap-2.5">
-                          <span className="text-[7px] text-obs-text font-black uppercase font-sans">Fila de Precarga HD</span>
+                        {/* Precarga de Memoria GPU */}
+                        <div className="flex items-center justify-between gap-2.5 pt-1 border-t border-obs-text/5">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[7px] text-obs-text font-black uppercase font-sans">Precarga Inteligente (Anti-Cortes)</span>
+                            <span className="text-[6px] text-obs-muted leading-tight">Mantiene un buffer continuo de 2 segundos para evitar pausas.</span>
+                          </div>
                           <button
-                            onClick={() => setPerfSettings((p: any) => ({ ...p, highResOptimization: !p.highResOptimization }))}
-                            className={`w-7 h-4 rounded-full p-0.5 transition-colors ${perfSettings.highResOptimization ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                            onClick={() => setPerfSettings((p: any) => ({ ...p, bufferingMode: p.bufferingMode === 'normal' ? 'aggressive' : 'normal' }))}
+                            className={`w-7 h-4 rounded-full p-0.5 transition-colors ${perfSettings.bufferingMode !== 'normal' ? 'bg-obs-accent' : 'bg-obs-border'}`}
                           >
-                            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${perfSettings.highResOptimization ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${perfSettings.bufferingMode !== 'normal' ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                          </button>
+                        </div>
+
+                        {/* Bucle Sin Fisuras */}
+                        <div className="flex items-center justify-between gap-2.5 pt-1 border-t border-obs-text/5">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[7px] text-obs-text font-black uppercase font-sans">Bucle Continuo Ultra</span>
+                            <span className="text-[6px] text-obs-muted leading-tight">Pre-carga frames de bucle para evitar pantallazos negros.</span>
+                          </div>
+                          <button
+                            onClick={() => setPerfSettings((p: any) => ({ ...p, loopMode: p.loopMode === 'standard' ? 'native_seamless' : 'standard' }))}
+                            className={`w-7 h-4 rounded-full p-0.5 transition-colors ${perfSettings.loopMode !== 'standard' ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                          >
+                            <div className={`w-3 h-3 rounded-full bg-white transition-transform ${perfSettings.loopMode !== 'standard' ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                           </button>
                         </div>
 
                         {/* Hilos de Procesamiento */}
-                        <div className="space-y-1 pt-1 border-t border-obs-text/5 font-sans">
+                        <div className="space-y-1 pt-1.5 border-t border-obs-text/5 font-sans">
                           <div className="flex justify-between items-center text-[7px] text-obs-text font-black uppercase mb-0.5">
-                            <span>Hilos de Procesamiento</span>
-                            <span className="font-mono text-obs-accent text-[8px]">{perfSettings.maxThreads} Cores</span>
+                            <div className="flex flex-col gap-0.5">
+                              <span>Hilos de Decodificación (CPU)</span>
+                              <span className="text-[6px] text-obs-muted leading-tight">Reparte el trabajo de descompresión en múltiples núcleos.</span>
+                            </div>
+                            <span className="font-mono text-obs-accent text-[8px] font-black">{perfSettings.maxThreads || 4} Cores</span>
                           </div>
                           <input 
                             type="range"
                             min={1}
                             max={8}
                             step={1}
-                            value={perfSettings.maxThreads}
+                            value={perfSettings.maxThreads || 4}
                             onChange={(e) => setPerfSettings((p: any) => ({ ...p, maxThreads: parseInt(e.target.value) }))}
                             className="w-full accent-obs-accent h-1 bg-obs-dark-1 rounded"
                           />
+                        </div>
+
+                        {/* Botón Restablecer Recomendado */}
+                        <div className="pt-2">
+                          <button
+                            onClick={() => setPerfSettings({
+                              gpuDecoding: 'd3d11',
+                              engine: 'native_chromium',
+                              bufferingMode: 'aggressive',
+                              renderingBackend: 'directx11',
+                              codecOptimization: true,
+                              loopMode: 'native_seamless',
+                              highResOptimization: true,
+                              maxThreads: 4
+                            })}
+                            className="w-full py-1.5 bg-obs-accent text-white uppercase font-black text-[7px] tracking-widest rounded hover:bg-obs-accent/80 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-1 shadow-md shadow-obs-accent/10"
+                          >
+                            ✓ Cargar Configuración Recomendada
+                          </button>
                         </div>
 
                       </div>
@@ -8305,25 +8306,42 @@ export default function App() {
 
                 {/* Work Mode Selectors & Timer */}
                 <div className="flex justify-between items-center mt-2">
-                  <div className="flex flex-col">
-                     <span className="text-[10px] text-obs-muted uppercase font-black tracking-widest leading-none mb-0.5">{timerMode}</span>
-                     <div className="flex items-center gap-2">
-                       <span className="text-2xl font-mono font-normal text-white leading-none tracking-tight">
-                         { (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? "00:00:00" : (programClip?.type === 'document' || programClip?.type === 'ppt' || programClip?.name?.toLowerCase().endsWith('.pdf')) ? (
-                           `${programClip?.currentPage || 1}/${programClip?.totalPages || '?'}`
-                         ) : (
-                           <FluidTimeDisplay eventId="video-progress-program" isRemaining={timerMode === 'remaining'} />
-                         )}
-                       </span>
-                       <button 
-                         onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
-                         className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5"
-                         title="Cambiar modo de tiempo"
-                       >
-                         <RefreshCw size={12} className="text-obs-muted" />
-                       </button>
-                     </div>
-                  </div>
+                  {(() => {
+                    const activeDocOrPptClip = (programClip && (programClip.type === 'document' || programClip.type === 'ppt' || programClip.name?.toLowerCase().endsWith('.pdf')))
+                      ? programClip
+                      : clips?.find(c => {
+                          const hasLayer = layers?.some(l => l.activeClipId === c.id);
+                          return hasLayer && (c.type === 'document' || c.type === 'ppt' || c.name?.toLowerCase().endsWith('.pdf'));
+                        });
+
+                    return (
+                      <div className="flex flex-col">
+                         <span className="text-[10px] text-obs-muted uppercase font-black tracking-widest leading-none mb-0.5">
+                           {activeDocOrPptClip ? "DIAPOSITIVA" : timerMode}
+                         </span>
+                         <div className="flex items-center gap-2">
+                           <span className="text-2xl font-mono font-normal text-white leading-none tracking-tight">
+                             { activeDocOrPptClip ? (
+                               `${activeDocOrPptClip.currentPage || 1} / ${activeDocOrPptClip.totalPages || 1}`
+                             ) : (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? (
+                               "00:00:00"
+                             ) : (
+                               <FluidTimeDisplay eventId="video-progress-program" isRemaining={timerMode === 'remaining'} />
+                             )}
+                           </span>
+                           {!activeDocOrPptClip && (
+                             <button 
+                               onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
+                               className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5"
+                               title="Cambiar modo de tiempo"
+                             >
+                               <RefreshCw size={12} className="text-obs-muted" />
+                             </button>
+                           )}
+                         </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="flex gap-2">
                     <button 
