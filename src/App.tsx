@@ -3955,9 +3955,19 @@ const Inspector = React.memo(({
                         autoPlay 
                       />
                     ) : clip.type === 'videoinput' ? (
-                      <LibraryMediaPreview file={clip} />
+                      <div className="w-full h-full" style={{
+                        opacity: clip.opacity ?? 1,
+                        filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1}) url(#rgbBalanceClipPreview)`
+                      }}>
+                        <LibraryMediaPreview file={clip} />
+                      </div>
                     ) : clip.type === 'document' || clip.type === 'ppt' ? (
-                      <DocumentLayer clip={clip} onUpdateClip={updateClip} />
+                      <div className="w-full h-full" style={{
+                        opacity: clip.opacity ?? 1,
+                        filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1}) url(#rgbBalanceClipPreview)`
+                      }}>
+                        <DocumentLayer clip={clip} onUpdateClip={updateClip} />
+                      </div>
                     ) : (
                       <img 
                         src={clip.url} 
@@ -6092,7 +6102,7 @@ export default function App() {
     return () => document.removeEventListener('nav-to-pip-manager', handleNav);
   }, []);
 
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'audio' | 'info' | 'perf' | null>('audio');
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'audio' | 'info' | 'perf' | null>(null);
   const [perfSettings, setPerfSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('lumin_perf_settings');
@@ -6357,43 +6367,61 @@ export default function App() {
     pipLayers,
     playlists
   ]);
-  // Throttle state mirroring to 30fps max to avoid locking the UI during smooth slider inputs
-  const syncTimeoutRef = useRef<any>(null);
+  // Throttles state mirroring securely to 30fps max to avoid locking the UI during smooth slider inputs and continuous render ticks
+  const lastSyncTimeRef = useRef<number>(0);
+  const pendingSyncRef = useRef<any>(null);
 
   useEffect(() => {
-    if (outputChannel.current) {
-      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-      syncTimeoutRef.current = setTimeout(() => {
-        outputChannel.current?.postMessage({
-          type: 'SYNC_STATE',
-          payload: {
-            programClipId,
-            previewClipId,
-            outputPrograms,
-            outputTransitionTargets,
-            outputOffStates,
-            outputs,
-            clips,
-            crossfaderValue,
-            allScreenSettings,
-            isLive,
-            isTransmitting,
-            isProgramOff: outputOffStates[activeOutputId] || false,
-            programVolume,
-            masterVolume,
-            transitionType: externalScreenSettings.transitionType,
-            transitionDuration: externalScreenSettings.transitionDuration,
-            externalScreenSettings,
-            layers,
-            layerOutputs,
-            pipLayers,
-            perfSettings
-          }
-        });
-      }, 30);
-    }
-    return () => {
-       if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    if (!outputChannel.current) return;
+
+    const doSync = () => {
+      outputChannel.current?.postMessage({
+        type: 'SYNC_STATE',
+        payload: {
+          programClipId,
+          previewClipId,
+          outputPrograms,
+          outputTransitionTargets,
+          outputOffStates,
+          outputs,
+          clips,
+          crossfaderValue,
+          allScreenSettings,
+          isLive,
+          isTransmitting,
+          isProgramOff: outputOffStates[activeOutputId] || false,
+          programVolume,
+          masterVolume,
+          transitionType: externalScreenSettings.transitionType,
+          transitionDuration: externalScreenSettings.transitionDuration,
+          externalScreenSettings,
+          layers,
+          layerOutputs,
+          pipLayers,
+          perfSettings
+        }
+      });
+      lastSyncTimeRef.current = performance.now();
+      if (pendingSyncRef.current) {
+        clearTimeout(pendingSyncRef.current);
+        pendingSyncRef.current = null;
+      }
+    };
+
+    const now = performance.now();
+    const timeSinceLastSync = now - lastSyncTimeRef.current;
+
+    if (timeSinceLastSync >= 33) {
+      if (pendingSyncRef.current) {
+        clearTimeout(pendingSyncRef.current);
+        pendingSyncRef.current = null;
+      }
+      doSync();
+    } else {
+      if (!pendingSyncRef.current) {
+        const remainingDelay = 33 - timeSinceLastSync;
+        pendingSyncRef.current = setTimeout(doSync, remainingDelay);
+      }
     }
   }, [programClipId, previewClipId, outputTransitionTargets, outputOffStates, outputPrograms, outputs, clips, crossfaderValue, allScreenSettings, isLive, isTransmitting, activeOutputId, programVolume, masterVolume, externalScreenSettings.transitionType, externalScreenSettings.transitionDuration, layers, layerOutputs, pipLayers, perfSettings]);
 
