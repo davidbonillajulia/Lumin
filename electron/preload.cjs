@@ -7,5 +7,6 @@ contextBridge.exposeInMainWorld('electron', {
   savePerfSettings: (settings) => ipcRenderer.invoke('save-perf-settings', settings),
   getPerfSettings: () => ipcRenderer.invoke('get-perf-settings'),
   openSettings: () => ipcRenderer.send('open-settings'),
+  convertPptx: (filePath) => ipcRenderer.invoke('convert-pptx', filePath),
   isElectron: true
 });

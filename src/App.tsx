@@ -103,6 +103,8 @@ interface Clip {
   keyboardNavEnabled?: boolean;
   fitToScale?: boolean;
   parsedSlides?: any[];
+  file?: any;
+  path?: string;
 }
 
 interface Playlist {
@@ -152,6 +154,7 @@ declare global {
       launchOutput: (data: { screenId: string, url: string }) => void;
       closeOutput?: (screenId: string) => void;
       openSettings?: () => void;
+      convertPptx?: (filePath: string) => Promise<{ success: boolean; slides: any[]; totalPages: number; error?: string }>;
       isElectron: boolean;
     }
   }
@@ -563,7 +566,7 @@ const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelect
       <LibraryMediaPreview file={clip} />
     ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (
       <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none opacity-80 group-hover:opacity-100 transition-opacity">
-        {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
+        {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} isThumbnail={true} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
       </div>
     ) : (
       <img src={clip.thumbnail} alt={clip.name} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" referrerPolicy="no-referrer" />
@@ -1536,7 +1539,7 @@ const PixelMapModal = ({
   );
 };
 
-const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageNumber: number, onUpdateClip?: (id: string, updates: any) => void }) => {
+const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip, isThumbnail = false }: { clip: any, pageNumber: number, onUpdateClip?: (id: string, updates: any) => void, isThumbnail?: boolean }) => {
   const [slides, setSlides] = useState<any[]>(() => {
     return clip.parsedSlides || [
       {
@@ -1630,6 +1633,30 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
 
     const parseFileAsync = async () => {
       try {
+        // DETECCIÓN Y EJECUCIÓN DEL MOTOR NATIVO POWERPOINT EN WINDOWS (Vía Electron COM Automation)
+        if (window.electron && window.electron.isElectron && window.electron.convertPptx) {
+          const filePath = clip.path || (clip.file as any)?.path;
+          if (filePath) {
+            console.log("[LUMIN NATIVO] Solicitando procesado nativo de PowerPoint para:", filePath);
+            const nativeResult = await window.electron.convertPptx(filePath);
+            if (nativeResult && nativeResult.success) {
+              console.log("[LUMIN NATIVO] PowerPoint renderizado por Office COM con éxito. Diapositivas:", nativeResult.slides.length);
+              setSlides(nativeResult.slides);
+              setIsParsing(false);
+              if (onUpdateClip) {
+                onUpdateClip(clip.id, { 
+                  parsedSlides: nativeResult.slides, 
+                  totalPages: nativeResult.totalPages,
+                  thumbnail: nativeResult.slides[0]?.image || clip.thumbnail
+                });
+              }
+              return;
+            } else {
+              console.warn("[LUMIN NATIVO] El motor PowerPoint COM devolvió error. Fallback a visor web de emergencia:", nativeResult?.error);
+            }
+          }
+        }
+
         let arrayBuffer: ArrayBuffer;
         if (clip.file) {
           arrayBuffer = await clip.file.arrayBuffer();
@@ -1728,11 +1755,30 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
             }
           } catch(e) {}
 
+          // Background parsing attempt
+          let bgColor = '#0f172a'; // Default slate-900
+          try {
+            const bgNode = doc.getElementsByTagNameNS("*", "bg")[0];
+            if (bgNode) {
+              const bgPr = bgNode.getElementsByTagNameNS("*", "bgPr")[0];
+              if (bgPr) {
+                const solidFill = bgPr.getElementsByTagNameNS("*", "solidFill")[0];
+                if (solidFill) {
+                   const srgbClr = solidFill.getElementsByTagNameNS("*", "srgbClr")[0];
+                   if (srgbClr) bgColor = `#${srgbClr.getAttribute("val")}`;
+                   const schemeClr = solidFill.getElementsByTagNameNS("*", "schemeClr")[0];
+                   if (schemeClr && schemeClr.getAttribute("val") === 'bg1') bgColor = '#ffffff';
+                }
+              }
+            }
+          } catch(e) {}
+
           parsed.push({
             title: title || `Slide ${sf.index}`,
             subtitle: subtitle || undefined,
-            bullets: bullets.slice(0, 10),
-            image: slideImage
+            bullets: bullets.slice(0, 15),
+            image: slideImage,
+            bgColor: bgColor
           });
         }
 
@@ -1757,7 +1803,7 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
             subtitle: "Rendimiento Optimizado",
             bullets: [
               "HAP / WebM video decoding y caché persistente en memoria",
-              "Pipeline de bajo jitter con sincronización estable de fotogramas",
+              "Pipeline de bajo jitter con sincronización stable de fotogramas",
               "Operativa robusta de backup dinámico de decoders"
             ]
           }
@@ -1776,46 +1822,105 @@ const PPTSlideRenderer = ({ clip, pageNumber, onUpdateClip }: { clip: any, pageN
   if (!currentSlide) {
     return (
       <div className="w-full h-full bg-slate-900 border border-slate-700/50 rounded flex items-center justify-center text-white">
-        <span className="text-xs font-mono tracking-widest text-obs-accent animate-pulse uppercase">CARGANDO PRESENTACIÓN...</span>
+        <span className="text-[8px] font-mono tracking-widest text-obs-accent animate-pulse uppercase">CARGANDO PRESENTACIÓN...</span>
       </div>
     );
   }
 
-  return (
-    <div className="w-full h-full bg-slate-900 border border-slate-700/50 rounded flex flex-col p-6 text-white overflow-hidden relative">
-      {currentSlide.image && (
-        <div className="absolute inset-0 z-0">
-          <img src={currentSlide.image} className="w-full h-full object-cover opacity-30" alt="Slide" />
-          <div className="absolute inset-0 bg-slate-900/60" />
-        </div>
-      )}
-      <div className="absolute top-3 right-3 z-10 text-[10px] font-mono text-obs-accent font-bold tracking-widest bg-obs-accent/10 py-0.5 px-3 rounded-full border border-obs-accent/25">
-        DIAPOSITIVA {pageNumber} / {slides.length}
-      </div>
-      
-      <div className="absolute -bottom-16 -right-16 w-48 h-48 bg-obs-accent/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute top-10 left-10 w-24 h-24 bg-purple-500/5 rounded-full blur-2xl pointer-events-none" />
-
-      <div className="border-b border-slate-800 pb-3 mb-4 shrink-0 relative z-10">
-        <h2 className="text-xs font-black uppercase text-obs-accent tracking-wide">{currentSlide.title}</h2>
-        {currentSlide.subtitle && (
-          <p className="text-[10px] text-slate-400 font-medium italic mt-0.5">{currentSlide.subtitle}</p>
+  // Optimize layout for Thumbnail format to prevent overflows in lists and cards
+  if (isThumbnail) {
+    const isBgWhite = currentSlide.bgColor === '#ffffff';
+    return (
+      <div 
+        className="w-full h-full relative overflow-hidden rounded transition-all duration-200 border border-obs-border/30 bg-black flex items-center justify-center"
+      >
+        {currentSlide.image ? (
+          <img 
+            src={currentSlide.image} 
+            className="w-full h-full object-contain pointer-events-none select-none" 
+            alt="Slide" 
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <div 
+            className="w-full h-full relative flex flex-col justify-between p-1"
+            style={{ backgroundColor: currentSlide.bgColor || '#0f172a' }}
+          >
+            <div className="relative z-10 flex-1 flex flex-col justify-between h-full pointer-events-none">
+              <div className="shrink-0 max-w-full">
+                <h3 className={`text-[7px] font-black uppercase truncate tracking-tight leading-tight ${isBgWhite ? 'text-slate-900 bg-white/70 px-0.5 rounded-[1px]' : 'text-white bg-black/50 px-0.5 rounded-[1px]'}`}>
+                  {currentSlide.title || `Diapositiva ${pageNumber}`}
+                </h3>
+                {currentSlide.subtitle && (
+                  <p className={`text-[5px] font-bold truncate tracking-wider leading-none mt-0.5 ${isBgWhite ? 'text-slate-500 bg-white/50 px-0.5 rounded-[1px]' : 'text-white/60 bg-black/40 px-0.5 rounded-[1px]'}`}>
+                    {currentSlide.subtitle}
+                  </p>
+                )}
+              </div>
+              
+              <div className="self-end mt-auto">
+                <span className={`text-[5px] font-mono font-bold py-0.2 px-1 rounded-[1px] ${isBgWhite ? 'bg-slate-200 text-slate-700 border border-slate-300' : 'bg-obs-accent/10 border border-obs-accent/20 text-obs-accent'}`}>
+                  SLD {pageNumber}
+                </span>
+              </div>
+            </div>
+          </div>
         )}
       </div>
+    );
+  }
 
-      <div className="flex-1 flex flex-col justify-center space-y-2.5 relative z-10">
-        {currentSlide.bullets.map((bullet: string, idx: number) => (
-          <div key={idx} className="flex items-start gap-2.5 bg-slate-950/30 p-2.5 rounded border border-slate-800/40 hover:bg-slate-950/60 transition-colors">
-            <span className="text-obs-accent text-[11px] font-bold mt-0.5">■</span>
-            <span className="text-[10px] leading-relaxed text-slate-300 font-medium">{bullet}</span>
+  // Full Screen Output Display rendering
+  return (
+    <div 
+      className="w-full h-full border border-slate-700/50 rounded flex flex-col items-center justify-center bg-black overflow-hidden relative shadow-2xl transition-all duration-300 pointer-events-none"
+    >
+      {currentSlide.image ? (
+        <img 
+          src={currentSlide.image} 
+          className="w-full h-full object-contain pointer-events-none select-none" 
+          alt="Slide Content" 
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <div 
+          className="w-full h-full flex flex-col p-8 justify-between"
+          style={{ backgroundColor: currentSlide.bgColor || '#0f172a' }}
+        >
+          {/* Structured contents layer */}
+          <div className="border-b border-slate-800/30 pb-3 mb-4 shrink-0 relative z-10 animate-fade-in">
+            <h2 className="text-xl font-black uppercase tracking-tight py-1 px-2.5 rounded-sm inline-block text-white bg-black/50 backdrop-blur-sm shadow-md">
+              {currentSlide.title}
+            </h2>
+            {currentSlide.subtitle && (
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider mt-2 py-0.5 px-1.5 rounded-sm inline-block text-white/70 bg-black/40 backdrop-blur-sm">
+                  {currentSlide.subtitle}
+                </p>
+              </div>
+            )}
           </div>
-        ))}
-      </div>
+          
+          <div className="flex-1 space-y-3 relative z-10 overflow-hidden">
+            {currentSlide.bullets.map((bullet: string, idx: number) => (
+              <div 
+                key={idx} 
+                className="flex gap-3 items-start animate-fade-in group py-1 px-2.5 rounded-md backdrop-blur-sm max-w-2xl border bg-black/30 text-slate-100 border-white/5"
+              >
+                <div className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 group-hover:scale-125 transition-transform bg-obs-accent shadow-[0_0_8px_rgba(0,163,245,0.6)]" />
+                <span className="text-xs font-semibold leading-relaxed">
+                  {bullet}
+                </span>
+              </div>
+            ))}
+          </div>
 
-      <div className="mt-4 pt-2 border-t border-slate-800/60 flex justify-between items-center text-[8px] text-slate-500 font-mono tracking-wider relative z-10">
-        <span>LUMIN PRESENTATION PRO</span>
-        <span>© 2026 LUMIN SOFTWARE NATIVO</span>
-      </div>
+          <div className="mt-4 pt-2 border-t border-slate-800/60 flex justify-between items-center text-[8px] font-mono tracking-wider relative z-10">
+            <span className="text-slate-500 font-bold">LUMIN PRESENTATION PRO</span>
+            <span className="text-slate-500">© 2026 LUMIN SOFTWARE NATIVO</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -2006,14 +2111,18 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
 
         const handleReady = () => {
           if (clip.isPlaying !== false) {
-            video.play().catch(() => {});
+            setTimeout(() => {
+              if (videoRef.current) videoRef.current.play().catch(() => {});
+            }, 50);
           }
           video.removeEventListener('canplay', handleReady);
         };
         video.addEventListener('canplay', handleReady);
       } else {
         if (clip.isPlaying !== false) {
-          video.play().catch(() => {});
+          setTimeout(() => {
+            if (videoRef.current) videoRef.current.play().catch(() => {});
+          }, 50);
         } else {
           video.pause();
         }
@@ -2107,18 +2216,6 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     }
   }, [volume, masterVolume, opacity, faderOpacity, isTransmitting, isProgram, clip.volume, clip.id, clip.url]);
 
-  useEffect(() => {
-    return () => {
-      if (videoRef.current) {
-        const v = videoRef.current;
-        v.pause();
-        v.src = "";
-        v.load();
-        v.removeAttribute('src');
-      }
-    };
-  }, []);
-
   // Speed and sync
   useEffect(() => {
     const video = videoRef.current;
@@ -2127,12 +2224,37 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     }
   }, [clip.speed, clip.id]);
 
+  // Aggressive Resource Cleanup
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      if (v) {
+        v.pause();
+        v.src = "";
+        v.load();
+        v.remove(); // Remove from DOM intent if possible
+      }
+    };
+  }, [clip.id]);
+
   const colorBalance = clip.colorBalance || { r: 1, g: 1, b: 1 };
   const brightness = clip.brightness ?? 1;
   const contrast = clip.contrast ?? 1;
   const saturation = clip.saturation ?? 1;
   const clipOpacity = clip.opacity ?? 1;
   const clipMaster = clip.master ?? 1;
+
+  const hasLocalFilters = useMemo(() => {
+    return (
+      brightness !== 1 || 
+      contrast !== 1 || 
+      saturation !== 1 || 
+      colorBalance.r !== 1 || 
+      colorBalance.g !== 1 || 
+      colorBalance.b !== 1 || 
+      (clip.filter && clip.filter !== 'none')
+    );
+  }, [brightness, contrast, saturation, colorBalance, clip.filter]);
 
   const clipPath = useMemo(() => {
     if (isProgram && transitionType === 'wipe' && crossfaderValue !== undefined) {
@@ -2208,12 +2330,12 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
           variants={variants}
           className="absolute inset-0 flex items-start justify-start pointer-events-none"
           style={{
-            filter: `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) url(#${filterId}) ${
+            filter: hasLocalFilters ? `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) url(#${filterId}) ${
               clip.filter === 'grayscale' ? 'grayscale(100%)' :
               clip.filter === 'sepia' ? 'sepia(100%)' :
               clip.filter === 'invert' ? 'invert(100%)' :
               clip.filter === 'blur' ? 'blur(10px)' : ''
-            }`,
+            }` : 'none',
             transform: 'translate3d(0, 0, 0)',
             backfaceVisibility: 'hidden',
             WebkitBackfaceVisibility: 'hidden',
@@ -2434,6 +2556,16 @@ const OutputView = React.memo(() => {
           scalingW: 1, scalingH: 1, colorBalance: { r: 1, g: 1, b: 1 },
           bgScalingW: 100, bgScalingH: 100
         });
+
+    const hasGlobalFilters = (() => {
+      const b = settings.brightness ?? 1;
+      const c = settings.contrast ?? 1;
+      const s = settings.saturation ?? 1;
+      const r = settings.colorBalance?.r ?? 1;
+      const g = settings.colorBalance?.g ?? 1;
+      const bl = settings.colorBalance?.b ?? 1;
+      return b !== 1 || c !== 1 || s !== 1 || r !== 1 || g !== 1 || bl !== 1;
+    })();
     
     const isContentActive = isLive && isTransmitting;
     const busAClip = clips.find((c: any) => c.id === mappedProgramClipId);
@@ -2515,15 +2647,25 @@ const OutputView = React.memo(() => {
             opacity: settings.opacity ?? 1,
             // If background is showing and we have no content, make container transparent
             backgroundColor: (settings.showBackground && settings.backgroundImage && !hasActiveContent) ? 'transparent' : '#000',
-            transform: `translate(${settings.x ?? 0}px, ${settings.y ?? 0}px) rotate(${settings.rotation ?? 0}deg)`
+            transform: `translate3d(${settings.x ?? 0}px, ${settings.y ?? 0}px, 0px) rotate(${settings.rotation ?? 0}deg)`,
+            backfaceVisibility: 'hidden',
+            WebkitBackfaceVisibility: 'hidden',
+            transformStyle: 'preserve-3d',
+            willChange: 'transform, opacity'
           }}
         >
           <div 
             className="absolute inset-0 flex items-start justify-start"
             style={{
-              transform: `scale(${settings.scalingW ?? 1}, ${settings.scalingH ?? 1})`,
+              transform: `scale3d(${settings.scalingW ?? 1}, ${settings.scalingH ?? 1}, 1)`,
               transformOrigin: 'top left',
-              filter: `brightness(${settings.brightness ?? 1}) contrast(${settings.contrast ?? 1}) saturate(${settings.saturation ?? 1}) url(#rgbBalance)`
+              backfaceVisibility: 'hidden',
+              WebkitBackfaceVisibility: 'hidden',
+              transformStyle: 'preserve-3d',
+              willChange: 'transform',
+              filter: hasGlobalFilters 
+                ? `brightness(${settings.brightness ?? 1}) contrast(${settings.contrast ?? 1}) saturate(${settings.saturation ?? 1}) url(#rgbBalance)` 
+                : 'none'
             }}
           >
             {/* SVG Filter for RGB Balance */}
@@ -2625,15 +2767,15 @@ const OutputView = React.memo(() => {
                       >
                         <AnimatePresence mode="popLayout" initial={true}>
                           <VideoLayer 
-                            key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}`}
-                            clip={activeClip}
-                            volume={l.muted ? 0 : programVolume}
-                            masterVolume={masterVolume}
-                            opacity={1}
-                            isProgram={true}
-                            isTransmitting={isTransmitting}
-                            transitionType={l.transition || 'fade'}
-                            transitionDuration={l.transitionDuration || 1}
+                      key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}`}
+                      clip={activeClip}
+                      volume={l.muted ? 0 : programVolume}
+                      masterVolume={masterVolume}
+                      opacity={1}
+                      isProgram={true}
+                      isTransmitting={isTransmitting}
+                      transitionType="fade"
+                      transitionDuration={Math.max(0, Math.min(1.5, l.transitionDuration || 0.4))}
                             onEnded={() => {
                                channelRef.current?.postMessage({ type: 'LAYER_CLIP_ENDED', payload: { layerId: l.id, clipId: activeClip.id } });
                             }}
@@ -2652,25 +2794,16 @@ const OutputView = React.memo(() => {
                     <motion.div
                       key={pip.id}
                       className={`absolute overflow-hidden pointer-events-none ${pip.showFrame ? 'border' : ''}`}
-                      initial={
-                        pip.transition === 'fade' 
-                          ? { opacity: 0 } 
-                          : pip.transition === 'wipe' 
-                            ? { clipPath: 'inset(0% 100% 0% 0%)', opacity: pip.opacity } 
-                            : { opacity: pip.opacity }
-                      }
+                      initial={{ opacity: 0 }}
                       animate={{ 
                         opacity: pip.opacity,
                         clipPath: 'inset(0% 0% 0% 0%)'
                       }}
-                      exit={
-                        pip.transition === 'fade' 
-                          ? { opacity: 0 } 
-                          : pip.transition === 'wipe' 
-                            ? { clipPath: 'inset(0% 0% 0% 100%)', opacity: 0 } 
-                            : { opacity: 0 }
-                      }
-                      transition={{ duration: pip.transitionDuration ?? 0.4, ease: 'easeInOut' }}
+                      exit={{ opacity: 0 }}
+                      transition={{ 
+                        duration: Math.max(0, Math.min(1.5, pip.transitionDuration || 0.4)), 
+                        ease: 'easeInOut' 
+                      }}
                       style={{ 
                         zIndex: 100,
                         left: `${(pip.x / (mappedOutput?.id ? (allScreenSettings[mappedOutput.id]?.width || 1920) : 1920)) * 100}%`,
@@ -3387,7 +3520,7 @@ const Inspector = React.memo(({
           <CollapsibleSection 
             title="TRANSICIONES" 
             defaultOpen={true} 
-            onReset={() => onUpdateLayer(layer.id, { transition: 'cut', transitionDuration: 1 })}
+            onReset={() => onUpdateLayer(layer.id, { transition: 'fade', transitionDuration: 0.4 })}
           >
             <div className="space-y-3">
               <div className="flex flex-col gap-1">
@@ -3409,9 +3542,6 @@ const Inspector = React.memo(({
               
               <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
                 {(layer.transition === 'fade' || !layer.transition) && "Fundido cruzado de opacidad."}
-                {layer.transition === 'wipe' && "Cortinilla lateral."}
-                {layer.transition === 'slide' && "Desplazamiento lateral."}
-                {layer.transition === 'cut' && "Corte instantáneo."}
               </div>
             </div>
           </CollapsibleSection>
@@ -3547,43 +3677,28 @@ const Inspector = React.memo(({
           <CollapsibleSection 
             title="TRANSICIONES" 
             defaultOpen={true} 
-            onReset={() => onUpdate(playlist.id, { transition: 'cut', transitionDuration: 1 })}
+            onReset={() => onUpdate(playlist.id, { transition: 'fade', transitionDuration: 0.4 })}
           >
             <div className="space-y-3">
               <div className="flex flex-col gap-1">
-                <label className="text-[8px] text-obs-muted uppercase font-bold">Tipo de Transición</label>
-                <div className="grid grid-cols-4 gap-1">
-                  {(['fade', 'wipe', 'slide', 'cut'] as const).map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => onUpdate(playlist.id, { transition: type })}
-                      className={`py-1 rounded text-[9px] uppercase font-black tracking-tight border transition-all ${
-                        (playlist.transition === type || (!playlist.transition && type === 'fade'))
-                          ? 'bg-obs-accent border-obs-accent text-white shadow-lg shadow-obs-accent/20' 
-                          : 'bg-obs-surface border-obs-border text-obs-muted hover:border-obs-muted/50'
-                      }`}
-                    >
-                      {type === 'fade' ? 'FND' : type === 'wipe' ? 'CRT' : type === 'slide' ? 'SLD' : 'CUT / NONE'}
-                    </button>
-                  ))}
+                <label className="text-[8px] text-obs-muted uppercase font-black">Transición Fundido</label>
+                <div className="bg-obs-accent/20 border border-obs-accent/40 rounded py-1 px-3 text-[10px] text-obs-accent font-black uppercase text-center shadow-[0_0_10px_rgba(0,163,245,0.2)]">
+                  CROSSFADE
                 </div>
               </div>
 
               <PropertyControl 
                 label="Duración"
-                value={(playlist.transitionDuration !== undefined ? playlist.transitionDuration : 1) * 1000}
-                displayValue={`${Math.round((playlist.transitionDuration !== undefined ? playlist.transitionDuration : 1) * 1000)}ms`}
-                min={500}
-                max={2000}
+                value={(playlist.transitionDuration !== undefined ? playlist.transitionDuration : 0.4) * 1000}
+                displayValue={`${Math.round((playlist.transitionDuration !== undefined ? playlist.transitionDuration : 0.4) * 1000)}ms`}
+                min={0}
+                max={1500}
                 step={10}
                 onChange={(val) => onUpdate(playlist.id, { transitionDuration: val / 1000 })}
               />
               
               <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
                 {(playlist.transition === 'fade' || !playlist.transition) && "Fundido cruzado de opacidad."}
-                {playlist.transition === 'wipe' && "Cortinilla lateral."}
-                {playlist.transition === 'slide' && "Desplazamiento lateral."}
-                {playlist.transition === 'cut' && "Corte instantáneo."}
               </div>
             </div>
           </CollapsibleSection>
@@ -4312,6 +4427,29 @@ const Inspector = React.memo(({
                   </p>
                 </div>
 
+                {selectedItem.type === 'ppt' && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-200 rounded text-[9px] leading-relaxed mt-2.5 space-y-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.3)]">
+                    <div className="font-black flex items-center gap-1.5 uppercase tracking-wider text-[8.5px] text-amber-400">
+                      <AlertTriangle size={12} />
+                      <span>FIDELIDAD DE PRESENTACIÓN</span>
+                    </div>
+                    <p className="text-slate-300">
+                      El formato <strong>PPTX</strong> es propietario y altamente complejo. La lectura web offline extrae elementos básicos de texto y estilo, por lo que el diseño puede variar respecto al PowerPoint original.
+                    </p>
+                    <div className="text-obs-accent font-bold uppercase tracking-wider text-[8px] mt-1.5">
+                      💡 MÉTODOS DE RESOLUCIÓN RECOMENDADOS:
+                    </div>
+                    <ul className="text-slate-300 pl-3 list-disc space-y-1">
+                      <li>
+                        <strong>Fidelidad Absoluta (PDF):</strong> Guarda o exporta tu diapositiva como <strong>PDF</strong> desde PowerPoint (<em>Archivo &gt; Exportar &gt; PDF</em>) e impórtalo. Se renderizará vector por vector con fidelidad matemática perfecta del 100%.
+                      </li>
+                      <li>
+                        <strong>Tratamiento de Fuentes:</strong> Si prefieres usar PPTX directo, asegúrate de utilizar fuentes estándar seguras para la web (como Arial, Trebuchet o Georgia) para que el navegador las dibuje en su sitio exacto.
+                      </li>
+                    </ul>
+                  </div>
+                )}
+
                 <div className="text-[8px] text-obs-muted text-center italic bg-obs-dark-1 p-2 rounded border border-obs-text/5 mt-2">
                   * Los PDFs locales usan el visor integrado. Las presentaciones Online requieren URLs públicas.
                 </div>
@@ -4608,7 +4746,7 @@ const LibraryMediaPreview = ({ file }: { file: any }) => {
   if (file.type?.includes('powerpoint') || file.type === 'ppt' || file.name?.toLowerCase().endsWith('.ppt') || file.name?.toLowerCase().endsWith('.pptx')) {
     return (
       <div className="w-full h-full relative group bg-black overflow-hidden flex items-center justify-center pointer-events-none text-obs-muted">
-        <PPTSlideRenderer clip={file} pageNumber={1} />
+        <PPTSlideRenderer clip={file} pageNumber={1} isThumbnail={true} />
       </div>
     );
   }
@@ -4976,7 +5114,7 @@ const PlaylistsSection = React.memo(({
                       <LibraryMediaPreview file={clip} />
                     ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (
                       <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none">
-                        {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
+                        {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} isThumbnail={true} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
                       </div>
                     ) : (
                       <img src={clip.thumbnail} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
@@ -5590,7 +5728,7 @@ const LayersSection = React.memo(({
                         <LibraryMediaPreview file={slot} />
                       ) : slot.type === 'document' || slot.type === 'ppt' || slot.name.toLowerCase().endsWith('.pdf') ? (
                         <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none opacity-60 group-hover:opacity-100">
-                          {slot.type === 'ppt' ? <PPTSlideRenderer clip={slot} pageNumber={slot.currentPage || 1} /> : <PDFRenderer url={slot.url} pageNumber={slot.currentPage || 1} />}
+                          {slot.type === 'ppt' ? <PPTSlideRenderer clip={slot} pageNumber={slot.currentPage || 1} isThumbnail={true} /> : <PDFRenderer url={slot.url} pageNumber={slot.currentPage || 1} />}
                         </div>
                       ) : (
                         <img src={slot.thumbnail} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" />
@@ -6146,6 +6284,7 @@ const PreviewManagerModal = ({
 
 export default function App() {
   const [clips, setClips] = useState<Clip[]>(MOCK_CLIPS);
+  const [lastSwitchTime, setLastSwitchTime] = useState(0);
   const [playlists, setPlaylists] = useState<Playlist[]>([
     { id: 'playlist-1', name: 'Playlist 1', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, transition: 'fade', transitionDuration: 1, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
     { id: 'playlist-2', name: 'Playlist 2', clips: [], opacity: 1, isVisible: true, transform: { ...DEFAULT_TRANSFORM }, mask: 'none', master: 1, speed: 1, volume: 1, pan: 0, transition: 'fade', transitionDuration: 1, blendMode: 'Alpha', behavior: 'Cortar', curve: 'Lineal', filter: 'none', brightness: 1, contrast: 1, saturation: 1, colorBalance: { r: 1, g: 1, b: 1 } },
@@ -6181,8 +6320,8 @@ export default function App() {
     showBackground: false,
     bgScalingW: 100,
     bgScalingH: 100,
-    transitionType: 'cut',
-    transitionDuration: 1000
+    transitionType: 'fade',
+    transitionDuration: 400
   };
 
   const getExternalScreenSettings = (screenId: string | null): ExternalScreenSettings => {
@@ -7003,6 +7142,11 @@ export default function App() {
   };
 
   const onTriggerLayerClip = (layerId: string, slotIdx: number, mode: 'single' | 'sequence' = 'single') => {
+    // Throttle switching to 300ms to prevent browser-level video deadlocks
+    const now = Date.now();
+    if (now - lastSwitchTime < 300) return;
+    setLastSwitchTime(now);
+
     setActiveColumnTrigger(null);
     setColumnUIStates({});
     setLayers(prev => prev.map(l => {
@@ -7027,6 +7171,10 @@ export default function App() {
   };
 
   const handleColumnTrigger = (colIdx: number) => {
+    const now = Date.now();
+    if (now - lastSwitchTime < 300) return;
+    setLastSwitchTime(now);
+
     setActiveColumnTrigger(colIdx);
     setColumnUIStates({ [colIdx]: 'play' });
     setActiveLayerTriggers({});
@@ -7197,6 +7345,8 @@ export default function App() {
         thumbnail: isVideo ? '' : url,
         url: url,
         type: clipType,
+        file: file,
+        path: file ? (file as any).path : undefined,
         status: 'idle',
         currentPage: 1,
         transform: { ...DEFAULT_TRANSFORM },
@@ -7346,15 +7496,14 @@ export default function App() {
     }
   };
 
-  const handleTake = (type?: 'fade' | 'wipe' | 'slide' | 'cut') => {
-    const tType = type || externalScreenSettings.transitionType;
-    const tDuration = externalScreenSettings.transitionDuration;
+  const handleTake = () => {
+    const tDuration = externalScreenSettings.transitionDuration || 0.4;
     
     // Multi-take logic: Find all previews with assigned outputs
     const livePreviews = previews.filter(p => p.selectedOutputs?.length > 0 && p.clipId);
     
     if (livePreviews.length > 0) {
-      setIsTransmitting(true); // Ensure transmission is active when taking
+      setIsTransmitting(true);
       livePreviews.forEach(p => handleRewind(p.clipId));
       
       const targets: Record<string, string | null> = {};
@@ -7374,24 +7523,16 @@ export default function App() {
           return next;
         });
 
-        // Update active program clip if it was affected
         const activeEffectClipId = targets[activeOutputId];
         if (activeEffectClipId) {
           setProgramClipId(activeEffectClipId);
         }
         
-        // Reset transient transition targets
         setOutputTransitionTargets({});
       };
 
-      if (tType === 'cut') {
-        applyAllToOutputs();
-        setCrossfaderValue(0); 
-        return;
-      }
-
       animate(0, 100, {
-        duration: tDuration / 1000,
+        duration: tDuration,
         ease: "linear",
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
@@ -7400,18 +7541,10 @@ export default function App() {
         }
       });
     } else if (previewClipId && crossfaderValue === 0) {
-      // Fallback for single preview if nothing is set as 'Live'
       handleRewind(previewClipId);
       
-      if (tType === 'cut') {
-        setProgramClipId(previewClipId);
-        setOutputPrograms(prev => ({ ...prev, [activeOutputId]: previewClipId }));
-        setCrossfaderValue(0); 
-        return;
-      }
-
       animate(0, 100, {
-        duration: tDuration / 1000,
+        duration: tDuration,
         ease: "linear",
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
@@ -7516,15 +7649,7 @@ export default function App() {
       const nextIndex = (currentIndex + 1) % playlist.clips.length;
       const nextClip = playlist.clips[nextIndex];
       
-      const tType = externalScreenSettings.transitionType || 'fade';
       const tDuration = externalScreenSettings.transitionDuration || 400;
-
-      if (tType === 'cut') {
-        setProgramClipId(nextClip.id);
-        setProgramPlaylistState({ id: playlist.id, index: nextIndex });
-        setOutputPrograms(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
-        return;
-      }
 
       // Perform smooth A/B transition swap
       setOutputTransitionTargets(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
@@ -8568,42 +8693,45 @@ export default function App() {
                 {/* Work Mode Selectors & Timer */}
                 <div className="flex justify-between items-center mt-2">
                     {(() => {
-                    const isProgramVideo = programClip && (programClip.type === 'video' || programClip.type === 'videoinput');
-                    const activeDocOrPptClip = (!isProgramVideo && (programClip && (programClip.type === 'document' || programClip.type === 'ppt' || programClip.name?.toLowerCase().endsWith('.pdf'))))
-                      ? programClip
-                      : (!isProgramVideo ? clips?.find(c => {
-                          const hasLayer = layers?.some(l => l.activeClipId === c.id);
-                          return hasLayer && (c.type === 'document' || c.type === 'ppt' || c.name?.toLowerCase().endsWith('.pdf'));
-                        }) : null);
+                      const activeProgramId = outputPrograms[activeOutputId];
+                      const activeProgramClip = clips.find(c => c.id === activeProgramId);
+                      
+                      const isProgramVideo = activeProgramClip && (activeProgramClip.type === 'video' || activeProgramClip.type === 'videoinput');
+                      const activeDocOrPptClip = (!isProgramVideo && (activeProgramClip && (activeProgramClip.type === 'document' || activeProgramClip.type === 'ppt' || activeProgramClip.name?.toLowerCase().endsWith('.pdf'))))
+                        ? activeProgramClip
+                        : (!isProgramVideo ? clips?.find(c => {
+                            const hasLayer = layers?.some(l => l.activeClipId === c.id);
+                            return hasLayer && (c.type === 'document' || c.type === 'ppt' || c.name?.toLowerCase().endsWith('.pdf'));
+                          }) : null);
 
-                    return (
-                      <div className="flex flex-col">
-                         <span className="text-[10px] text-obs-muted uppercase font-black tracking-widest leading-none mb-0.5">
-                           {activeDocOrPptClip ? "DIAPOSITIVA" : timerMode}
-                         </span>
-                         <div className="flex items-center gap-2">
-                           <span className="text-2xl font-mono font-normal text-white leading-none tracking-tight">
-                             { activeDocOrPptClip ? (
-                               `${activeDocOrPptClip.currentPage || 1} / ${activeDocOrPptClip.totalPages || 1}`
-                             ) : (programClip?.type === 'videoinput' || programClipId?.startsWith('videoinput')) ? (
-                               "00:00:00"
-                             ) : (
-                               <FluidTimeDisplay eventId="video-progress-program" isRemaining={timerMode === 'remaining'} />
-                             )}
+                      return (
+                        <div className="flex flex-col">
+                           <span className="text-[10px] text-obs-muted uppercase font-black tracking-widest leading-none mb-0.5">
+                             {activeDocOrPptClip ? "DIAPOSITIVA" : timerMode}
                            </span>
-                           {!activeDocOrPptClip && (
-                             <button 
-                               onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
-                               className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5"
-                               title="Cambiar modo de tiempo"
-                             >
-                               <RefreshCw size={12} className="text-obs-muted" />
-                             </button>
-                           )}
-                         </div>
-                      </div>
-                    );
-                  })()}
+                           <div className="flex items-center gap-2">
+                             <span className="text-2xl font-mono font-normal text-white leading-none tracking-tight">
+                               { activeDocOrPptClip ? (
+                                 `${activeDocOrPptClip.currentPage || 1} / ${activeDocOrPptClip.totalPages || 1}`
+                               ) : (activeProgramClip?.type === 'videoinput' || activeProgramId?.startsWith('videoinput')) ? (
+                                 "00:00:00"
+                               ) : (
+                                 <FluidTimeDisplay eventId="video-progress-program" isRemaining={timerMode === 'remaining'} />
+                               )}
+                             </span>
+                             {!activeDocOrPptClip && (
+                               <button 
+                                 onClick={() => setTimerMode(prev => prev === 'elapsed' ? 'remaining' : 'elapsed')}
+                                 className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5"
+                                 title="Cambiar modo de tiempo"
+                               >
+                                 <RefreshCw size={12} className="text-obs-muted" />
+                               </button>
+                             )}
+                           </div>
+                        </div>
+                      );
+                    })()}
 
                   <div className="flex gap-2">
                     <button 
@@ -8927,7 +9055,7 @@ export default function App() {
                           <LibraryMediaPreview file={clip} />
                         ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (
                           <div className="w-full h-full bg-white overflow-hidden flex items-center justify-center pointer-events-none">
-                            {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
+                            {clip.type === 'ppt' ? <PPTSlideRenderer clip={clip} pageNumber={clip.currentPage || 1} isThumbnail={true} /> : <PDFRenderer url={clip.url} pageNumber={clip.currentPage || 1} />}
                           </div>
                         ) : (
                           <img src={clip.thumbnail} className="w-full h-full object-cover" referrerPolicy="no-referrer" />

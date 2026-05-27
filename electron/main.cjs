@@ -1,6 +1,7 @@
 const { app, BrowserWindow, screen, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 
 // Native check if running in development
@@ -161,6 +162,202 @@ if (!gotTheLock) {
 
   ipcMain.handle('get-perf-settings', () => {
     return savedPerfSettings;
+  });
+
+  ipcMain.handle('convert-pptx', async (event, filePath) => {
+    return new Promise((resolve) => {
+      // Create a temporary directory dedicated to this PowerPoint presentation's slide images
+      const presentationId = `LUMIN_PPT_${Date.now()}`;
+      const tempDir = path.join(app.getPath('temp'), presentationId);
+      
+      try {
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+      } catch (err) {
+        console.error("Error creating temporary directory for slide conversion:", err);
+        resolve({ success: false, error: "No se pudo crear el directorio de renderizado temporal." });
+        return;
+      }
+
+      // Compile discrete powershell script to execute
+      const psScript = `
+$ErrorActionPreference = 'Stop'
+$ppt = $null
+$pres = $null
+
+try {
+    # Initialize the PowerPoint COM Object
+    $ppt = New-Object -ComObject PowerPoint.Application
+    
+    # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
+    # WithWindow matches [Microsoft.Office.Core.MsoTriState]::msoFalse (completely hidden, no GUI flashed)
+    $pres = $ppt.Presentations.Open("${filePath.replace(/"/g, '`"')}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoFalse)
+    
+    # Save entire deck as individual PNG slide frames in the target directory
+    # 18 is the PowerPoint constant for ppSaveAsPNG
+    $pres.SaveAs("${tempDir.replace(/"/g, '`"')}", 18)
+    
+    # Collect metadata like Slide Title and full body text for synchronization
+    $slideData = @()
+    $slideCount = $pres.Slides.Count
+    for ($i = 1; $i -le $slideCount; $i++) {
+        $slide = $pres.Slides.Item($i)
+        $title = ""
+        
+        # Pull slide title shape if configured
+        try {
+            if ($slide.Shapes.HasTitle) {
+                $slideTitleText = $slide.Shapes.Title.TextFrame.TextRange.Text.Trim()
+                if ($slideTitleText) {
+                    $title = $slideTitleText
+                }
+            }
+        } catch {}
+
+        # Scan other shapes to construct clean list of key bullet text points
+        $bullets = @()
+        try {
+            foreach ($shape in $slide.Shapes) {
+                if ($shape.HasTextFrame -and $shape.TextFrame.HasText) {
+                    # Skip the slide title shape
+                    if ($slide.Shapes.HasTitle -and $shape.Name -eq $slide.Shapes.Title.Name) {
+                        continue
+                    }
+                    $textVal = $shape.TextFrame.TextRange.Text.Trim()
+                    if ($textVal -and $textVal.Length -gt 1) {
+                        # Add shape's paragraphs to bullet collection
+                        foreach ($p in $shape.TextFrame.TextRange.Paragraphs()) {
+                            $pText = $p.Text.Trim()
+                            if ($pText) {
+                                $bullets += $pText
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {}
+
+        if (-not $title) {
+            $title = "Diapositiva $i"
+        }
+
+        $slideData += @{
+            index = $i
+            title = $title
+            bullets = $bullets
+        }
+    }
+
+    # Orderly close presentation and quit PowerPoint headless engine
+    $pres.Close()
+    $ppt.Quit()
+
+    $res = @{
+        success = $true
+        slides = $slideData
+    }
+    
+    # Output outcome in clean JSON format
+    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+} catch {
+    if ($pres) { try { $pres.Close() } catch {} }
+    if ($ppt) { try { $ppt.Quit() } catch {} }
+    
+    $res = @{
+        success = $false
+        error = $_.Exception.Message
+    }
+    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+}
+`;
+
+      // Write code block out as a temporary file to avoid complex shell quoting and backslash issues in command line strings
+      const psScriptPath = path.join(app.getPath('temp'), `${presentationId}_script.ps1`);
+      
+      try {
+        fs.writeFileSync(psScriptPath, psScript, 'utf8');
+      } catch (writeError) {
+        console.error("Error writing temporary script file:", writeError);
+        resolve({ success: false, error: "Error de escritura temporal en disco." });
+        return;
+      }
+
+      const runCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScriptPath}"`;
+      
+      exec(runCmd, { maxBuffer: 25 * 1024 * 1024 }, (execError, stdout, stderr) => {
+        // Cleaning up temporary script
+        try {
+          if (fs.existsSync(psScriptPath)) {
+            fs.unlinkSync(psScriptPath);
+          }
+        } catch (cleanErr) {}
+
+        if (execError) {
+          console.error("PowerShell core script execution failed:", execError, stderr);
+          resolve({ success: false, error: `Error al abrir PowerPoint: ${execError.message}` });
+          return;
+        }
+
+        try {
+          // Parse stdout resulting JSON structure
+          const psResult = JSON.parse(stdout.trim());
+          if (!psResult.success) {
+            resolve({ success: false, error: psResult.error || "Microsoft PowerPoint lanzó un error durante el procesado." });
+            return;
+          }
+
+          // Scan temp folder for the rendered slides images (independent of language, sorted numerically)
+          const localFiles = fs.readdirSync(tempDir);
+          const graphicFiles = localFiles
+            .filter(filename => {
+              const ext = filename.toLowerCase();
+              return ext.endsWith('.png') || ext.endsWith('.jpg') || ext.endsWith('.jpeg');
+            })
+            .map(filename => {
+              const digits = filename.match(/\d+/);
+              const numericId = digits ? parseInt(digits[0], 10) : 0;
+              return { filename, fullPath: path.join(tempDir, filename), numericId };
+            })
+            .sort((a, b) => a.numericId - b.numericId);
+
+          // Build clean state matching slides with image pointers
+          const formattedSlides = psResult.slides.map((s, idx) => {
+            // Find appropriate frame matching this slide sequence (sorted arrays should match index offsets)
+            const slideImg = graphicFiles[idx] || graphicFiles.find(g => g.numericId === s.index);
+            const absoluteFileUri = slideImg 
+              ? `file:///${slideImg.fullPath.replace(/\\/g, '/')}` 
+              : undefined;
+
+            return {
+              title: s.title,
+              subtitle: s.bullets && s.bullets.length > 0 ? s.bullets[0] : undefined,
+              bullets: s.bullets && s.bullets.length > 1 ? s.bullets.slice(1) : (s.bullets || []),
+              image: absoluteFileUri,
+              bgColor: '#0f172a' // Let PowerPoint image background render itself!
+            };
+          });
+
+          if (formattedSlides.length === 0) {
+            resolve({ success: false, error: "PowerPoint se ha ejecutado pero no ha exportado diapositivas. ¿Está instalado PowerPoint?" });
+            return;
+          }
+
+          resolve({
+            success: true,
+            slides: formattedSlides,
+            totalPages: formattedSlides.length
+          });
+
+        } catch (jsonErr) {
+          console.error("Failed parsing PowerShell result JSON:", jsonErr, stdout);
+          resolve({ 
+            success: false, 
+            error: "No se pudo interpretar la respuesta del automatizador nativo de PowerPoint. Asegúrate de tener instalado Microsoft Office PowerPoint nativo en Windows." 
+          });
+        }
+      });
+    });
   });
 
   ipcMain.on('open-settings', () => {
