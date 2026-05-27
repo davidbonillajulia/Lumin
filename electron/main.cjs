@@ -39,7 +39,7 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('enable-hardware-overlays', 'single-fullscreen,unscaled');
-app.commandLine.appendSwitch('disable-gpu-vsync'); // Desbloquea la latencia de cuadros en tarjetas de alta tasa en Windows
+// Se elimina disable-gpu-vsync para activar V-Sync nativo y eliminar las líneas horizontales (screen tearing) en los monitores/proyectores.
 
 // Configurar la API gráfica (DirectX 11, DirectX 12, OpenGL o Vulkan) de Windows de forma nativa
 if (savedPerfSettings.renderingBackend === 'directx12') {
@@ -190,9 +190,17 @@ try {
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
+    # Make PowerPoint visible so it can paint slides correctly on Windows
+    $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+    
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
-    # WithWindow matches [Microsoft.Office.Core.MsoTriState]::msoFalse (completely hidden, no GUI flashed)
-    $pres = $ppt.Presentations.Open("${filePath.replace(/"/g, '`"')}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoFalse)
+    # WithWindow matches [Microsoft.Office.Core.MsoTriState]::msoTrue (provides graphics context for slide exports)
+    $pres = $ppt.Presentations.Open("${filePath.replace(/"/g, '`"')}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
+    
+    # Minimize the PowerPoint window immediately so it doesn't steal focus or cover LUMIN fullscreen displays
+    try {
+        $ppt.WindowState = 2 # ppWindowMinimized
+    } catch {}
     
     # Save entire deck as individual PNG slide frames in the target directory
     # 18 is the PowerPoint constant for ppSaveAsPNG
@@ -307,24 +315,38 @@ try {
             return;
           }
 
-          // Scan temp folder for the rendered slides images (independent of language, sorted numerically)
-          const localFiles = fs.readdirSync(tempDir);
-          const graphicFiles = localFiles
-            .filter(filename => {
-              const ext = filename.toLowerCase();
+          // Scan temp folder and any subfolders recursively for the rendered slides images (handles different PowerPoint structures, languages or folders)
+          const getAllFilesRecursively = (dirPath) => {
+            let filesList = [];
+            const items = fs.readdirSync(dirPath);
+            for (const item of items) {
+              const fullPath = path.join(dirPath, item);
+              const stats = fs.statSync(fullPath);
+              if (stats.isDirectory()) {
+                filesList = filesList.concat(getAllFilesRecursively(fullPath));
+              } else {
+                filesList.push({ filename: item, fullPath });
+              }
+            }
+            return filesList;
+          };
+
+          const allGraphicFiles = getAllFilesRecursively(tempDir)
+            .filter(fileItem => {
+              const ext = fileItem.filename.toLowerCase();
               return ext.endsWith('.png') || ext.endsWith('.jpg') || ext.endsWith('.jpeg');
             })
-            .map(filename => {
-              const digits = filename.match(/\d+/);
+            .map(fileItem => {
+              const digits = fileItem.filename.match(/\d+/);
               const numericId = digits ? parseInt(digits[0], 10) : 0;
-              return { filename, fullPath: path.join(tempDir, filename), numericId };
+              return { filename: fileItem.filename, fullPath: fileItem.fullPath, numericId };
             })
             .sort((a, b) => a.numericId - b.numericId);
 
           // Build clean state matching slides with image pointers
           const formattedSlides = psResult.slides.map((s, idx) => {
             // Find appropriate frame matching this slide sequence (sorted arrays should match index offsets)
-            const slideImg = graphicFiles[idx] || graphicFiles.find(g => g.numericId === s.index);
+            const slideImg = allGraphicFiles[idx] || allGraphicFiles.find(g => g.numericId === s.index);
             const absoluteFileUri = slideImg 
               ? `file:///${slideImg.fullPath.replace(/\\/g, '/')}` 
               : undefined;
