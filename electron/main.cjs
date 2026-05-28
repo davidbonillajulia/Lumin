@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
@@ -96,6 +96,8 @@ if (!gotTheLock) {
       },
     });
 
+    mainWindow.setMenu(null);
+
     if (isDev) {
       mainWindow.loadURL('http://localhost:3000');
       mainWindow.webContents.openDevTools();
@@ -162,6 +164,275 @@ if (!gotTheLock) {
 
   ipcMain.handle('get-perf-settings', () => {
     return savedPerfSettings;
+  });
+
+  ipcMain.handle('select-open-lumin-file', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Abrir archivo LUMIN',
+      filters: [{ name: 'LUMIN Config', extensions: ['lumin'] }],
+      properties: ['openFile']
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    return { canceled: false, filePath: result.filePaths[0] };
+  });
+
+  ipcMain.handle('select-save-lumin-file', async (event, defaultName) => {
+    const result = await dialog.showSaveDialog({
+      title: 'Guardar archivo LUMIN',
+      defaultPath: defaultName || 'configuracion.lumin',
+      filters: [{ name: 'LUMIN Config', extensions: ['lumin'] }]
+    });
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+    return { canceled: false, filePath: result.filePath };
+  });
+
+  ipcMain.handle('select-ppt-file', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Importar PowerPoint',
+      filters: [{ name: 'PowerPoint Presentations', extensions: ['ppt', 'pptx'] }],
+      properties: ['openFile']
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+    return { canceled: false, filePath: result.filePaths[0] };
+  });
+
+  ipcMain.handle('write-lumin-file', async (event, { filePath, data }) => {
+    try {
+      fs.writeFileSync(filePath, data, 'utf8');
+      return { success: true };
+    } catch (err) {
+      console.error("Error writing lumin file:", err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('read-lumin-file', async (event, filePath) => {
+    try {
+      const data = fs.readFileSync(filePath, 'utf8');
+      return { success: true, data };
+    } catch (err) {
+      console.error("Error reading lumin file:", err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.on('exit-app', () => {
+    app.exit(0);
+  });
+
+  ipcMain.handle('get-windows-volume', async () => {
+    return new Promise((resolve) => {
+      const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        $code = @'
+        using System;
+        using System.Runtime.InteropServices;
+        public class Audio {
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal class MMDeviceEnumerator { }
+            [Guid(\\"A95664D2-9614-4F35-A746-DE8DB63617E6\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceEnumerator {
+                int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+            }
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal interface IMMDevice {
+                int Activate(ref Guid iid, int dwClsContext, IntPtr pActivationParams, out IntPtr ppInterface);
+            }
+            [Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IAudioEndpointVolume {
+                int RegisterControlChangeNotifyCallback(IntPtr pNotify);
+                int UnregisterControlChangeNotifyCallback(IntPtr pNotify);
+                int GetChannelCount(out int pnChannelCount);
+                int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+                int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+                int GetMasterVolumeLevel(out float pfLevelDB);
+                int GetMasterVolumeLevelScalar(out float pfLevel);
+            }
+            public static float GetVolume() {
+                try {
+                    var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+                    IntPtr devPtr = IntPtr.Zero;
+                    enumerator.GetDefaultAudioEndpoint(0, 1, out devPtr);
+                    if (devPtr == IntPtr.Zero) return -1;
+                    var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
+                    IntPtr objPtr = IntPtr.Zero;
+                    var iid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
+                    dev.Activate(ref iid, 23, IntPtr.Zero, out objPtr);
+                    if (objPtr == IntPtr.Zero) return -1;
+                    var volume = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(objPtr);
+                    float val = 0;
+                    volume.GetMasterVolumeLevelScalar(out val);
+                    return val;
+                } catch { return -1; }
+            }
+        }
+'@
+        try {
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+        } catch {}
+        [Audio]::GetVolume()
+      "`;
+      exec(psCommand, (err, stdout) => {
+        if (err || !stdout) {
+          resolve(0.5);
+        } else {
+          const val = parseFloat(stdout.trim());
+          resolve(val >= 0 ? val : 0.5);
+        }
+      });
+    });
+  });
+
+  ipcMain.handle('set-windows-volume', async (event, val) => {
+    return new Promise((resolve) => {
+      const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        $code = @'
+        using System;
+        using System.Runtime.InteropServices;
+        public class Audio {
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal class MMDeviceEnumerator { }
+            [Guid(\\"A95664D2-9614-4F35-A746-DE8DB63617E6\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceEnumerator {
+                int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+            }
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal interface IMMDevice {
+                int Activate(ref Guid iid, int dwClsContext, IntPtr pActivationParams, out IntPtr ppInterface);
+            }
+            [Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IAudioEndpointVolume {
+                int RegisterControlChangeNotifyCallback(IntPtr pNotify);
+                int UnregisterControlChangeNotifyCallback(IntPtr pNotify);
+                int GetChannelCount(out int pnChannelCount);
+                int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+                int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+                int GetMasterVolumeLevel(out float pfLevelDB);
+                int GetMasterVolumeLevelScalar(out float pfLevel);
+            }
+            public static void SetVolume(float val) {
+                try {
+                    var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+                    IntPtr devPtr = IntPtr.Zero;
+                    enumerator.GetDefaultAudioEndpoint(0, 1, out devPtr);
+                    if (devPtr == IntPtr.Zero) return;
+                    var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
+                    IntPtr objPtr = IntPtr.Zero;
+                    var iid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
+                    dev.Activate(ref iid, 23, IntPtr.Zero, out objPtr);
+                    if (objPtr == IntPtr.Zero) return;
+                    var volume = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(objPtr);
+                    Guid guid = Guid.Empty;
+                    volume.SetMasterVolumeLevelScalar(val, ref guid);
+                } catch {}
+            }
+        }
+'@
+        try {
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+        } catch {}
+        [Audio]::SetVolume(${val})
+      "`;
+      exec(psCommand, () => {
+        resolve(true);
+      });
+    });
+  });
+
+  ipcMain.handle('convert-ppt-to-pdf', async (event, filePath) => {
+    return new Promise((resolve) => {
+      const presentationId = `LUMIN_PPT_PDF_${Date.now()}`;
+      const tempPdfDirectory = app.getPath('temp');
+      const pdfPath = path.join(tempPdfDirectory, `${presentationId}.pdf`);
+
+      const psScript = `
+$ErrorActionPreference = 'Stop'
+$ppt = $null
+$pres = $null
+
+try {
+    # Initialize the PowerPoint COM Object
+    $ppt = New-Object -ComObject PowerPoint.Application
+    
+    # Make PowerPoint visible so it can paint slides correctly on Windows
+    $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+    
+    # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
+    $pres = $ppt.Presentations.Open("${filePath.replace(/"/g, '`"')}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
+    
+    # Minimize the PowerPoint window immediately
+    try {
+        $ppt.WindowState = 2 # ppWindowMinimized
+    } catch {}
+    
+    # Save deck as a multi-page PDF document
+    # 32 is the PowerPoint constant for ppSaveAsPDF
+    $pres.SaveAs("${pdfPath.replace(/"/g, '`"')}", 32)
+    
+    # Orderly close presentation and quit PowerPoint
+    $pres.Close()
+    $ppt.Quit()
+
+    $res = @{
+        success = $true
+        pdfPath = "${pdfPath.replace(/\\/g, '/')}"
+    }
+    
+    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+} catch {
+    if ($pres) { try { $pres.Close() } catch {} }
+    if ($ppt) { try { $ppt.Quit() } catch {} }
+    
+    $res = @{
+        success = $false
+        error = $_.Exception.Message
+    }
+    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+}
+`;
+
+      const psScriptPath = path.join(app.getPath('temp'), `${presentationId}_script.ps1`);
+      
+      try {
+        fs.writeFileSync(psScriptPath, psScript, 'utf8');
+      } catch (writeError) {
+        console.error("Error writing temporary script file:", writeError);
+        resolve({ success: false, error: "Error de escritura temporal en disco." });
+        return;
+      }
+
+      const runCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScriptPath}"`;
+      
+      exec(runCmd, { maxBuffer: 10 * 1024 * 1024 }, (execError, stdout, stderr) => {
+        try {
+          if (fs.existsSync(psScriptPath)) {
+            fs.unlinkSync(psScriptPath);
+          }
+        } catch (cleanErr) {}
+
+        if (execError) {
+          console.error("PowerShell PPT-to-PDF conversion failed:", execError, stderr);
+          resolve({ success: false, error: `Error de automatización de PowerPoint: ${execError.message}` });
+          return;
+        }
+
+        try {
+          const psResult = JSON.parse(stdout.trim());
+          resolve(psResult);
+        } catch (jsonErr) {
+          console.error("Failed parsing PowerShell PDF output JSON:", jsonErr, stdout);
+          resolve({ 
+            success: false, 
+            error: "No se pudo interpretar la respuesta del automatizador de PowerPoint. Asegúrate de tener instalado Microsoft PowerPoint en Windows." 
+          });
+        }
+      });
+    });
   });
 
   ipcMain.handle('convert-pptx', async (event, filePath) => {

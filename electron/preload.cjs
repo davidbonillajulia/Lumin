@@ -8,5 +8,14 @@ contextBridge.exposeInMainWorld('electron', {
   getPerfSettings: () => ipcRenderer.invoke('get-perf-settings'),
   openSettings: () => ipcRenderer.send('open-settings'),
   convertPptx: (filePath) => ipcRenderer.invoke('convert-pptx', filePath),
+  convertPptToPdf: (filePath) => ipcRenderer.invoke('convert-ppt-to-pdf', filePath),
+  selectOpenLuminFile: () => ipcRenderer.invoke('select-open-lumin-file'),
+  selectSaveLuminFile: (defaultPath) => ipcRenderer.invoke('select-save-lumin-file', defaultPath),
+  selectPptFile: () => ipcRenderer.invoke('select-ppt-file'),
+  writeLuminFile: (filePath, data) => ipcRenderer.invoke('write-lumin-file', { filePath, data }),
+  readLuminFile: (filePath) => ipcRenderer.invoke('read-lumin-file', filePath),
+  getWindowsVolume: () => ipcRenderer.invoke('get-windows-volume'),
+  setWindowsVolume: (val) => ipcRenderer.invoke('set-windows-volume', val),
+  exitApp: () => ipcRenderer.send('exit-app'),
   isElectron: true
 });

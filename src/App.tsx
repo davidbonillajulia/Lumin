@@ -52,7 +52,17 @@ import {
   RefreshCw,
   Layout,
   PictureInPicture2,
-  MonitorPlay
+  MonitorPlay,
+  Save,
+  FileCode,
+  PlusSquare,
+  LogOut,
+  Loader2,
+  Sliders,
+  Volume1,
+  Headphones,
+  Mic,
+  XCircle
 } from 'lucide-react';
 import { motion, AnimatePresence, animate, Reorder } from 'motion/react';
 
@@ -155,6 +165,13 @@ declare global {
       closeOutput?: (screenId: string) => void;
       openSettings?: () => void;
       convertPptx?: (filePath: string) => Promise<{ success: boolean; slides: any[]; totalPages: number; error?: string }>;
+      convertPptToPdf?: (filePath: string) => Promise<{ success: boolean; pdfPath?: string; error?: string }>;
+      selectOpenLuminFile?: () => Promise<{ canceled: boolean; filePath?: string }>;
+      selectSaveLuminFile?: (defaultPath?: string) => Promise<{ canceled: boolean; filePath?: string }>;
+      selectPptFile?: () => Promise<{ canceled: boolean; filePath?: string }>;
+      writeLuminFile?: (filePath: string, data: string) => Promise<{ success: boolean; error?: string }>;
+      readLuminFile?: (filePath: string) => Promise<{ success: boolean; data?: string; error?: string }>;
+      exitApp?: () => void;
       isElectron: boolean;
     }
   }
@@ -224,6 +241,31 @@ interface ExternalScreenSettings {
   bgScalingH?: number;
   transitionType: 'fade';
   transitionDuration: number;
+  timerEnabled?: boolean;
+  timerMinutes?: number;
+  timerSeconds?: number;
+  timerPosition?: 'top-left' | 'top-center' | 'top-right' | 'center' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+  timerSize?: number;
+  timerFont?: string;
+  timerColor?: string;
+  timerBgColor?: string;
+  timerBgOpacity?: number;
+  timerRunning?: boolean;
+  timerTargetTimestamp?: number | null;
+  timerRemainingSeconds?: number;
+  timerAmberSeconds?: number;
+  timerRedSeconds?: number;
+  timerShowDraggableFloat?: boolean;
+  timerPreview?: boolean;
+  timerX?: number;
+  timerY?: number;
+  timerAmberColor?: string;
+  timerRedColor?: string;
+  timerBlinkSpeedAmber?: number;
+  timerBlinkSpeedRed?: number;
+  timerBlinkAmberEnabled?: boolean;
+  timerBlinkRedEnabled?: boolean;
+  timerIsLaunched?: boolean;
 }
 
 // --- Mock Data ---
@@ -685,8 +727,8 @@ const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isAct
             sum += dataArrayRef.current[i];
           }
           const average = sum / dataArrayRef.current.length;
-          // Level should reflect volume, with enough sensitivity for digital signals
-          setLevel(Math.min(1, (average / 60) * video.volume));
+          // Level should reflect raw signal level normalized
+          setLevel(Math.min(1, average / 75));
           
           animationFrameRef.current = requestAnimationFrame(updateLevel);
         };
@@ -705,7 +747,7 @@ const useAudioLevel = (videoRef: React.RefObject<HTMLVideoElement | null>, isAct
       video.removeEventListener('play', handlePlay);
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [videoRef.current, isActive]);
+  }, [videoRef.current, isActive, connectToDestination]);
 
   return level;
 };
@@ -857,13 +899,11 @@ const Monitor = React.memo(({
   const [isBusAReady, setIsBusAReady] = useState(true);
   const [activeBusBClip, setActiveBusBClip] = useState<Clip | null>(null);
 
-  const audioLevel = useAudioLevel(videoRef, !!activeClip && activeClip.type === 'video' && !isProgram, volume, false);
+  const audioLevel = useAudioLevel(videoRef, !!activeClip && activeClip.type === 'video', volume, isProgram);
 
   useEffect(() => {
-    if (!isProgram) {
-      onLevelChange?.(audioLevel);
-    }
-  }, [audioLevel, onLevelChange, isProgram]);
+    onLevelChange?.(audioLevel);
+  }, [audioLevel, onLevelChange]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1271,6 +1311,11 @@ const Monitor = React.memo(({
               {isActive ? 'LIVE' : 'STANDBY'}
             </div>
           </div>
+        )}
+
+        {/* Real-time Countdown timer preview overlay */}
+        {isProgram && settings && (settings.timerEnabled || settings.timerPreview) && (
+          <OutputCountdown settings={settings} />
         )}
       </div>
     </div>
@@ -2387,6 +2432,416 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   );
 };
 
+const AudioBumeter = ({ volume, isActive, getSignalLevel }: { volume: number; isActive: boolean; getSignalLevel?: () => number }) => {
+  const [level, setLevel] = useState(0);
+  const [peak, setPeak] = useState(0);
+
+  useEffect(() => {
+    let frameId: number;
+    let lastTime = Date.now();
+
+    const animate = () => {
+      const now = Date.now();
+      const delta = (now - lastTime) / 1000;
+      lastTime = now;
+
+      let targetLevel = 0;
+      if (getSignalLevel) {
+        targetLevel = getSignalLevel();
+      } else {
+        // Base activity signal - gentle noise + sine wave
+        const phase = now * 0.005;
+        const baseSignal = 0.5 + 0.3 * Math.sin(phase) + 0.15 * Math.sin(phase * 2.3) + 0.05 * Math.random();
+        targetLevel = volume <= 0.001 ? 0 : Math.max(0, Math.min(1, baseSignal * volume));
+      }
+
+      setLevel(prev => {
+        const diff = targetLevel - prev;
+        if (diff > 0) {
+          return prev + diff * 0.35;
+        } else {
+          return prev + diff * 0.12;
+        }
+      });
+
+      setPeak(prevPeak => {
+        if (targetLevel > prevPeak) {
+          return targetLevel;
+        } else {
+          return Math.max(0, prevPeak - delta * 0.2);
+        }
+      });
+
+      frameId = requestAnimationFrame(animate);
+    };
+
+    frameId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frameId);
+  }, [volume, isActive, getSignalLevel]);
+
+  const totalSegments = 32;
+  const activeCount = Math.round(level * totalSegments);
+  const peakIndex = Math.round(peak * totalSegments) - 1;
+
+  return (
+    <div className="flex flex-col gap-0.5 mt-1 select-none w-full">
+      <div className="h-4 bg-[#0a0a0a] rounded-sm p-[1px] flex gap-[1px] items-center overflow-hidden border border-white/5 relative group">
+        {Array.from({ length: totalSegments }).map((_, idx) => {
+          const isLit = idx < activeCount;
+          const isPeakBit = idx === peakIndex;
+          
+          let litColor = 'bg-[#00ff88]';
+          if (idx >= 26) {
+            litColor = 'bg-[#ff3333] shadow-[0_0_8px_rgba(255,51,51,0.4)]';
+          } else if (idx >= 21) {
+            litColor = 'bg-[#ffcc00] shadow-[0_0_8px_rgba(255,204,0,0.4)]';
+          } else {
+            litColor = 'bg-[#00ff88] shadow-[0_0_8px_rgba(0,255,136,0.3)]';
+          }
+
+          return (
+            <div 
+              key={idx}
+              className={`flex-1 h-full rounded-[0.5px] border-x border-black/20 transition-all duration-[40ms] ${
+                isLit 
+                  ? litColor 
+                  : isPeakBit 
+                    ? 'bg-white/90 shadow-[0_0_6px_rgba(255,255,255,0.9)]' 
+                    : 'bg-white/[0.12]'
+              }`}
+            />
+          );
+        })}
+        
+        {/* dB labels inside */}
+        <div className="absolute inset-0 flex justify-between items-center px-1 pointer-events-none opacity-40">
+          <span className="text-[5px] font-black text-white">-60</span>
+          <div className="flex-1" />
+          <span className="text-[5px] font-black text-white">-18</span>
+          <div className="flex-1" />
+          <span className="text-[5px] font-black text-white">-6</span>
+          <div className="flex-1" />
+          <span className="text-[5px] font-black text-white font-mono">0</span>
+        </div>
+      </div>
+      <div className="flex justify-between items-center px-0.5 opacity-60">
+         <div className="flex gap-2">
+           <span className="text-[5px] font-bold text-obs-muted uppercase tracking-tighter">-∞ dB</span>
+         </div>
+         <span className="text-[5px] font-black text-obs-muted uppercase tracking-widest">Digital Scale (AES/EBU)</span>
+      </div>
+    </div>
+  );
+};
+
+const OutputCountdown = ({ settings }: { settings: ExternalScreenSettings }) => {
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  useEffect(() => {
+    const updateTime = () => {
+      if (settings.timerRunning && settings.timerTargetTimestamp) {
+        const diffMs = settings.timerTargetTimestamp - Date.now();
+        const secs = Math.max(0, Math.ceil(diffMs / 1000));
+        setSecondsLeft(secs);
+      } else {
+        setSecondsLeft(settings.timerRemainingSeconds ?? 0);
+      }
+    };
+
+    updateTime();
+    let interval: any;
+    if (settings.timerRunning) {
+      interval = setInterval(updateTime, 100);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [settings.timerRunning, settings.timerTargetTimestamp, settings.timerRemainingSeconds]);
+
+  const formatTime = (totalSecs: number) => {
+    const m = Math.floor(totalSecs / 60);
+    const s = totalSecs % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const positionClasses = (() => {
+    switch (settings.timerPosition) {
+      case 'top-left': return 'top-6 left-6 justify-start items-start';
+      case 'top-center': return 'top-6 left-1/2 -translate-x-1/2 justify-center items-center';
+      case 'top-right': return 'top-6 right-6 justify-end items-end';
+      case 'center': return 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 justify-center items-center';
+      case 'bottom-left': return 'bottom-6 left-6 justify-start items-start';
+      case 'bottom-right': return 'bottom-6 right-6 justify-end items-end';
+      case 'bottom-center':
+      default:
+        return 'bottom-6 left-1/2 -translate-x-1/2 justify-center items-center';
+    }
+  })();
+
+  const fontStyle = (() => {
+    switch (settings.timerFont) {
+      case 'Space Grotesk': return 'font-sans font-black';
+      case 'JetBrains Mono': return 'font-mono font-bold';
+      case 'Playfair Display': return 'font-serif italic';
+      case 'Outfit': return 'font-sans tracking-wide font-normal';
+      case 'Impact': return 'font-sans font-extrabold uppercase tracking-tighter';
+      case 'Inter':
+      default:
+        return 'font-sans font-medium';
+    }
+  })();
+
+  const alphaBg = settings.timerBgColor ? settings.timerBgColor : '#000000';
+  const bgOpacity = (settings.timerBgOpacity ?? 70) / 100;
+  const opacityHex = Math.round(bgOpacity * 255).toString(16).padStart(2, '0');
+
+  const amberThreshold = settings.timerAmberSeconds ?? 30;
+  const redThreshold = settings.timerRedSeconds ?? 10;
+
+  const isEnded = secondsLeft === 0;
+  const isRed = secondsLeft <= redThreshold || isEnded;
+  const isAmber = secondsLeft <= amberThreshold && secondsLeft > redThreshold && !isEnded;
+
+  const textColor = isRed 
+    ? (settings.timerRedColor ?? '#ef4444') 
+    : isAmber 
+      ? (settings.timerAmberColor ?? '#f59e0b') 
+      : (settings.timerColor ?? '#ffffff');
+
+  const currentBlinkSpeed = isRed 
+    ? (settings.timerBlinkRedEnabled !== false ? 0.5 : 0)
+    : isAmber 
+      ? (settings.timerBlinkAmberEnabled !== false ? 0.5 : 0)
+      : 0;
+
+  const animationStyle = currentBlinkSpeed > 0 
+    ? `blink-timer ${currentBlinkSpeed}s infinite` 
+    : 'none';
+
+  const x = settings.timerX !== undefined ? settings.timerX : 50;
+  const y = settings.timerY !== undefined ? settings.timerY : 90;
+
+  return (
+    <div 
+      className="absolute z-[999] p-3 px-6 rounded-lg flex transition-all duration-300 pointer-events-none"
+      style={{
+        left: `${x}%`,
+        top: `${y}%`,
+        transform: 'translate(-50%, -50%)',
+        backgroundColor: bgOpacity === 0 ? 'transparent' : `${alphaBg}${opacityHex}`,
+        borderColor: bgOpacity === 0 ? 'transparent' : 'rgba(255, 255, 255, 0.1)',
+        borderWidth: bgOpacity === 0 ? '0px' : '1px',
+        boxShadow: bgOpacity === 0 ? 'none' : '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+        color: textColor,
+        fontSize: `${settings.timerSize ?? 48}px`,
+        lineHeight: 1,
+        animation: animationStyle,
+      }}
+    >
+      <span className={fontStyle}>
+        {formatTime(secondsLeft)}
+      </span>
+    </div>
+  );
+};
+
+const PresenterTimerDisplay = ({ 
+  settings, 
+  onUpdate 
+}: { 
+  settings: ExternalScreenSettings, 
+  onUpdate: (updates: any) => void 
+}) => {
+  const [remaining, setRemaining] = useState(0);
+
+  useEffect(() => {
+    const updateTime = () => {
+      if (settings.timerRunning && settings.timerTargetTimestamp) {
+        const diffMs = settings.timerTargetTimestamp - Date.now();
+        setRemaining(Math.max(0, Math.ceil(diffMs / 1000)));
+      } else {
+        setRemaining(settings.timerRemainingSeconds ?? 0);
+      }
+    };
+    updateTime();
+    let interval: any;
+    if (settings.timerRunning) {
+      interval = setInterval(updateTime, 100);
+    }
+    return () => clearInterval(interval);
+  }, [settings.timerRunning, settings.timerTargetTimestamp, settings.timerRemainingSeconds]);
+
+  const formatTime = (totalSecs: number) => {
+    const m = Math.floor(totalSecs / 60);
+    const s = totalSecs % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const isAmber = remaining > (settings.timerRedSeconds ?? 10) && remaining <= (settings.timerAmberSeconds ?? 30);
+  const isRed = remaining <= (settings.timerRedSeconds ?? 10);
+  
+  let colorClass = "text-white";
+  let bgClass = "bg-obs-dark-2";
+  let animationStyle = "none";
+
+  if (remaining === 0) {
+    colorClass = "text-red-500 font-black";
+    if (settings.timerBlinkRedEnabled !== false) {
+      animationStyle = `blink-timer ${settings.timerBlinkSpeedRed ?? 0.5}s infinite`;
+    }
+    bgClass = "bg-red-950/20 border border-red-500/20";
+  } else if (isRed) {
+    colorClass = "text-red-500 font-extrabold";
+    if (settings.timerBlinkRedEnabled !== false) {
+      animationStyle = `blink-timer ${settings.timerBlinkSpeedRed ?? 0.5}s infinite`;
+    }
+    bgClass = "bg-red-900/10 border border-red-500/20";
+  } else if (isAmber) {
+    colorClass = "text-amber-500 font-semibold";
+    if (settings.timerBlinkAmberEnabled !== false) {
+      animationStyle = `blink-timer ${settings.timerBlinkSpeedAmber ?? 0.5}s infinite`;
+    }
+    bgClass = "bg-amber-900/10 border border-amber-500/20";
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      {/* Row 1: Clock on left, control panel on right */}
+      <div className="flex gap-4">
+        {/* Big Clock area */}
+        <div className={`flex-1 p-5 rounded-xl flex flex-col items-center justify-center transition-all ${bgClass} min-h-[100px] border-2 border-white/5`}>
+          <span className="text-[7.5px] uppercase font-black text-obs-muted tracking-[0.2em] mb-1">tiempo restante</span>
+          <div 
+            className={`text-5xl font-mono tracking-tighter font-black select-none transition-none ${colorClass}`}
+            style={{ animation: animationStyle }}
+          >
+            {formatTime(remaining)}
+          </div>
+        </div>
+
+        {/* Numeric control panel */}
+        <div className="w-24 space-y-2 border-l border-obs-border pl-4 flex flex-col justify-center">
+          <span className="text-[7.5px] uppercase font-black text-obs-text tracking-[0.1em]">Control de Tiempo</span>
+          <div className="space-y-1.5 pt-1">
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[6px] uppercase font-bold text-obs-muted">Minutos</label>
+              <input 
+                type="number"
+                min="0"
+                max="999"
+                value={settings.timerMinutes ?? 5}
+                onChange={(e) => {
+                  const mins = parseInt(e.target.value) || 0;
+                  const secs = settings.timerSeconds ?? 0;
+                  onUpdate({
+                    timerMinutes: mins,
+                    timerRemainingSeconds: mins * 60 + secs,
+                    timerRunning: false,
+                    timerTargetTimestamp: null
+                  });
+                }}
+                className="bg-obs-bg border border-obs-border rounded p-1 text-[11px] font-black font-mono text-center text-obs-accent focus:border-obs-accent outline-none"
+              />
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[6px] uppercase font-bold text-obs-muted">Segundos</label>
+              <input 
+                type="number"
+                min="0"
+                max="59"
+                value={settings.timerSeconds ?? 0}
+                onChange={(e) => {
+                  const mins = settings.timerMinutes ?? 5;
+                  const secs = parseInt(e.target.value) || 0;
+                  onUpdate({
+                    timerSeconds: secs,
+                    timerRemainingSeconds: mins * 60 + secs,
+                    timerRunning: false,
+                    timerTargetTimestamp: null
+                  });
+                }}
+                className="bg-obs-bg border border-obs-border rounded p-1 text-[11px] font-black font-mono text-center text-obs-accent focus:border-obs-accent outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Row 2: Control buttons in one row */}
+      <div className="grid grid-cols-4 gap-1.5 pt-1 border-t border-obs-border/50 bg-obs-surface/40 p-1.5 rounded-lg">
+        <button 
+          onClick={() => {
+            if (!settings.timerRunning) {
+              onUpdate({
+                timerRunning: true,
+                timerTargetTimestamp: Date.now() + (settings.timerRemainingSeconds ?? 0) * 1000
+              });
+            }
+          }}
+          disabled={settings.timerRunning}
+          className={`py-2 rounded-md font-black uppercase text-[8px] transition-all border-b-2 flex flex-col items-center justify-center gap-0.5 ${
+            settings.timerRunning 
+              ? 'bg-obs-dark-2 border-transparent text-obs-muted cursor-not-allowed' 
+              : 'bg-emerald-600 border-emerald-800 text-white hover:bg-emerald-500 active:scale-95'
+          }`}
+        >
+          <Play size={10} fill="currentColor" />
+          <span>Iniciar</span>
+        </button>
+
+        <button 
+          onClick={() => {
+            if (settings.timerRunning) {
+              onUpdate({
+                timerRunning: false,
+                timerRemainingSeconds: remaining,
+                timerTargetTimestamp: null
+              });
+            }
+          }}
+          disabled={!settings.timerRunning}
+          className={`py-2 rounded-md font-black uppercase text-[8px] transition-all border-b-2 flex flex-col items-center justify-center gap-0.5 ${
+            !settings.timerRunning 
+              ? 'bg-obs-dark-2 border-transparent text-obs-muted cursor-not-allowed' 
+              : 'bg-red-600 border-red-800 text-white hover:bg-red-500 active:scale-95'
+          }`}
+        >
+          <Square size={10} fill="currentColor" />
+          <span>Detener</span>
+        </button>
+
+        <button 
+          onClick={() => {
+            const m = settings.timerMinutes ?? 5;
+            const s = settings.timerSeconds ?? 0;
+            onUpdate({
+              timerRemainingSeconds: m * 60 + s,
+              timerRunning: false,
+              timerTargetTimestamp: null
+            });
+          }}
+          className="py-2 rounded-md font-black uppercase text-[8px] transition-all bg-[#444] border-b-2 border-stone-600 text-white hover:bg-stone-500 active:scale-95 flex flex-col items-center justify-center gap-0.5"
+        >
+          <RotateCcw size={10} />
+          <span>Reiniciar</span>
+        </button>
+
+        <button 
+          onClick={() => onUpdate({ timerIsLaunched: !settings.timerIsLaunched })}
+          className={`py-2 rounded-md font-black uppercase text-[8px] transition-all border-b-2 flex flex-col items-center justify-center gap-0.5 ${
+            settings.timerIsLaunched 
+              ? 'bg-red-600 border-red-800 text-white animate-pulse' 
+              : 'bg-indigo-600 border-indigo-800 text-white hover:bg-indigo-500 active:scale-95'
+          }`}
+        >
+          <MonitorPlay size={10} />
+          <span>{settings.timerIsLaunched ? 'Ocultar' : 'Lanzar'}</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const OutputView = React.memo(() => {
   const [state, setState] = useState<any>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -2833,6 +3288,9 @@ const OutputView = React.memo(() => {
               <div className={`w-full h-full ${settings.showBackground ? 'bg-transparent' : 'bg-black'}`} />
             )}
           </div>
+          {settings.timerEnabled && settings.timerIsLaunched && (
+            <OutputCountdown settings={settings} />
+          )}
         </div>
       </div>
     );
@@ -2870,6 +3328,8 @@ const Inspector = React.memo(({
   allScreenSettings,
   isDarkMode,
   isOutputLaunched,
+  showFloatingTimer,
+  setShowFloatingTimer,
   pipLayers
 }: { 
   selectedItem: Clip | Playlist | any | null, 
@@ -4184,6 +4644,368 @@ const Inspector = React.memo(({
               </p>
             </div>
           </CollapsibleSection>
+
+          <CollapsibleSection title="CONTADOR DE TIEMPO (COUNTDOWN)" defaultOpen={false}>
+            <div className="space-y-3 p-1">
+              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-obs-text uppercase">Activar Contador</span>
+                  <span className="text-[8px] text-obs-muted">Mostrar cuenta atrás en la salida</span>
+                </div>
+                <button 
+                  onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerEnabled: !externalScreenSettings.timerEnabled })}
+                  className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerEnabled ? 'bg-obs-accent' : 'bg-obs-dark-1'}`}
+                >
+                  <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerEnabled ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-obs-text uppercase">Lanzar Reloj a Salida</span>
+                  <span className="text-[8px] text-obs-muted">Enviar el reloj a la pantalla externa lanzada</span>
+                </div>
+                <button 
+                  onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerIsLaunched: !externalScreenSettings.timerIsLaunched })}
+                  className={`w-12 h-6 rounded-lg transition-all flex items-center justify-center font-bold text-[9px] ${externalScreenSettings.timerIsLaunched ? 'bg-red-600 text-white shadow-lg shadow-red-600/30 ring-2 ring-white/20' : 'bg-obs-dark-1 text-obs-muted hover:bg-obs-surface'}`}
+                >
+                  {externalScreenSettings.timerIsLaunched ? 'LIVE' : 'ENVIAR'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-obs-text uppercase">Previsualizar Reloj (Preview)</span>
+                  <span className="text-[8px] text-obs-muted">Previsualizar reloj de prueba en ventana PROGRAM</span>
+                </div>
+                <button 
+                  onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerPreview: !externalScreenSettings.timerPreview })}
+                  className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerPreview ? 'bg-obs-accent' : 'bg-obs-dark-1'}`}
+                >
+                  <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerPreview ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-obs-text uppercase">Mando Flotante</span>
+                  <span className="text-[8px] text-obs-muted">Mando flotante arrastrable del ponente</span>
+                </div>
+                <button 
+                  onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerShowDraggableFloat: !externalScreenSettings.timerShowDraggableFloat })}
+                  className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerShowDraggableFloat ? 'bg-obs-accent' : 'bg-obs-dark-1'}`}
+                >
+                  <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerShowDraggableFloat ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+
+              {(externalScreenSettings.timerEnabled || externalScreenSettings.timerPreview) && (
+                <>
+                  {/* Duración */}
+                  <div className="bg-obs-dark-1 rounded p-2 border border-obs-text/5 space-y-2">
+                    <span className="text-[8px] text-obs-muted uppercase font-bold">Tiempo Configurado</span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[7px] text-obs-muted uppercase">Minutos</label>
+                        <select 
+                          value={externalScreenSettings.timerMinutes ?? 5}
+                          onChange={(e) => {
+                            const mins = parseInt(e.target.value);
+                            const secs = externalScreenSettings.timerSeconds ?? 0;
+                            const total = mins * 60 + secs;
+                            onUpdateExternalScreen({ 
+                              ...externalScreenSettings, 
+                              timerMinutes: mins,
+                              timerRemainingSeconds: total,
+                              timerRunning: false,
+                              timerTargetTimestamp: null
+                            });
+                          }}
+                          className="bg-obs-bg border border-obs-border rounded px-1.5 py-1 text-[10px] text-obs-text focus:border-obs-accent outline-none font-medium"
+                        >
+                          {Array.from({ length: 180 }, (_, i) => (
+                            <option key={i} value={i}>{i} m</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[7px] text-obs-muted uppercase">Segundos</label>
+                        <select 
+                          value={externalScreenSettings.timerSeconds ?? 0}
+                          onChange={(e) => {
+                            const mins = externalScreenSettings.timerMinutes ?? 5;
+                            const secs = parseInt(e.target.value);
+                            const total = mins * 60 + secs;
+                            onUpdateExternalScreen({ 
+                              ...externalScreenSettings, 
+                              timerSeconds: secs,
+                              timerRemainingSeconds: total,
+                              timerRunning: false,
+                              timerTargetTimestamp: null
+                            });
+                          }}
+                          className="bg-obs-bg border border-obs-border rounded px-1.5 py-1 text-[10px] text-obs-text focus:border-obs-accent outline-none font-medium"
+                        >
+                          {Array.from({ length: 60 }, (_, i) => (
+                            <option key={i} value={i}>{i} s</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Mandos de Lanzamiento */}
+                  <div className="grid grid-cols-3 gap-1 pt-1">
+                    {/* Lanzar / Iniciar */}
+                    <button
+                      onClick={() => {
+                        const isRunning = externalScreenSettings.timerRunning;
+                        if (isRunning) {
+                          const elapsedMs = Date.now() - (externalScreenSettings.timerTargetTimestamp ?? Date.now());
+                          const remaining = Math.max(0, Math.ceil(-elapsedMs / 1000));
+                          onUpdateExternalScreen({
+                            ...externalScreenSettings,
+                            timerRunning: false,
+                            timerTargetTimestamp: null,
+                            timerRemainingSeconds: remaining
+                          });
+                        } else {
+                          const remaining = externalScreenSettings.timerRemainingSeconds ?? ((externalScreenSettings.timerMinutes ?? 5) * 60 + (externalScreenSettings.timerSeconds ?? 0));
+                          onUpdateExternalScreen({
+                            ...externalScreenSettings,
+                            timerRunning: true,
+                            timerTargetTimestamp: Date.now() + remaining * 1000
+                          });
+                        }
+                      }}
+                      className={`px-1 py-1.5 rounded text-[8px] font-bold uppercase transition-all flex items-center justify-center gap-1 ${
+                        externalScreenSettings.timerRunning 
+                          ? 'bg-yellow-600 hover:bg-yellow-500 text-white' 
+                          : 'bg-green-600 hover:bg-green-500 text-white'
+                      }`}
+                    >
+                      {externalScreenSettings.timerRunning ? <Pause size={10} /> : <Play size={10} />}
+                      {externalScreenSettings.timerRunning ? 'Pausar' : 'Lanzar'}
+                    </button>
+
+                    {/* Resetear */}
+                    <button
+                      onClick={() => {
+                        const total = (externalScreenSettings.timerMinutes ?? 5) * 60 + (externalScreenSettings.timerSeconds ?? 0);
+                        onUpdateExternalScreen({
+                          ...externalScreenSettings,
+                          timerRunning: false,
+                          timerTargetTimestamp: null,
+                          timerRemainingSeconds: total
+                        });
+                      }}
+                      className="px-1 py-1.5 bg-obs-border hover:bg-obs-surface text-obs-text rounded text-[8px] font-bold uppercase transition-all flex items-center justify-center gap-1"
+                    >
+                      <RotateCcw size={10} />
+                      Reiniciar
+                    </button>
+
+                    {/* Detener */}
+                    <button
+                      onClick={() => {
+                        onUpdateExternalScreen({
+                          ...externalScreenSettings,
+                          timerRunning: false,
+                          timerTargetTimestamp: null,
+                          timerRemainingSeconds: 0
+                        });
+                      }}
+                      className="px-1 py-1.5 bg-red-600/20 hover:bg-red-600 text-red-200 hover:text-white rounded text-[8px] font-bold uppercase transition-all flex items-center justify-center gap-1"
+                    >
+                      <XCircle size={10} />
+                      Detener
+                    </button>
+                  </div>
+
+                  {/* Diseño y Estilos del Contador */}
+                  <div className="bg-obs-dark-1 rounded p-2 border border-obs-text/5 space-y-2">
+                    <span className="text-[8px] text-white uppercase font-bold tracking-wider">Ajustes Visuales</span>
+
+                    {/* Coordenadas de Posición del Reloj */}
+                    <div className="space-y-3 pt-1">
+                      <PropertyControl 
+                        label="Posición X (%)"
+                        value={externalScreenSettings.timerX !== undefined ? externalScreenSettings.timerX : 50}
+                        displayValue={`${externalScreenSettings.timerX !== undefined ? externalScreenSettings.timerX : 50}%`}
+                        min={0}
+                        max={100}
+                        step={1}
+                        onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, timerX: val })}
+                        onInputChange={(val) => {
+                          const num = parseInt(val);
+                          if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, timerX: num });
+                        }}
+                      />
+                      <PropertyControl 
+                        label="Posición Y (%)"
+                        value={externalScreenSettings.timerY !== undefined ? externalScreenSettings.timerY : 90}
+                        displayValue={`${externalScreenSettings.timerY !== undefined ? externalScreenSettings.timerY : 90}%`}
+                        min={0}
+                        max={100}
+                        step={1}
+                        onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, timerY: val })}
+                        onInputChange={(val) => {
+                          const num = parseInt(val);
+                          if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, timerY: num });
+                        }}
+                      />
+                    </div>
+
+                    {/* Tamaño tipografía */}
+                    <PropertyControl 
+                      label="Tamaño del Texto (px)"
+                      value={externalScreenSettings.timerSize ?? 48}
+                      displayValue={`${externalScreenSettings.timerSize ?? 48}px`}
+                      min={16}
+                      max={200}
+                      step={2}
+                      onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, timerSize: val })}
+                      onInputChange={(val) => {
+                        const num = parseInt(val);
+                        if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, timerSize: num });
+                      }}
+                    />
+
+                    {/* Tipografía */}
+                    <div className="space-y-1">
+                      <label className="text-[7px] text-obs-muted uppercase font-bold">Tipografía</label>
+                      <select 
+                        value={externalScreenSettings.timerFont ?? 'Inter'}
+                        onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerFont: e.target.value })}
+                        className="w-full bg-obs-bg border border-obs-border rounded px-1.5 py-1 text-[9px] text-obs-text focus:border-obs-accent outline-none font-medium"
+                      >
+                        <option value="Inter">Inter (Sans-Serif)</option>
+                        <option value="Space Grotesk">Space Grotesk (Tech)</option>
+                        <option value="JetBrains Mono">JetBrains Mono (Digital)</option>
+                        <option value="Playfair Display">Playfair Display (Serif)</option>
+                        <option value="Outfit">Outfit (Round)</option>
+                        <option value="Impact">Impact (Bold Extra)</option>
+                      </select>
+                    </div>
+
+                    {/* Marcadores de Alerta y Parpadeo */}
+                    <div className="space-y-2 pt-1 border-t border-obs-text/5">
+                      <span className="text-[7px] text-obs-muted uppercase font-bold">Alertas de Tiempo</span>
+                      <div className="grid grid-cols-2 gap-3">
+                        {/* Amber threshold config */}
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <label className="text-[7px] text-amber-500 uppercase font-bold">Aviso 30s</label>
+                            <input 
+                              type="color" 
+                              value={externalScreenSettings.timerAmberColor ?? '#f59e0b'}
+                              onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerAmberColor: e.target.value })}
+                              className="w-4 h-4 bg-transparent border-0 cursor-pointer"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between bg-obs-dark-1 p-1.5 rounded border border-obs-dark-2">
+                            <span className="text-[7px] uppercase font-bold text-obs-muted">Parpadeo</span>
+                            <button 
+                              onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerBlinkAmberEnabled: !(externalScreenSettings.timerBlinkAmberEnabled ?? true) })}
+                              className={`w-8 h-4 rounded-full p-0.5 transition-colors relative ${externalScreenSettings.timerBlinkAmberEnabled !== false ? 'bg-obs-accent' : 'bg-stone-700'}`}
+                            >
+                              <div className={`w-3 h-3 bg-white rounded-full transition-transform duration-200 ${externalScreenSettings.timerBlinkAmberEnabled !== false ? 'translate-x-4' : 'translate-x-0'}`} />
+                            </button>
+                          </div>
+                        </div>
+                        {/* Red threshold config */}
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <label className="text-[7px] text-red-500 uppercase font-bold">Aviso 10s</label>
+                            <input 
+                              type="color" 
+                              value={externalScreenSettings.timerRedColor ?? '#ef4444'}
+                              onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerRedColor: e.target.value })}
+                              className="w-4 h-4 bg-transparent border-0 cursor-pointer"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between bg-obs-dark-1 p-1.5 rounded border border-obs-dark-2">
+                            <span className="text-[7px] uppercase font-bold text-obs-muted">Parpadeo</span>
+                            <button 
+                              onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerBlinkRedEnabled: !(externalScreenSettings.timerBlinkRedEnabled ?? true) })}
+                              className={`w-8 h-4 rounded-full p-0.5 transition-colors relative ${externalScreenSettings.timerBlinkRedEnabled !== false ? 'bg-obs-accent' : 'bg-stone-700'}`}
+                            >
+                              <div className={`w-3 h-3 bg-white rounded-full transition-transform duration-200 ${externalScreenSettings.timerBlinkRedEnabled !== false ? 'translate-x-4' : 'translate-x-0'}`} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Color de texto y fondo */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[7px] text-obs-muted uppercase font-bold">Color Texto</label>
+                        <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border">
+                          <input 
+                            type="color" 
+                            value={externalScreenSettings.timerColor ?? '#ff0000'}
+                            onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerColor: e.target.value })}
+                            className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
+                          />
+                          <span className="text-[8px] text-obs-text font-mono truncate">{externalScreenSettings.timerColor ?? '#ff0000'}</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[7px] text-obs-muted uppercase font-bold">Color Fondo</label>
+                        <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border">
+                          <input 
+                            type="color" 
+                            value={externalScreenSettings.timerBgColor ?? '#000000'}
+                            onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerBgColor: e.target.value })}
+                            className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
+                          />
+                          <span className="text-[8px] text-obs-text font-mono truncate">{externalScreenSettings.timerBgColor ?? '#000000'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Alertas de color */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[7px] text-amber-500 uppercase font-bold">Tiempo Ámbar (s)</label>
+                        <input 
+                          type="number" 
+                          value={externalScreenSettings.timerAmberSeconds ?? 30}
+                          onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerAmberSeconds: parseInt(e.target.value) || 30 })}
+                          className="w-full bg-obs-bg border border-obs-border rounded p-1 text-[9px] text-obs-text outline-none focus:border-obs-accent font-mono text-center font-bold"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[7px] text-rose-500 uppercase font-bold">Tiempo Rojo (s)</label>
+                        <input 
+                          type="number" 
+                          value={externalScreenSettings.timerRedSeconds ?? 10}
+                          onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerRedSeconds: parseInt(e.target.value) || 10 })}
+                          className="w-full bg-obs-bg border border-obs-border rounded p-1 text-[9px] text-obs-text outline-none focus:border-obs-accent font-mono text-center font-bold"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Opacidad de Fondo */}
+                    <PropertyControl 
+                      label="Opacidad de Fondo (%)"
+                      value={externalScreenSettings.timerBgOpacity ?? 70}
+                      displayValue={`${externalScreenSettings.timerBgOpacity ?? 70}%`}
+                      min={0}
+                      max={100}
+                      step={5}
+                      onChange={(val) => onUpdateExternalScreen({ ...externalScreenSettings, timerBgOpacity: val })}
+                      onInputChange={(val) => {
+                        const num = parseInt(val);
+                        if (!isNaN(num)) onUpdateExternalScreen({ ...externalScreenSettings, timerBgOpacity: num });
+                      }}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          </CollapsibleSection>
         </div>
       </div>
     );
@@ -4549,49 +5371,6 @@ const Inspector = React.memo(({
             </div>
           </CollapsibleSection>
 
-          {/* CrossFader */}
-          <CollapsibleSection title="CROSSFADER" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { blendMode: 'Alpha', curve: 'Lineal' })}>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-[9px] text-obs-muted uppercase font-bold">Blend Mode</label>
-                <select 
-                  value={selectedItem.blendMode}
-                  onChange={(e) => onUpdate(selectedItem.id, { blendMode: e.target.value })}
-                  className="bg-obs-bg border border-obs-border rounded px-2 py-0.5 text-[10px] text-obs-text focus:border-obs-accent outline-none"
-                >
-                  <option value="Alpha">Alpha</option>
-                  <option value="Add">Add</option>
-                  <option value="Subtract">Subtract</option>
-                  <option value="Multiply">Multiply</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-between">
-                <label className="text-[9px] text-obs-muted uppercase font-bold">Comportamiento</label>
-                <select 
-                  value={selectedItem.behavior}
-                  onChange={(e) => onUpdate(selectedItem.id, { behavior: e.target.value })}
-                  className="bg-obs-bg border border-obs-border rounded px-2 py-0.5 text-[10px] text-obs-text focus:border-obs-accent outline-none"
-                >
-                  <option value="Cortar">Cortar</option>
-                  <option value="Mezclar">Mezclar</option>
-                  <option value="Deslizar">Deslizar</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-between">
-                <label className="text-[9px] text-obs-muted uppercase font-bold">Curva</label>
-                <select 
-                  value={selectedItem.curve}
-                  onChange={(e) => onUpdate(selectedItem.id, { curve: e.target.value })}
-                  className="bg-obs-bg border border-obs-border rounded px-2 py-0.5 text-[10px] text-obs-text focus:border-obs-accent outline-none"
-                >
-                  <option value="Lineal">Lineal</option>
-                  <option value="Seno">Seno</option>
-                  <option value="Exponencial">Exponencial</option>
-                </select>
-              </div>
-            </div>
-          </CollapsibleSection>
-
           {/* Transformar */}
           <CollapsibleSection title="TRANSFORMAR" defaultOpen={false} onReset={() => onUpdate(selectedItem.id, { transform: { ...selectedItem.transform, x: 0, y: 0 } })}>
             <div className="space-y-2">
@@ -4762,17 +5541,17 @@ const Library = React.memo(({
   setSelectedLibraryUrls 
 }: LibraryProps) => {
   const [folders, setFolders] = useState<{ id: string, name: string, active: boolean }[]>([
-    { id: 'video', name: 'VIDEOS', active: true },
+    { id: 'todos', name: 'TODOS', active: true },
+    { id: 'video', name: 'VIDEOS', active: false },
     { id: 'image', name: 'IMAGES', active: false },
     { id: 'pdf', name: 'PDF', active: false },
-    { id: 'ppt', name: 'PPT', active: false },
     { id: 'videoin', name: 'VIDEO IN', active: false }
   ]);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const libraryInputRef = useRef<HTMLInputElement>(null);
 
-  const activeFolder = folders.find(f => f.active)?.id || 'video';
+  const activeFolder = folders.find(f => f.active)?.id || 'todos';
 
   useEffect(() => {
     if (activeFolder === 'videoin') {
@@ -4848,10 +5627,10 @@ const Library = React.memo(({
 
   const filteredFiles = libraryFiles.filter(f => {
     const matchesSearch = f.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesFolder = (activeFolder === 'video' && f.type.startsWith('video') && f.type !== 'videoinput') ||
+    const matchesFolder = (activeFolder === 'todos') ||
+                         (activeFolder === 'video' && f.type.startsWith('video') && f.type !== 'videoinput') ||
                          (activeFolder === 'image' && f.type.startsWith('image')) ||
                          (activeFolder === 'pdf' && f.type.includes('pdf')) ||
-                         (activeFolder === 'ppt' && f.type.includes('powerpoint')) ||
                          (activeFolder === 'videoin' && f.type === 'videoinput');
     return matchesSearch && matchesFolder;
   });
@@ -6301,6 +7080,56 @@ export default function App() {
   const [programProgress, setProgramProgress] = useState({ current: 0, total: 0 });
   const [previewProgress, setPreviewProgress] = useState({ current: 0, total: 0 });
   const [timerMode, setTimerMode] = useState<'elapsed' | 'remaining'>('remaining');
+  const [audioInputDevices, setAudioInputDevices] = useState<any[]>([]);
+  const [audioOutputDevices, setAudioOutputDevices] = useState<any[]>([]);
+  const [selectedAudioInput, setSelectedAudioInput] = useState<string>('default');
+  const [selectedAudioOutput, setSelectedAudioOutput] = useState<string>('default');
+  const [activeFaderIds, setActiveFaderIds] = useState<string[]>(['Master', 'Programa']);
+  const [isAudioConfigModalOpen, setIsAudioConfigModalOpen] = useState(false);
+  const [audioVolumes, setAudioVolumes] = useState<Record<string, number>>({
+    'Master': 0.5,
+    'Programa': 0.5,
+    'USB': 0.5,
+    'IN': 0.5
+  });
+
+  const getFaderSignalLevel = (sourceName: string): number => {
+    // Volume setting
+    const vol = sourceName === 'Master' ? masterVolume
+               : sourceName === 'Programa' ? programVolume
+               : sourceName === 'USB' ? usbOutVolume
+               : sourceName === 'IN' ? usbInVolume
+               : (audioVolumes[sourceName] ?? 0.5);
+
+    if (vol <= 0.001) return 0;
+
+    // Check if there is active playing video program audio
+    const hasProgramVideoAudio = !!programClipId;
+
+    if (sourceName === 'Programa') {
+      return Math.max(0, Math.min(1, programLevel * vol));
+    }
+
+    if (sourceName === 'IN' || sourceName.startsWith('in-')) {
+      const level = micVolumeRef.current;
+      return Math.max(0, Math.min(1, level * vol));
+    }
+
+    if (sourceName.startsWith('out-') || sourceName === 'USB') {
+      return Math.max(0, Math.min(1, programLevel * vol));
+    }
+
+    if (sourceName === 'Master') {
+      // Sum mix of all active sub-faders
+      const activeSignals = activeFaderIds
+        .filter(id => id !== 'Master')
+        .map(id => getFaderSignalLevel(id));
+      const maxSig = activeSignals.length > 0 ? Math.max(...activeSignals) : 0;
+      return Math.max(0, Math.min(1, maxSig * vol));
+    }
+
+    return 0;
+  };
 
   const DEFAULT_SCREEN_SETTINGS: ExternalScreenSettings = {
     resolution: '1920x1080',
@@ -6321,7 +7150,32 @@ export default function App() {
     bgScalingW: 100,
     bgScalingH: 100,
     transitionType: 'fade',
-    transitionDuration: 400
+    transitionDuration: 400,
+    timerEnabled: false,
+    timerMinutes: 5,
+    timerSeconds: 0,
+    timerSize: 48,
+    timerFont: 'Inter',
+    timerColor: '#ffffff',
+    timerBgColor: '#000000',
+    timerBgOpacity: 70,
+    timerRunning: false,
+    timerTargetTimestamp: null,
+    timerRemainingSeconds: 300,
+    timerAmberSeconds: 30,
+    timerRedSeconds: 10,
+    timerShowDraggableFloat: false,
+    timerPreview: false,
+    timerX: 50,
+    timerY: 50,
+    timerAmberColor: '#d8e91f',
+    timerRedColor: '#ff0000',
+    timerBlinkSpeedAmber: 0.5,
+    timerBlinkSpeedRed: 0.5,
+    timerBlinkAmberEnabled: true,
+    timerBlinkRedEnabled: true,
+    timerPosition: 'center',
+    timerIsLaunched: false
   };
 
   const getExternalScreenSettings = (screenId: string | null): ExternalScreenSettings => {
@@ -6360,8 +7214,212 @@ export default function App() {
   const [showLayers, setShowLayers] = useState(true);
   const [showPlaylists, setShowPlaylists] = useState(true);
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
+  const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
+  const [currentLuminPath, setCurrentLuminPath] = useState<string | null>(null);
+  const [isLuminSaveModalOpen, setIsLuminSaveModalOpen] = useState(false);
+  const [luminSaveMode, setLuminSaveMode] = useState<'save' | 'saveAs'>('save');
+  const [saveFileName, setSaveFileName] = useState('');
+  const [isExitModalOpen, setIsExitModalOpen] = useState(false);
+  const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false);
+  const [isPptImporting, setIsPptImporting] = useState(false);
+  const [pptImportProgress, setPptImportProgress] = useState(0);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showContentPanel, setShowContentPanel] = useState(true);
+
+  const getLuminStateData = () => {
+    return JSON.stringify({
+      libraryFiles: libraryFiles.map(f => ({ 
+        name: f.name, 
+        type: f.type, 
+        url: f.url, 
+        file: f.file ? { path: (f.file as any).path, name: f.file.name } : null 
+      })),
+      clips,
+      deckClips,
+      layers,
+      perfSettings
+    }, null, 2);
+  };
+
+  const handleSaveLumin = async () => {
+    if (!window.electron || !window.electron.selectSaveLuminFile || !window.electron.writeLuminFile) {
+      alert("El guardado de proyectos nativos solo está disponible en Windows.");
+      return;
+    }
+    
+    // Si ya existe un archivo activo, guardamos encima
+    if (currentLuminPath) {
+      const dataStr = getLuminStateData();
+      const res = await window.electron.writeLuminFile(currentLuminPath, dataStr);
+      if (res.success) {
+        alert(`Proyecto guardado en: ${currentLuminPath}`);
+      } else {
+        alert("Error al guardar: " + res.error);
+      }
+    } else {
+      // Si no hay archivo activo, actúa como "Guardar Como"
+      handleSaveAsLumin();
+    }
+  };
+
+  const handleSaveAsLumin = async () => {
+    if (!window.electron || !window.electron.selectSaveLuminFile || !window.electron.writeLuminFile) {
+      alert("El guardado de proyectos nativos solo está disponible en Windows.");
+      return;
+    }
+    
+    const defaultName = currentLuminPath 
+      ? currentLuminPath.substring(currentLuminPath.lastIndexOf('\\') + 1)
+      : 'proyecto_lumin.lumin';
+      
+    const dialogResult = await window.electron.selectSaveLuminFile(defaultName);
+    if (dialogResult.canceled || !dialogResult.filePath) {
+      return;
+    }
+    
+    const filePath = dialogResult.filePath;
+    const dataStr = getLuminStateData();
+    
+    const res = await window.electron.writeLuminFile(filePath, dataStr);
+    if (res.success) {
+      setCurrentLuminPath(filePath);
+      alert(`Proyecto guardado como: ${filePath}`);
+    } else {
+      alert("Error al guardar como: " + res.error);
+    }
+  };
+
+  const handleOpenLumin = async () => {
+    if (!window.electron || !window.electron.selectOpenLuminFile || !window.electron.readLuminFile) {
+      alert("La apertura de proyectos nativos solo está disponible en Windows.");
+      return;
+    }
+    
+    const dialogResult = await window.electron.selectOpenLuminFile();
+    if (dialogResult.canceled || !dialogResult.filePath) {
+      return;
+    }
+    
+    const filePath = dialogResult.filePath;
+    const res = await window.electron.readLuminFile(filePath);
+    if (!res.success || !res.data) {
+      alert("Error al abrir archivo: " + res.error);
+      return;
+    }
+    
+    try {
+      const parsedData = JSON.parse(res.data);
+      
+      // Validar estructura básica
+      if (!parsedData.libraryFiles || !parsedData.clips || !parsedData.layers) {
+        throw new Error("El archivo no tiene el formato de configuración de LUMIN válido.");
+      }
+      
+      // Re-estructurar files para la sesión local
+      const reconstructedFiles = parsedData.libraryFiles.map((f: any) => ({
+        name: f.name,
+        type: f.type,
+        url: f.url,
+        file: f.file ? { path: f.file.path, name: f.file.name } : null
+      }));
+      
+      setLibraryFiles(reconstructedFiles);
+      setClips(parsedData.clips);
+      setLayers(parsedData.layers);
+      
+      if (parsedData.deckClips) {
+        setDeckClips(parsedData.deckClips);
+      }
+      if (parsedData.perfSettings) {
+        setPerfSettings(parsedData.perfSettings);
+      }
+      
+      setCurrentLuminPath(filePath);
+      alert(`Proyecto cargado con éxito: ${filePath}`);
+    } catch (err: any) {
+      alert("Error al procesar el archivo LUMIN: " + err.message);
+    }
+  };
+
+  const handleImportPptClick = async () => {
+    if (!window.electron || !window.electron.selectPptFile) {
+      alert("La importación de PPT nativa solo está disponible en la versión de escritorio para Windows.");
+      return;
+    }
+    
+    // 1. Abre el explorador de archivos nativo de Windows
+    const fileResult = await window.electron.selectPptFile();
+    if (fileResult.canceled || !fileResult.filePath) {
+      return;
+    }
+    
+    const filePath = fileResult.filePath;
+    const baseName = filePath.substring(filePath.lastIndexOf('\\') + 1);
+    
+    // 2. Muestra popup de progreso
+    setIsPptImporting(true);
+    setPptImportProgress(5);
+    
+    // Simular progreso de 5% a 90%
+    const progressInterval = setInterval(() => {
+      setPptImportProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(progressInterval);
+          return 90;
+        }
+        return prev + Math.floor(Math.random() * 8) + 2;
+      });
+    }, 450);
+    
+    try {
+      if (!window.electron.convertPptToPdf) {
+        throw new Error("El método convertPptToPdf no está disponible en la interfaz de Electron.");
+      }
+      
+      // 3. Llama al backend de Electron que ejecuta PowerPoint COM
+      const conversionResult = await window.electron.convertPptToPdf(filePath);
+      clearInterval(progressInterval);
+      
+      if (!conversionResult.success || !conversionResult.pdfPath) {
+        throw new Error(conversionResult.error || "La conversión nativa de PowerPoint falló.");
+      }
+      
+      setPptImportProgress(100);
+      
+      // 4. Importa pdf generado
+      const pdfPath = conversionResult.pdfPath;
+      const pdfName = baseName.replace(/\.[^/.]+$/, "") + ".pdf";
+      const fileUrl = `file:///${pdfPath.replace(/\\/g, '/')}`;
+      
+      const newFileItem = {
+        name: pdfName,
+        type: 'application/pdf',
+        url: fileUrl,
+        file: { path: pdfPath, name: pdfName } as any
+      };
+      
+      // Añadir a la biblioteca de Gestión de Contenido
+      setLibraryFiles(prev => {
+        if (prev.some(f => f.url === fileUrl)) return prev;
+        return [...prev, newFileItem];
+      });
+      
+      // Crear clip nativo del tipo document (PDF)
+      await handleAddClips([newFileItem]);
+      
+      // Cerramos tras un breve instante para satisfacción visual
+      setTimeout(() => {
+        setIsPptImporting(false);
+        setPptImportProgress(0);
+      }, 800);
+      
+    } catch (err: any) {
+      clearInterval(progressInterval);
+      setIsPptImporting(false);
+      setPptImportProgress(0);
+      alert("Error al importar PowerPoint: " + err.message);
+    }
+  };
 
   useEffect(() => {
     if (isDarkMode) {
@@ -6424,7 +7482,182 @@ export default function App() {
     return () => document.removeEventListener('nav-to-pip-manager', handleNav);
   }, []);
 
-  const [activeSidebarTab, setActiveSidebarTab] = useState<'audio' | 'info' | 'perf' | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const micVolumeRef = useRef<number>(0);
+
+  // Hook up real dynamic capture for the selected audio input
+  useEffect(() => {
+    let isActive = true;
+    let micStream: MediaStream | null = null;
+    let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let animationFrameId: number;
+
+    const startMic = async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          return;
+        }
+
+        // Clean up any existing stream first
+        if (audioStreamRef.current) {
+          try {
+            audioStreamRef.current.getTracks().forEach(t => t.stop());
+          } catch {}
+        }
+
+        // Exclude custom prefix if any
+        const rawId = selectedAudioInput.startsWith('in-') 
+          ? selectedAudioInput.substring(3) 
+          : selectedAudioInput;
+
+        const constraints = rawId === 'default' || !rawId 
+          ? { audio: true } 
+          : { audio: { deviceId: { exact: rawId } } };
+
+        micStream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (!isActive) {
+          micStream.getTracks().forEach(t => t.stop());
+          return;
+        }
+
+        audioStreamRef.current = micStream;
+
+        // @ts-ignore
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass();
+        audioContextRef.current = audioCtx;
+
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyserRef.current = analyser;
+
+        const source = audioCtx.createMediaStreamSource(micStream);
+        source.connect(analyser);
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        const updateMicLevel = () => {
+          if (!isActive || !analyser) return;
+          analyser.getByteFrequencyData(dataArray);
+          
+          let sum = 0;
+          Sum_loop: for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / bufferLength;
+          const rawVolume = average / 128;
+          micVolumeRef.current = Math.min(1, rawVolume * 1.5);
+          animationFrameId = requestAnimationFrame(updateMicLevel);
+        };
+
+        updateMicLevel();
+
+      } catch (err) {
+        console.warn("Could not load real microphone capture stream:", err);
+      }
+    };
+
+    startMic();
+
+    return () => {
+      isActive = false;
+      cancelAnimationFrame(animationFrameId);
+      if (micStream) {
+        try {
+          micStream.getTracks().forEach(track => track.stop());
+        } catch {}
+      }
+      if (audioCtx && audioCtx.state !== 'closed') {
+        audioCtx.close().catch(() => {});
+      }
+    };
+  }, [selectedAudioInput]);
+
+  const lastVolumeRef = useRef(masterVolume);
+
+  // Bidirectional fader synchronization loop with Windows core audio session
+  useEffect(() => {
+    // @ts-ignore
+    if (typeof window !== 'undefined' && window.electron && window.electron.getWindowsVolume) {
+      let active = true;
+
+      const syncFromWindows = async () => {
+        if (!active) return;
+        try {
+          // @ts-ignore
+          const sysVolume = await window.electron.getWindowsVolume();
+          // Adjust with a small epsilon window to prevent noise loops
+          if (sysVolume >= 0 && Math.abs(sysVolume - lastVolumeRef.current) > 0.05) {
+            lastVolumeRef.current = sysVolume;
+            setMasterVolume(sysVolume);
+          }
+        } catch (e) {}
+      };
+
+      const syncInterval = setInterval(syncFromWindows, 250);
+      return () => {
+        active = false;
+        clearInterval(syncInterval);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    // @ts-ignore
+    if (typeof window !== 'undefined' && window.electron && window.electron.setWindowsVolume) {
+      if (Math.abs(masterVolume - lastVolumeRef.current) > 0.02) {
+        lastVolumeRef.current = masterVolume;
+        // @ts-ignore
+        window.electron.setWindowsVolume(masterVolume).catch(() => {});
+      }
+    }
+  }, [masterVolume]);
+
+  const [floatingTimerPos, setFloatingTimerPos] = useState<Record<string, {x: number, y: number}>>({});
+  const [isDraggingFloatingTimer, setIsDraggingFloatingTimer] = useState<string | null>(null);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    if (!isDraggingFloatingTimer) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newX = e.clientX - dragStartRef.current.x;
+      const newY = e.clientY - dragStartRef.current.y;
+      
+      const boundedX = Math.max(10, Math.min(window.innerWidth - 330, newX));
+      const boundedY = Math.max(10, Math.min(window.innerHeight - 320, newY));
+
+      setFloatingTimerPos(prev => ({
+        ...prev,
+        [isDraggingFloatingTimer]: { x: boundedX, y: boundedY }
+      }));
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingFloatingTimer(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingFloatingTimer]);
+
+  const getTimerRemaining = (settings: ExternalScreenSettings) => {
+    if (settings.timerRunning && settings.timerTargetTimestamp) {
+      const diffMs = settings.timerTargetTimestamp - Date.now();
+      return Math.max(0, Math.ceil(diffMs / 1000));
+    }
+    return settings.timerRemainingSeconds ?? 0;
+  };
+
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'audio' | 'perf' | null>(null);
   const [perfSettings, setPerfSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('lumin_perf_settings');
@@ -6931,6 +8164,52 @@ export default function App() {
     }
   }, []);
 
+  const refreshAudioDevices = async () => {
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach(track => track.stop());
+        } catch (err) {
+          console.log("No mic permission during enumeration:", err);
+        }
+      }
+      
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter(d => d.kind === 'audioinput');
+      const outputs = devices.filter(d => d.kind === 'audiooutput');
+      
+      setAudioInputDevices(inputs.length > 0 ? inputs : [
+        { deviceId: 'default', label: 'Dispositivo del Sistema por Defecto' },
+        { deviceId: 'auxin', label: 'Línea de Entrada (High Definition Audio)' },
+        { deviceId: 'mic', label: 'Micrófono Nativo Realtek (Windows)' }
+      ]);
+      setAudioOutputDevices(outputs.length > 0 ? outputs : [
+        { deviceId: 'default', label: 'Altavoces por Defecto (Windows DirectSound)' },
+        { deviceId: 'speakers', label: 'Altavoces Realtek High Definition Audio' },
+        { deviceId: 'hdmi', label: 'HDMI Audio Out (Intel Display Audio)' },
+        { deviceId: 'virtual', label: 'CABLE Input (VB-Audio Virtual Cable)' }
+      ]);
+    } catch (e) {
+      console.error("Error enumerando dispositivos de audio:", e);
+      setAudioInputDevices([
+        { deviceId: 'default', label: 'Dispositivo del Sistema por Defecto' },
+        { deviceId: 'auxin', label: 'Línea de Entrada (High Definition Audio)' },
+        { deviceId: 'mic', label: 'Micrófono Nativo Realtek (Windows)' }
+      ]);
+      setAudioOutputDevices([
+        { deviceId: 'default', label: 'Altavoces por Defecto (Windows DirectSound)' },
+        { deviceId: 'speakers', label: 'Altavoces Realtek High Definition Audio' },
+        { deviceId: 'hdmi', label: 'HDMI Audio Out (Intel Display Audio)' },
+        { deviceId: 'virtual', label: 'CABLE Input (VB-Audio Virtual Cable)' }
+      ]);
+    }
+  };
+
+  useEffect(() => {
+    refreshAudioDevices();
+  }, []);
+
   const handleUpdateExternalScreen = (updates: any) => {
     if (!selectedScreenId) return;
     setAllScreenSettings(prev => ({
@@ -7070,10 +8349,11 @@ export default function App() {
 
   const addLayer = () => {
     const newId = `layer-${Date.now()}`;
+    const slotsCount = layers.length > 0 ? layers[0].slots.length : 10;
     setLayers(prev => [...prev, {
       id: newId,
       name: `Capa ${prev.length + 1}`,
-      slots: Array(8).fill(null),
+      slots: Array(slotsCount).fill(null),
       activeClipId: null,
       activeSlotIndex: null,
       opacity: 1,
@@ -7264,7 +8544,6 @@ export default function App() {
     'Videos': [],
     'Imágenes': [],
     'PDF': [],
-    'PowerPoint': [],
     'Video IN': []
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -7381,8 +8660,7 @@ export default function App() {
         let deck = 'Videos';
         if (clip.type === 'video') deck = 'Videos';
         else if (clip.type === 'image') deck = 'Imágenes';
-        else if (clip.type === 'document') deck = 'PDF';
-        else if (clip.type === 'ppt') deck = 'PowerPoint';
+        else if (clip.type === 'document' || clip.type === 'ppt') deck = 'PDF';
         else if (clip.type === 'videoinput') deck = 'Video IN';
         
         if (nextDecks[deck]) {
@@ -8000,6 +9278,334 @@ export default function App() {
         onUpdateSlices={setSlices}
       />
 
+      {/* MODAL: REGISTRO DE IMPORTACIÓN PPT A PDF */}
+      <AnimatePresence>
+        {isPptImporting && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[9999] font-sans">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-obs-dark-1 border border-obs-border w-[400px] rounded p-6 shadow-2xl flex flex-col items-center text-center gap-4"
+            >
+              <div className="p-3 bg-obs-accent/10 rounded-full animate-pulse border border-obs-accent/25">
+                <Loader2 size={24} className="text-obs-accent animate-spin" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-xs font-black uppercase text-white tracking-widest">CONVIRTIENDO DIAPOSITIVAS</h3>
+                <p className="text-[10px] text-obs-muted">PowerPoint COM Engine está extrayendo su PPT a formato PDF vectorizado...</p>
+              </div>
+              <div className="w-full bg-obs-surface h-2 rounded-full overflow-hidden border border-obs-border relative mt-2">
+                <motion.div 
+                  className="bg-obs-accent h-full rounded-full transition-all duration-300"
+                  style={{ width: `${pptImportProgress}%` }}
+                />
+              </div>
+              <span className="text-[11px] font-mono font-black text-obs-accent">{pptImportProgress}% completado</span>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: CONFIRMACIÓN DE SALIDA (A LA WINDOWS) */}
+      <AnimatePresence>
+        {isExitModalOpen && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[9999] font-sans">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-obs-dark-1 border border-obs-border w-[420px] rounded shadow-2xl overflow-hidden"
+            >
+              <div className="p-4 bg-obs-surface border-b border-obs-border flex items-center justify-between">
+                <div className="flex items-center gap-2 text-obs-accent">
+                  <AlertTriangle size={14} />
+                  <span className="text-[10px] font-black uppercase tracking-wider text-white">SALIR DE LUMIN</span>
+                </div>
+                <button onClick={() => setIsExitModalOpen(false)} className="text-obs-muted hover:text-white transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="p-6 text-left space-y-2">
+                <p className="text-[10px] text-white leading-relaxed font-sans">
+                  ¿Deseas guardar los cambios actuales en el archivo de proyecto antes de salir del software?
+                </p>
+                {currentLuminPath ? (
+                  <p className="text-[9px] text-obs-muted font-mono break-all bg-obs-bg p-2 rounded border border-obs-border/50">
+                    Archivo activo: {currentLuminPath}
+                  </p>
+                ) : (
+                  <p className="text-[9px] text-obs-muted italic">
+                    El proyecto actual nunca se ha guardado (.lumin)
+                  </p>
+                )}
+              </div>
+              <div className="p-3 bg-obs-surface border-t border-obs-border flex justify-end gap-2">
+                <button 
+                  onClick={async () => {
+                    await handleSaveLumin();
+                    window.electron?.exitApp?.();
+                  }}
+                  className="px-4 py-1.5 bg-obs-accent hover:opacity-90 text-white rounded text-[10px] font-bold uppercase transition-all"
+                >
+                  Guardar y Salir
+                </button>
+                <button 
+                  onClick={() => {
+                    window.electron?.exitApp?.();
+                  }}
+                  className="px-4 py-1.5 bg-red-600/20 hover:bg-red-600 text-red-200 hover:text-white rounded text-[10px] font-bold uppercase transition-all"
+                >
+                  Salir sin Guardar
+                </button>
+                <button 
+                  onClick={() => setIsExitModalOpen(false)}
+                  className="px-4 py-1.5 bg-obs-border hover:bg-obs-border/70 text-obs-text rounded text-[10px] font-bold uppercase transition-all"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: GESTIÓN DE AUDIO (POPUP REQUERIDO) */}
+      <AnimatePresence>
+        {isAudioConfigModalOpen && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[9999] font-sans">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-obs-dark-1 border border-obs-border w-[480px] rounded shadow-2xl overflow-hidden"
+            >
+              <div className="p-4 bg-obs-surface border-b border-obs-border flex items-center justify-between">
+                <div className="flex items-center gap-2 text-obs-accent animate-pulse">
+                  <Sliders size={14} />
+                  <span className="text-[10px] font-black uppercase tracking-wider text-white font-sans">GESTIÓN Y ENRUTAMIENTO DE AUDIO</span>
+                </div>
+                <button onClick={() => setIsAudioConfigModalOpen(false)} className="text-obs-muted hover:text-white transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4 text-left max-h-[70vh] overflow-y-auto">
+                {/* Dispositivos de Salida */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[9px] font-black uppercase text-obs-muted tracking-wider flex items-center gap-1">
+                      <Headphones size={11} className="text-obs-accent" />
+                      Dispositivo de Salida (Windows Playback)
+                    </label>
+                    <button 
+                      onClick={refreshAudioDevices}
+                      className="text-[8px] text-obs-accent hover:text-white font-bold uppercase transition-all flex items-center gap-0.5"
+                      title="Refrescar dispositivos"
+                    >
+                      <RefreshCw size={8} className="animate-spin" /> Escanear
+                    </button>
+                  </div>
+                  <select 
+                    value={selectedAudioOutput}
+                    onChange={(e) => setSelectedAudioOutput(e.target.value)}
+                    className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
+                  >
+                    {audioOutputDevices.map((dev) => (
+                      <option key={dev.deviceId || dev.label} value={dev.deviceId}>
+                        {dev.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Dispositivos de Entrada */}
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black uppercase text-obs-muted tracking-wider flex items-center gap-1">
+                    <Mic size={11} className="text-obs-accent" />
+                    Dispositivo de Entrada (Windows Capture)
+                  </label>
+                  <select 
+                    value={selectedAudioInput}
+                    onChange={(e) => setSelectedAudioInput(e.target.value)}
+                    className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
+                  >
+                    {audioInputDevices.map((dev) => (
+                      <option key={dev.deviceId || dev.label} value={dev.deviceId}>
+                        {dev.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Mostrar Canales o Faders */}
+                <div className="space-y-2 border-t border-obs-border pt-4">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[9px] font-black uppercase text-obs-muted tracking-wide flex items-center gap-1">
+                      <Sliders size={11} className="text-obs-accent" />
+                      Controladores de Faders Activos
+                    </label>
+                    <p className="text-[8px] text-obs-muted italic">Selecciona los faders de mezcla que deseas visualizar en la pestaña lateral "Gestión de Audio".</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 mt-1">
+                    {(() => {
+                      const outputs = [
+                        { id: 'Programa', name: 'Reproductor de Programa', type: 'system' },
+                        { id: 'USB', name: 'Tarjeta USB (Master Out)', type: 'system' },
+                        ...audioOutputDevices.map(dev => ({
+                          id: dev.deviceId.startsWith('out-') ? dev.deviceId : `out-${dev.deviceId}`,
+                          name: `SALIDA: ${dev.label}`,
+                          type: 'output'
+                        }))
+                      ];
+
+                      const inputs = [
+                        { id: 'IN', name: 'Mic In (Entrada Predeterminada)', type: 'system' },
+                        ...audioInputDevices.map(dev => ({
+                          id: dev.deviceId.startsWith('in-') ? dev.deviceId : `in-${dev.deviceId}`,
+                          name: `ENTRADA: ${dev.label}`,
+                          type: 'input'
+                        }))
+                      ];
+
+                      const renderOption = (option: { id: string; name: string }) => {
+                        const isMaster = option.id === 'Master';
+                        const isChecked = isMaster || activeFaderIds.includes(option.id);
+                        return (
+                          <label 
+                            key={option.id} 
+                            className={`flex items-center gap-2 p-2 rounded border transition-all cursor-pointer select-none ${
+                              isChecked 
+                                ? 'bg-obs-accent/10 border-obs-accent/30 text-white' 
+                                : 'bg-obs-surface/40 border-obs-border text-obs-muted hover:bg-obs-surface'
+                            }`}
+                          >
+                            <input 
+                              type="checkbox"
+                              checked={isChecked}
+                              disabled={isMaster}
+                              onChange={() => {
+                                if (isMaster) return;
+                                if (isChecked) {
+                                  setActiveFaderIds(prev => prev.filter(id => id !== option.id));
+                                } else {
+                                  setActiveFaderIds(prev => [...prev, option.id]);
+                                }
+                              }}
+                              className="w-3.5 h-3.5 rounded border-obs-border bg-obs-surface text-obs-accent focus:ring-0 cursor-pointer disabled:opacity-40"
+                            />
+                            <div className="flex flex-col select-none truncate">
+                              <span className="text-[8px] font-bold uppercase font-sans truncate leading-normal text-white">{option.name}</span>
+                              <span className="text-[6.5px] text-obs-muted font-mono tracking-tight leading-none truncate">{option.id}</span>
+                            </div>
+                          </label>
+                        );
+                      };
+
+                      return (
+                        <div className="w-full space-y-4">
+                          {/* MASTER */}
+                          <div className="space-y-1">
+                            <span className="text-[7.5px] font-black uppercase tracking-wider text-obs-accent">Mezcla General (Estático)</span>
+                            <div className="grid grid-cols-1 gap-2">
+                              {renderOption({ id: 'Master', name: 'MASTER MIX (Suma de señales activas)' })}
+                            </div>
+                          </div>
+
+                          {/* SALIDAS */}
+                          <div className="space-y-1.5 border-t border-obs-border/50 pt-2.5">
+                            <span className="text-[7.5px] font-black uppercase tracking-wider text-green-500">DISPOSITIVOS DE SALIDA (AUDIO OUT)</span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {outputs.map(renderOption)}
+                            </div>
+                          </div>
+
+                          {/* ENTRADAS */}
+                          <div className="space-y-1.5 border-t border-obs-border/50 pt-2.5">
+                            <span className="text-[7.5px] font-black uppercase tracking-wider text-orange-500">DISPOSITIVOS DE ENTRADA (AUDIO IN / MIC)</span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {inputs.map(renderOption)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 bg-obs-surface border-t border-obs-border flex justify-between items-center">
+                <span className="text-[8px] text-obs-muted uppercase font-mono font-bold pl-2">Windows Audio Control Active</span>
+                <button 
+                  onClick={() => setIsAudioConfigModalOpen(false)}
+                  className="px-5 py-1.5 bg-obs-accent hover:opacity-90 text-white rounded text-[10px] font-bold uppercase transition-all"
+                >
+                  Aplicar Cambios
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: PREFERENCIAS (POPUP REQUERIDO) */}
+      <AnimatePresence>
+        {isPreferencesModalOpen && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[9999] font-sans">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-obs-dark-1 border border-obs-border w-[460px] rounded shadow-2xl overflow-hidden"
+            >
+              <div className="p-4 bg-obs-surface border-b border-obs-border flex items-center justify-between">
+                <div className="flex items-center gap-2 text-obs-accent">
+                  <Settings size={14} />
+                  <span className="text-[10px] font-black uppercase tracking-wider text-white">PREFERENCIAS DEL SISTEMA</span>
+                </div>
+                <button onClick={() => setIsPreferencesModalOpen(false)} className="text-obs-muted hover:text-white transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4 text-left">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-obs-muted">Idioma del Software</label>
+                  <select className="w-full bg-obs-surface text-white text-[10px] font-bold p-2 border border-obs-border rounded focus:outline-none focus:border-obs-accent">
+                    <option>Español (ES)</option>
+                    <option>English (US)</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-obs-muted font-sans">Motor de Aceleración de Video</label>
+                  <div className="p-3 bg-obs-bg rounded border border-obs-border flex justify-between items-center">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[9px] text-white uppercase font-black font-sans">Aceleración por Hardware DirectX/Vulkan</span>
+                      <p className="text-[8px] text-obs-muted">Fuerza la decodificación por hardware nativa del GPU.</p>
+                    </div>
+                    <span className="text-[8px] text-obs-accent font-black font-mono uppercase bg-obs-accent/10 px-2.5 py-0.5 rounded border border-obs-accent/15">Activo</span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-obs-muted font-sans">Configuración del Guardado Automático</label>
+                  <div className="p-2 bg-obs-surface text-[9px] text-obs-muted leading-relaxed rounded border border-obs-border border-dashed">
+                    LUMIN guarda automáticamente todos los cambios realizados en el archivo del proyecto actual cada vez que agregas clips o re-ordenas las capas.
+                  </div>
+                </div>
+              </div>
+              <div className="p-3 bg-obs-surface border-t border-obs-border flex justify-end">
+                <button 
+                  onClick={() => setIsPreferencesModalOpen(false)}
+                  className="px-5 py-1.5 bg-obs-accent hover:opacity-90 text-white rounded text-[10px] font-bold uppercase transition-all"
+                >
+                  Aceptar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Header / Menu Bar */}
       <header className="h-8 border-b border-obs-border flex items-center justify-between px-3 bg-obs-surface">
         <div className="flex items-center gap-4">
@@ -8015,7 +9621,88 @@ export default function App() {
               <Layout size={12} />
               {showContentPanel ? 'Ocultar Contenido' : 'Mostrar Contenido'}
             </button>
-            <button className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize">Archivo</button>
+            <div className="relative font-sans">
+              <button 
+                onClick={() => setIsFileMenuOpen(!isFileMenuOpen)}
+                className={`text-[10px] px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize flex items-center ${isFileMenuOpen ? 'bg-obs-accent text-white' : 'text-obs-text hover:bg-obs-border'}`}
+              >
+                Archivo
+              </button>
+              <AnimatePresence>
+                {isFileMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsFileMenuOpen(false)} />
+                    <motion.div 
+                      initial={{ opacity: 0, y: -5, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -5, scale: 0.95 }}
+                      className="absolute left-0 top-full mt-1 w-48 bg-obs-dark-1 border border-obs-border rounded shadow-2xl z-50 overflow-hidden"
+                    >
+                      <button 
+                        onClick={() => { 
+                          handleOpenLumin();
+                          setIsFileMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
+                      >
+                        <span>Abrir</span>
+                        <FolderOpen size={12} />
+                      </button>
+                      <button 
+                        onClick={() => { 
+                          handleSaveLumin();
+                          setIsFileMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
+                      >
+                        <span>Guardar</span>
+                        <Save size={12} />
+                      </button>
+                      <button 
+                        onClick={() => { 
+                          handleSaveAsLumin();
+                          setIsFileMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
+                      >
+                        <span>Guardar Como</span>
+                        <FileCode size={12} />
+                      </button>
+                      <button 
+                        onClick={() => { 
+                          handleImportPptClick();
+                          setIsFileMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
+                      >
+                        <span>Importar PPT</span>
+                        <PlusSquare size={12} />
+                      </button>
+                      <button 
+                        onClick={() => { 
+                          setIsPreferencesModalOpen(true);
+                          setIsFileMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
+                      >
+                        <span>Preferencias</span>
+                        <Settings size={12} />
+                      </button>
+                      <button 
+                        onClick={() => { 
+                          setIsFileMenuOpen(false);
+                          setIsExitModalOpen(true);
+                        }} 
+                        className="w-full text-left px-4 py-2 text-[10px] font-bold capitalize tracking-widest text-red-400 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-between"
+                      >
+                        <span>Salir</span>
+                        <LogOut size={12} />
+                      </button>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
             
             <div className="relative">
               <button 
@@ -8073,10 +9760,21 @@ export default function App() {
                           setIsPerfModalOpen(true);
                           setIsEditMenuOpen(false);
                         }} 
-                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between"
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
                       >
                         <span>Rendimiento y CPU</span>
                         <Cpu size={12} />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setIsAudioConfigModalOpen(true);
+                          refreshAudioDevices();
+                          setIsEditMenuOpen(false);
+                        }} 
+                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between"
+                      >
+                        <span>Gestión de Audio</span>
+                        <Sliders size={12} />
                       </button>
                     </motion.div>
                   </>
@@ -8148,133 +9846,77 @@ export default function App() {
                     exit={{ height: 0 }}
                     className="overflow-hidden bg-obs-dark-1"
                   >
-                    <div className="p-2">
-                      <div className="grid grid-cols-1 gap-2">
-                        {[
-                          { name: 'Master', volume: masterVolume, onChange: setMasterVolume, level: programLevel },
-                          { name: 'Programa', volume: programVolume, onChange: setProgramVolume, level: programLevel },
-                          { name: 'USB', volume: usbOutVolume, onChange: setUsbOutVolume, level: 0 },
-                          { name: 'IN', volume: usbInVolume, onChange: setUsbInVolume, level: 0 },
-                        ].map((source) => (
-                          <PropertyControl
-                            key={source.name}
-                            label={source.name}
-                            value={source.volume}
-                            displayValue={volToDb(source.volume)}
-                            min={0}
-                            max={1}
-                            step={0.01}
-                            onChange={(val) => source.onChange(val)}
-                            isAudioControl={true}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Info Programa Tab */}
-            <div className="border-b border-obs-border">
-              <button 
-                onClick={() => setActiveSidebarTab(activeSidebarTab === 'info' ? null : 'info')}
-                className={`w-full flex items-center justify-between px-4 py-2 hover:bg-obs-surface transition-colors ${activeSidebarTab === 'info' ? 'bg-obs-surface/50' : 'bg-obs-bg'}`}
-              >
-                <div className="flex items-center gap-2">
-                  <MonitorIcon size={12} className={activeSidebarTab === 'info' ? 'text-obs-accent' : 'text-obs-muted'} />
-                  <span className={`text-[9px] font-black uppercase tracking-wider ${activeSidebarTab === 'info' ? 'text-obs-text' : 'text-obs-muted'}`}>INFO PROGRAMA</span>
-                </div>
-                <ChevronDown size={12} className={`text-obs-muted transition-transform duration-300 ${activeSidebarTab === 'info' ? '' : '-rotate-90'}`} />
-              </button>
-
-              <AnimatePresence initial={false}>
-                {activeSidebarTab === 'info' && (
-                  <motion.div
-                    initial={{ height: 0 }}
-                    animate={{ height: 'auto' }}
-                    exit={{ height: 0 }}
-                    className="overflow-hidden bg-obs-dark-1"
-                  >
                     <div className="p-2 space-y-2">
-                       <div className="bg-obs-surface p-2 rounded border border-obs-text/5 space-y-3">
-                          <div className="flex flex-col gap-1">
-                            <div className="flex justify-between items-center">
-                              <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest">En el aire</span>
-                              {isLive && <span className="text-[7px] text-obs-accent font-black animate-pulse">● LIVE</span>}
+                      <div className="flex justify-between items-center px-1 border-b border-obs-border pb-1">
+                        <span className="text-[7.5px] uppercase font-bold text-obs-muted tracking-wider">Faders del Sistema</span>
+                        <button
+                          onClick={() => {
+                            setIsAudioConfigModalOpen(true);
+                            refreshAudioDevices();
+                          }}
+                          className="p-1 px-1.5 bg-obs-accent hover:bg-obs-accent/80 text-white rounded text-[7.5px] font-bold uppercase transition-all flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <Sliders size={8} />
+                          Ajustes
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {activeFaderIds.map((sourceName) => {
+                          const volume = sourceName === 'Master' ? masterVolume
+                                       : sourceName === 'Programa' ? programVolume
+                                       : sourceName === 'USB' ? usbOutVolume
+                                       : sourceName === 'IN' ? usbInVolume
+                                       : (audioVolumes[sourceName] ?? 0.5);
+
+                          const onChange = (val: number) => {
+                            if (sourceName === 'Master') setMasterVolume(val);
+                            else if (sourceName === 'Programa') setProgramVolume(val);
+                            else if (sourceName === 'USB') setUsbOutVolume(val);
+                            else if (sourceName === 'IN') setUsbInVolume(val);
+
+                            setAudioVolumes(prev => ({ ...prev, [sourceName]: val }));
+                          };
+
+                          let faderLabel = sourceName;
+                          if (sourceName === 'Master') faderLabel = 'MASTER MIX';
+                          else if (sourceName === 'Programa') faderLabel = 'PROG. REPROD.';
+                          else if (sourceName === 'USB') faderLabel = 'TARJETA USB';
+                          else if (sourceName === 'IN') faderLabel = 'MIC IN (DEF)';
+                          else if (sourceName.startsWith('out-')) {
+                            const cleanId = sourceName.replace('out-', '');
+                            const matched = audioOutputDevices.find(d => d.deviceId === cleanId);
+                            faderLabel = matched ? `OUT: ${matched.label}` : `OUT: ${cleanId}`;
+                          } else if (sourceName.startsWith('in-')) {
+                            const cleanId = sourceName.replace('in-', '');
+                            const matched = audioInputDevices.find(d => d.deviceId === cleanId);
+                            faderLabel = matched ? `IN: ${matched.label}` : `IN: ${cleanId}`;
+                          }
+
+                          const sigLevel = getFaderSignalLevel(sourceName);
+
+                          return (
+                            <div key={sourceName} className="p-1.5 bg-obs-bg/40 rounded border border-obs-border/40 space-y-1 font-sans">
+                              <PropertyControl
+                                label={faderLabel}
+                                value={volume}
+                                displayValue={volToDb(volume)}
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                onChange={onChange}
+                                isAudioControl={true}
+                              />
+                              <AudioBumeter volume={volume} isActive={true} getSignalLevel={() => getFaderSignalLevel(sourceName)} />
                             </div>
-                            <span className="text-[10px] text-obs-text font-black truncate leading-tight">
-                              {programClip ? programClip.name.toUpperCase() : (layers.find(l => l.activeClipId)?.name || 'SIN CONTENIDO').toUpperCase()}
-                            </span>
+                          );
+                        })}
+                        {activeFaderIds.length === 0 && (
+                          <div className="p-4 text-center text-obs-muted text-[8.5px] italic">
+                            Ningún fader visible. Haga clic en "Ajustes" para activarlos.
                           </div>
-                          
-                          <div className="space-y-1">
-                            {(() => {
-                              const activeDocOrPpt = (programClip && (programClip.totalPages || programClip.type === 'document' || programClip.type === 'ppt' || programClip.name?.toLowerCase().endsWith('.pdf')))
-                                ? programClip
-                                : clips?.find(c => {
-                                    const hasLayer = layers?.some(l => l.activeClipId === c.id);
-                                    return hasLayer && (c.type === 'document' || c.type === 'ppt' || c.name?.toLowerCase().endsWith('.pdf'));
-                                  });
-
-                              if (activeDocOrPpt) {
-                                return (
-                                  <>
-                                    <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
-                                      <div 
-                                        className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
-                                        style={{ width: `${(activeDocOrPpt.totalPages && activeDocOrPpt.totalPages > 0) ? ((activeDocOrPpt.currentPage || 1) / activeDocOrPpt.totalPages) * 100 : 100}%` }} 
-                                      />
-                                    </div>
-                                    <div className="flex justify-between font-mono text-[8px] text-obs-muted font-black">
-                                      <div className="flex items-center gap-1">
-                                        <span>Pág. {activeDocOrPpt.currentPage || 1}</span>
-                                      </div>
-                                      <div className="flex items-center gap-1">
-                                        <span>{activeDocOrPpt.totalPages ? `de ${activeDocOrPpt.totalPages}` : ''}</span>
-                                      </div>
-                                    </div>
-                                  </>
-                                );
-                              }
-
-                              return (
-                                <>
-                                  <div className="h-1.5 bg-obs-dark-1 rounded-full overflow-hidden border border-obs-text/5">
-                                    <div 
-                                      className="h-full bg-obs-accent transition-all shadow-[0_0_5px_rgba(0,163,245,0.3)]" 
-                                      style={{ width: `${programProgress.total > 0 ? (programProgress.current / programProgress.total) * 100 : 0}%` }} 
-                                    />
-                                  </div>
-                                  <div className="flex justify-between font-mono text-[8px] text-obs-muted font-normal">
-                                    <div className="flex items-center gap-1">
-                                      <Clock size={8} />
-                                      <FluidTimeDisplay eventId="video-progress-program" />
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <FluidTimeDisplay eventId="video-progress-program" isRemaining={true} />
-                                    </div>
-                                  </div>
-                                </>
-                              );
-                            })()}
-                          </div>
-
-                          <div className="pt-2 border-t border-obs-text/5">
-                            <span className="text-[7px] text-obs-muted uppercase font-black mb-1 block">Salidas Activas</span>
-                            <div className="flex flex-wrap gap-1">
-                              {externalScreens.filter(s => s.isActive).length > 0 ? (
-                                externalScreens.filter(s => s.isActive).map(s => (
-                                  <div key={s.id} className="px-1.5 py-0.5 rounded-[2px] bg-obs-accent/20 border border-obs-accent/30 text-obs-accent text-[6px] font-black uppercase">
-                                    {s.name}
-                                  </div>
-                                ))
-                              ) : (
-                                <span className="text-[7px] text-obs-text/20 italic">No hay salidas activas</span>
-                              )}
-                            </div>
-                          </div>
-                       </div>
+                        )}
+                      </div>
                     </div>
                   </motion.div>
                 )}
@@ -8587,6 +10229,7 @@ export default function App() {
                     masterVolume={masterVolume}
                     onEnded={handleProgramNext}
                     onLayerEnded={handleLayerEnded}
+                    onLevelChange={setProgramLevel}
                     onTogglePlay={handleTogglePlay}
                     onToggleLoop={handleToggleLoop}
                     onRewind={handleRewind}
@@ -8595,7 +10238,6 @@ export default function App() {
                       setProgramProgress({ current, total });
                       window.dispatchEvent(new CustomEvent('video-progress-program', { detail: { current, total } }));
                     }}
-                    onLevelChange={setProgramLevel}
                     onUpdateClip={updateClip}
                     isPlaylist={!!programPlaylistState}
                     volume={programVolume}
@@ -9099,6 +10741,75 @@ export default function App() {
             </motion.div>
           </div>
         )}
+      </AnimatePresence>
+
+      {/* FLOATING WINDOW: CONTROL PANEL DE CONTADOR PARA EL PONENTE */}
+      <AnimatePresence>
+        {Object.entries(allScreenSettings).map(([sId, settings], index) => {
+          if (!settings.timerShowDraggableFloat) return null;
+          
+          const pos = floatingTimerPos[sId] || { x: 350 + (index * 40), y: 180 + (index * 40) };
+
+          return (
+            <div 
+              key={`float-timer-${sId}`}
+              style={{ 
+                position: 'absolute', 
+                left: pos.x, 
+                top: pos.y,
+                zIndex: 99999 + index 
+              }}
+              className="w-80 bg-obs-dark-1 border-2 border-obs-border rounded-xl shadow-2xl overflow-hidden font-sans select-none"
+            >
+              {/* Header (Drag handle) */}
+              <div 
+                onMouseDown={(e) => {
+                  setIsDraggingFloatingTimer(sId);
+                  dragStartRef.current = {
+                    x: e.clientX - pos.x,
+                    y: e.clientY - pos.y
+                  };
+                }}
+                className="px-3.5 py-2.5 bg-obs-surface border-b border-obs-border flex items-center justify-between cursor-move text-stone-200"
+              >
+                <div className="flex items-center gap-2 text-obs-accent shrink-0">
+                  <Clock size={13} className="animate-[pulse_1.5s_infinite]" />
+                  <span className="text-[9.5px] font-black uppercase tracking-wider truncate max-w-[180px]">
+                    COUNTDOWN: {sId === 'primary' ? 'Salida Principal' : sId === 'default' ? 'Global' : externalScreens.find(s => s.id === sId)?.label || sId}
+                  </span>
+                </div>
+                <button 
+                  onClick={() => {
+                    setAllScreenSettings(prev => ({
+                      ...prev,
+                      [sId]: {
+                        ...prev[sId],
+                        timerShowDraggableFloat: false
+                      }
+                    }));
+                  }}
+                  className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+
+              {/* Timer Display Body */}
+              <PresenterTimerDisplay 
+                settings={settings} 
+                onUpdate={(updates) => {
+                  setAllScreenSettings(prev => ({
+                    ...prev,
+                    [sId]: {
+                      ...(prev[sId] || DEFAULT_SCREEN_SETTINGS),
+                      ...updates
+                    }
+                  }));
+                }} 
+              />
+            </div>
+          );
+        })}
       </AnimatePresence>
     </div>
   );

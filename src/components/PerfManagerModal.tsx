@@ -435,31 +435,6 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                     <div className={`w-3 h-3 rounded-full bg-white transition-transform ${localSettings.independentScheduler ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                   </button>
                 </div>
-
-                {/* DIAGNÓSTICO: PREVENCIÓN DE LÍNEAS HORIZONTALES (SCREEN TEARING) */}
-                <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-200 rounded space-y-2 mt-2">
-                  <div className="flex items-center gap-1.5 font-black uppercase text-[8.5px] text-amber-400">
-                    <AlertTriangle size={12} className="animate-pulse" />
-                    <span>GUÍA DE SOLUCIÓN: LÍNEAS HORIZONTALES / DESINCRONIZACIÓN GRÁFICA (TEARING)</span>
-                  </div>
-                  <p className="text-[8px] leading-relaxed">
-                    Si observas líneas horizontales entrecortadas al reproducir en la pantalla externa o proyector, se debe a falta de sincronización de cuadros (FPS) con la tasa de refresco (Hz) de tu monitor secundario. Sigue estas recomendaciones profesionales:
-                  </p>
-                  <ul className="text-[7.5px] leading-relaxed space-y-1 pl-4 list-decimal text-white/90">
-                    <li>
-                      <strong>Forzar V-Sync en Windows / Tarjeta de Video:</strong> Abre el {`"`}Panel de Control de NVIDIA{`"`} (o Radeon Settings) &gt; {`"`}Controlar la configuración 3D{`"`} &gt; {`"`}Sincronización vertical{`"`} &gt; Establécelo en <strong>Activado</strong> o <strong>Sincronización Rápida (Fast Sync)</strong>.
-                    </li>
-                    <li>
-                      <strong>Homogeneizar hercios (Hz):</strong> Configura tanto tu monitor principal como la pantalla externa o proyector a la misma herzia exacta (ej. <strong>60 Hz</strong>) en la configuración de pantalla del sistema operativo.
-                    </li>
-                    <li>
-                      <strong>Activar el Triple Búfer:</strong> Asegúrate de que la opción de {`"`}Triple Buffering & Lock Pacing{`"`} de la parte superior esté activada en LUMIN para acoplar la sincronización en el navegador.
-                    </li>
-                    <li>
-                      <strong>Optimización de Codecs (Evitar H.264 pesados):</strong> Los videos codificados en H.264/H.265 de alto bitrate exigen decodificación Inter-Frame constante que estresa la GPU. Pestañea a <em>Codecs Intra-Frame</em> en el menú superior para usar formatos idóneos de directo.
-                    </li>
-                  </ul>
-                </div>
               </div>
             )}
 

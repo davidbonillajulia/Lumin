@@ -50,6 +50,15 @@
   --color-obs-dark-m1: var(--theme-dark-m1);
   --color-obs-dark-m2: var(--theme-dark-m2);
   --color-obs-dark-m3: var(--theme-dark-m3);
+
+  --animate-blink-intense: blink-intense 0.8s infinite steps(2, start);
+  --animate-blink-amber: blink-intense 1.5s infinite steps(2, start);
+
+  @keyframes blink-timer {
+    0%, 49.9% { opacity: 1; }
+    50%, 99.9% { opacity: 0; }
+    100% { opacity: 1; }
+  }
 }
 
 @layer base {
