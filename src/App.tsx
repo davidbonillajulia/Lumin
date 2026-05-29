@@ -1199,7 +1199,6 @@ const Monitor = React.memo(({
                             opacity={opacity}
                             isProgram={!!isProgram}
                             isTransmitting={isTransmitting}
-                            onProgressUpdate={onProgressUpdate}
                             onEnded={() => onLayerEnded?.(l.id, activeClip.id, l.sequenceCounter || 0)}
                             loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
                             transitionType="fade"
@@ -2090,6 +2089,24 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
     earlyEndTriggered.current = false;
   }, [clip.id, clip.url, clip.type]);
 
+  // CRITICAL: Delayed GPU decoder release on unmount to allow smooth AnimatePresence exit transitions.
+  // This prevents instant black screen flashes during fade transitions.
+  useEffect(() => {
+    return () => {
+      const video = videoRef.current;
+      if (video) {
+        setTimeout(() => {
+          try {
+            video.pause();
+            video.src = "";
+            video.removeAttribute('src');
+            video.load();
+          } catch (e) {}
+        }, 2000);
+      }
+    };
+  }, []);
+
   // Sync native video loop property directly when clip loop state changes
   useEffect(() => {
     const video = videoRef.current;
@@ -2243,14 +2260,6 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
       ch.addEventListener('message', handleBroadcastMessage);
 
       return () => {
-         // CRITICAL: Force immediately pause, clear sources and reload the player to release native GPU decoders on Windows
-         try {
-           video.pause();
-           video.src = "";
-           video.removeAttribute('src');
-           video.load();
-         } catch (e) {}
-
          video.removeEventListener('timeupdate', handleTimeUpdate);
          video.removeEventListener('loadedmetadata', handleMetadata);
          video.removeEventListener('canplay', handleReady);
@@ -10410,7 +10419,6 @@ export default function App() {
                       accentColor={preview.accentColor}
                       pipLayers={pipLayers}
                       activeOutputId={preview.selectedOutputs[0] || '1'}
-                      onLayerEnded={handleLayerEnded}
                       perfSettings={perfSettings}
                       onEnded={() => {
                         if (preview.clipId) {
