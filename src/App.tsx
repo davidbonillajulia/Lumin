@@ -4942,10 +4942,30 @@ const Inspector = React.memo(({
                   <button 
                     onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerShowDraggableFloat: !externalScreenSettings.timerShowDraggableFloat })}
                     className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerShowDraggableFloat ? 'bg-obs-accent' : 'bg-obs-dark-1'}`}
+                    title="Mostrar mando flotante interno"
                   >
                     <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerShowDraggableFloat ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
                   </button>
                 </div>
+              </div>
+
+              <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans mt-2">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">Ventana Independiente</span>
+                  <span className="text-[8px] text-obs-muted">Abrir en ventana externa independiente del OS (para otra pantalla)</span>
+                </div>
+                <button
+                  onClick={() => {
+                    const screenKey = selectedScreenId || 'primary';
+                    const url = `/?mode=floating_timer&screenId=${screenKey}`;
+                    window.open(url, `FloatingTimer_${screenKey}`, 'width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no');
+                  }}
+                  className="px-2.5 py-1.5 rounded-md text-white font-black uppercase text-[8px] transition-all bg-indigo-600 border-b-2 border-indigo-800 hover:bg-indigo-500 active:scale-95 flex items-center gap-1 shrink-0 cursor-pointer"
+                  title="Abrir en ventana externa independiente"
+                >
+                  <ExternalLink size={10} />
+                  <span>Ventana Externa</span>
+                </button>
               </div>
 
               {(externalScreenSettings.timerEnabled || externalScreenSettings.timerPreview) && (
@@ -11058,20 +11078,33 @@ export default function App() {
                     COUNTDOWN: {outputs.find((o: any) => o.physicalScreenId === sId || o.id === sId)?.name || (sId === 'primary' ? 'Salida Principal' : sId === 'default' ? 'Global' : `Salida ${sId}`)}
                   </span>
                 </div>
-                <button 
-                  onClick={() => {
-                    setAllScreenSettings(prev => ({
-                      ...prev,
-                      [sId]: {
-                        ...prev[sId],
-                        timerShowDraggableFloat: false
-                      }
-                    }));
-                  }}
-                  className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
-                >
-                  <X size={12} />
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button 
+                    onClick={() => {
+                      const url = `/?mode=floating_timer&screenId=${sId}`;
+                      window.open(url, `FloatingTimer_${sId}`, 'width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no');
+                    }}
+                    className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
+                    title="Abrir en Ventana Independiente fuera del navegador"
+                  >
+                    <ExternalLink size={12} />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setAllScreenSettings(prev => ({
+                        ...prev,
+                        [sId]: {
+                          ...prev[sId],
+                          timerShowDraggableFloat: false
+                        }
+                      }));
+                    }}
+                    className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
+                    title="Cerrar"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
               </div>
 
               {/* Timer Display Body */}
