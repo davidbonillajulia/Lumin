@@ -199,6 +199,7 @@ interface Layer {
   loop?: boolean;
   loopVideo?: boolean;
   playbackMode?: 'single' | 'sequence';
+  sequenceCounter?: number;
 }
 
 interface PiPLayer {
@@ -840,7 +841,8 @@ const Monitor = React.memo(({
   layers = [],
   layerOutputs = {},
   onUpdateClip,
-  perfSettings
+  perfSettings,
+  programPlayIndex = 0
 }: { 
   title: string, 
   isActive?: boolean, 
@@ -852,7 +854,7 @@ const Monitor = React.memo(({
   isProgram?: boolean,
   isPlaylist?: boolean,
   onEnded?: () => void,
-  onLayerEnded?: (layerId: string, clipId: string) => void,
+  onLayerEnded?: (layerId: string, clipId: string, seqCounter?: number) => void,
   onTogglePlay?: (id: string) => void,
   onToggleLoop?: (id: string) => void,
   onRewind?: (id: string) => void,
@@ -888,7 +890,8 @@ const Monitor = React.memo(({
   layers?: Layer[],
   layerOutputs?: Record<string, string | null>,
   onUpdateClip?: (id: string, updates: Partial<Clip>) => void,
-  perfSettings?: any
+  perfSettings?: any,
+  programPlayIndex?: number
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>('');
@@ -1096,7 +1099,7 @@ const Monitor = React.memo(({
                   <AnimatePresence custom={transitionType}>
                     {(busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) && (
                       <VideoLayer 
-                        key={`bus-A-${busAClip.id}`}
+                        key={`bus-A-${busAClip.id}-${programPlayIndex}`}
                         clip={busAClip}
                         volume={volume}
                         masterVolume={masterVolume}
@@ -1116,7 +1119,7 @@ const Monitor = React.memo(({
                     )}
                     {activeBusBClip && (
                       <VideoLayer 
-                        key={`bus-B-${activeBusBClip.id}`}
+                        key={`bus-B-${activeBusBClip.id}-${programPlayIndex}`}
                         clip={activeBusBClip}
                         volume={volume}
                         masterVolume={masterVolume}
@@ -1139,6 +1142,26 @@ const Monitor = React.memo(({
                   {layers.filter(l => l.isVisible && (layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id])).map((l, index) => {
                     const activeClip = l.activeClipId ? clips?.find(c => c.id === l.activeClipId) : null;
                     if (!activeClip) return null;
+
+                    // Compute next clip in the sequence to preload:
+                    let nextSrc = undefined;
+                    if (l.playbackMode === 'sequence') {
+                      const currentSlotIndex = l.activeSlotIndex !== null ? l.activeSlotIndex : l.slots.findIndex(s => s?.id === l.activeClipId);
+                      const nextClipIndex = l.slots.findIndex((s, idx) => idx > currentSlotIndex && s !== null);
+                      let foundNext = null;
+                      if (nextClipIndex !== -1) {
+                        foundNext = l.slots[nextClipIndex];
+                      } else if (l.loop !== false) {
+                        const firstSlotIndex = l.slots.findIndex(s => s !== null);
+                        if (firstSlotIndex !== -1 && l.slots[firstSlotIndex]?.id !== l.activeClipId) {
+                          foundNext = l.slots[firstSlotIndex];
+                        }
+                      }
+                      if (foundNext && foundNext.type === 'video') {
+                        nextSrc = foundNext.url;
+                      }
+                    }
+
                     return (
                       <div 
                         key={l.id} 
@@ -1168,15 +1191,16 @@ const Monitor = React.memo(({
                         >
                         <AnimatePresence mode="popLayout" initial={false}>
                           <VideoLayer 
-                            key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}`}
+                            key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}-${l.sequenceCounter || 0}`}
                             clip={activeClip}
+                            nextSrc={nextSrc}
                             volume={l.muted ? 0 : volume}
                             masterVolume={masterVolume}
                             opacity={opacity}
                             isProgram={!!isProgram}
                             isTransmitting={isTransmitting}
                             onProgressUpdate={onProgressUpdate}
-                            onEnded={() => onLayerEnded?.(l.id, activeClip.id)}
+                            onEnded={() => onLayerEnded?.(l.id, activeClip.id, l.sequenceCounter || 0)}
                             loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
                             transitionType="fade"
                             transitionDuration={Math.min(1.5, l.transitionDuration || 0.4)}
@@ -2012,8 +2036,9 @@ const DocumentLayer = ({ clip, onUpdateClip }: { clip: any, onUpdateClip?: (id: 
   );
 };
 
-const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, transitionDuration, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip, onReady, perfSettings }: { 
+const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpacity, isProgram, crossfaderValue, transitionType, transitionDuration, onTimeUpdate, onProgressUpdate, onLevelChange, onEnded, startTime, loopOverride, isTransmitting = false, style, onUpdateClip, onReady, perfSettings, isSlave = false }: { 
   clip: any, 
+  nextSrc?: string,
   volume: number, 
   masterVolume?: number,
   opacity: number, 
@@ -2032,13 +2057,17 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   style?: React.CSSProperties,
   onUpdateClip?: (id: string, updates: any) => void,
   onReady?: () => void,
-  perfSettings?: any
+  perfSettings?: any,
+  isSlave?: boolean
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>('');
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
   const [firstFrameRendered, setFirstFrameRendered] = useState(clip.type !== 'video');
+  const earlyEndTriggered = useRef(false);
+  const lastBroadcastTimeRef = useRef<number>(0);
+  const autoPlayNextRef = useRef<boolean>(false);
 
   const activePerf = useMemo(() => perfSettings || {
     gpuDecoding: 'd3d11',
@@ -2058,6 +2087,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
     } else {
       setFirstFrameRendered(true);
     }
+    earlyEndTriggered.current = false;
   }, [clip.id, clip.url, clip.type]);
 
   // Sync native video loop property directly when clip loop state changes
@@ -2107,11 +2137,28 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
   useEffect(() => {
     const video = videoRef.current;
     if (video && clip.type === 'video') {
-      const earlyEndTriggered = { current: false };
-      
       const handleTimeUpdate = () => {
         onTimeUpdate?.(video.currentTime);
         onProgressUpdate?.(video.currentTime, video.duration || 0);
+
+        // Throttle BroadcastChannel updates to keep performance outstanding
+        const now = Date.now();
+        if (!isSlave && now - lastBroadcastTimeRef.current >= 300) {
+          lastBroadcastTimeRef.current = now;
+          if (!(window as any).__luminVideoTimes) {
+            (window as any).__luminVideoTimes = {};
+          }
+          (window as any).__luminVideoTimes[clip.id] = video.currentTime;
+          try {
+            if (!(window as any).__luminTimeChannel) {
+              (window as any).__luminTimeChannel = new BroadcastChannel('lumin-output');
+            }
+            (window as any).__luminTimeChannel.postMessage({
+              type: 'VIDEO_TIME_UPDATE',
+              payload: { clipId: clip.id, currentTime: video.currentTime }
+            });
+          } catch (err) {}
+        }
 
         // Early transition logic: trigger onEnded slightly before the video physically ends
         if (video.duration) {
@@ -2138,46 +2185,79 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
       
       video.addEventListener('timeupdate', handleTimeUpdate);
       
-      if (lastSrc.current !== clip.url) {
-        console.log("Changing src for", clip.id, clip.url);
-        video.src = clip.url;
-        lastSrc.current = clip.url;
+      const handleMetadata = () => {
+        const savedTime = (window as any).__luminVideoTimes?.[clip.id];
+        if (savedTime !== undefined) {
+          video.currentTime = savedTime;
+        } else if (startTime !== undefined) {
+          video.currentTime = startTime;
+        } else if (clip.currentTime !== undefined) {
+           video.currentTime = clip.currentTime;
+        } else {
+          video.currentTime = 0;
+        }
+      };
 
-        // Use loadedmetadata for seeking to avoid frame 0 flicker, and canplay for playing
-        const handleMetadata = () => {
-          if (startTime !== undefined) {
-            video.currentTime = startTime;
-          } else if (clip.currentTime !== undefined) {
-            video.currentTime = clip.currentTime;
-          }
-          video.removeEventListener('loadedmetadata', handleMetadata);
-        };
-        video.addEventListener('loadedmetadata', handleMetadata);
-
-        const handleReady = () => {
-          if (clip.isPlaying !== false) {
-            setTimeout(() => {
-              if (videoRef.current) videoRef.current.play().catch(() => {});
-            }, 50);
-          }
-          video.removeEventListener('canplay', handleReady);
-        };
-        video.addEventListener('canplay', handleReady);
-      } else {
+      const handleReady = () => {
         if (clip.isPlaying !== false) {
-          setTimeout(() => {
-            if (videoRef.current) videoRef.current.play().catch(() => {});
-          }, 50);
+          video.play().catch(() => {});
         } else {
           video.pause();
         }
+      };
+
+      // Register or run instantly if already loaded:
+      if (video.readyState >= 1) { // HAVE_METADATA
+        handleMetadata();
+      } else {
+        video.addEventListener('loadedmetadata', handleMetadata);
       }
-      
+
+      if (video.readyState >= 3) { // HAVE_FUTURE_DATA
+        handleReady();
+      } else {
+        video.addEventListener('canplay', handleReady);
+      }
+
+      // If playing state changes:
+      if (clip.isPlaying !== false) {
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+      }
+
+      const handleBroadcastMessage = (e: MessageEvent) => {
+        if (isSlave && e.data?.type === 'VIDEO_TIME_UPDATE') {
+          const { clipId, currentTime } = e.data.payload;
+          if (clipId === clip.id && videoRef.current) {
+            const diff = Math.abs(videoRef.current.currentTime - currentTime);
+            // 0.5s tolerance to prevent rapid seek fight oscillation on same-frame renders
+            if (diff > 0.5) {
+              videoRef.current.currentTime = currentTime;
+            }
+          }
+        }
+      };
+
+      const ch = (window as any).__luminTimeChannel || new BroadcastChannel('lumin-output');
+      ch.addEventListener('message', handleBroadcastMessage);
+
       return () => {
+         // CRITICAL: Force immediately pause, clear sources and reload the player to release native GPU decoders on Windows
+         try {
+           video.pause();
+           video.src = "";
+           video.removeAttribute('src');
+           video.load();
+         } catch (e) {}
+
          video.removeEventListener('timeupdate', handleTimeUpdate);
+         video.removeEventListener('loadedmetadata', handleMetadata);
+         video.removeEventListener('canplay', handleReady);
+         ch.removeEventListener('message', handleBroadcastMessage);
       };
     }
-  }, [clip.id, clip.url, clip.isPlaying]);
+  }, [clip.id, clip.url, clip.isPlaying, isSlave]);
 
   // Video IN (Capturadoras USB / HDMI en Windows)
   const streamRef = useRef<MediaStream | null>(null);
@@ -2391,6 +2471,7 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
           }}
         >
           {clip.type === 'video' || clip.type === 'videoinput' ? (
+            <>
               <video 
                 ref={videoRef}
                 src={clip.type === 'video' ? clip.url : undefined} 
@@ -2422,6 +2503,16 @@ const VideoLayer = ({ clip, volume, masterVolume = 1, opacity, faderOpacity, isP
                 }}
                 onEnded={handleEnded}
               />
+              {clip.type === 'video' && nextSrc && (
+                <video 
+                  src={nextSrc} 
+                  preload="auto" 
+                  muted 
+                  playsInline
+                  style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0.01, pointerEvents: 'none', zIndex: -100 }} 
+                />
+              )}
+            </>
           ) : clip.type === 'document' || clip.type === 'ppt' ? (
             <DocumentLayer clip={clip} onUpdateClip={onUpdateClip} />
           ) : (
@@ -2623,7 +2714,7 @@ const OutputCountdown = ({ settings }: { settings: ExternalScreenSettings }) => 
 
   return (
     <div 
-      className="absolute z-[999] p-3 px-6 rounded-lg flex transition-all duration-300 pointer-events-none"
+      className="absolute z-[999] p-3 px-6 rounded-lg flex transition-[background-color,border-color,color] duration-300 pointer-events-none"
       style={{
         left: `${x}%`,
         top: `${y}%`,
@@ -2635,10 +2726,9 @@ const OutputCountdown = ({ settings }: { settings: ExternalScreenSettings }) => 
         color: textColor,
         fontSize: `${settings.timerSize ?? 48}px`,
         lineHeight: 1,
-        animation: animationStyle,
       }}
     >
-      <span className={fontStyle}>
+      <span className={fontStyle} style={{ animation: animationStyle }}>
         {formatTime(secondsLeft)}
       </span>
     </div>
@@ -2647,10 +2737,12 @@ const OutputCountdown = ({ settings }: { settings: ExternalScreenSettings }) => 
 
 const PresenterTimerDisplay = ({ 
   settings, 
-  onUpdate 
+  onUpdate,
+  screenId
 }: { 
   settings: ExternalScreenSettings, 
-  onUpdate: (updates: any) => void 
+  onUpdate: (updates: any) => void,
+  screenId?: string
 }) => {
   const [remaining, setRemaining] = useState(0);
 
@@ -2709,7 +2801,7 @@ const PresenterTimerDisplay = ({
       {/* Row 1: Clock on left, control panel on right */}
       <div className="flex gap-4">
         {/* Big Clock area */}
-        <div className={`flex-1 p-5 rounded-xl flex flex-col items-center justify-center transition-all ${bgClass} min-h-[100px] border-2 border-white/5`}>
+        <div className={`flex-1 p-5 rounded-xl flex flex-col items-center justify-center transition-[background-color,border-color,color] duration-300 ${bgClass} min-h-[100px] border-2 border-white/5`}>
           <span className="text-[7.5px] uppercase font-black text-obs-muted tracking-[0.2em] mb-1">tiempo restante</span>
           <div 
             className={`text-5xl font-mono tracking-tighter font-black select-none transition-none ${colorClass}`}
@@ -2827,20 +2919,124 @@ const PresenterTimerDisplay = ({
         </button>
 
         <button 
-          onClick={() => onUpdate({ timerIsLaunched: !settings.timerIsLaunched })}
+          onClick={() => {
+            onUpdate({
+              timerIsLaunched: !settings.timerIsLaunched
+            });
+          }}
           className={`py-2 rounded-md font-black uppercase text-[8px] transition-all border-b-2 flex flex-col items-center justify-center gap-0.5 ${
             settings.timerIsLaunched 
-              ? 'bg-red-600 border-red-800 text-white animate-pulse' 
+              ? 'bg-red-600 border-red-800 text-white hover:bg-red-500 active:scale-95' 
               : 'bg-indigo-600 border-indigo-800 text-white hover:bg-indigo-500 active:scale-95'
           }`}
+          title={settings.timerIsLaunched ? "Quitar reloj de la salida externa" : "Lanzar reloj a la salida externa"}
         >
-          <MonitorPlay size={10} />
-          <span>{settings.timerIsLaunched ? 'Ocultar' : 'Lanzar'}</span>
+          <ExternalLink size={10} />
+          <span>{settings.timerIsLaunched ? 'LIVE' : 'LANZAR'}</span>
         </button>
       </div>
     </div>
   );
 };
+
+const FloatingTimerPopoutView = React.memo(() => {
+  const [state, setState] = useState<any>(null);
+  const channelRef = useRef<BroadcastChannel | null>(null);
+
+  const screenId = useMemo(() => {
+    try {
+      const params = new URLSearchParams(window.location.search || window.location.hash.substring(window.location.hash.indexOf('?') !== -1 ? window.location.hash.indexOf('?') : window.location.hash.length));
+      return params.get('screenId') || '1';
+    } catch {
+      return '1';
+    }
+  }, []);
+
+  useEffect(() => {
+    document.title = "LUMIN TIMER CONTROLLER";
+    const channel = new BroadcastChannel('lumin-output');
+    channelRef.current = channel;
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'SYNC_STATE') {
+        setState(event.data.payload);
+      }
+    };
+
+    channel.addEventListener('message', handleMessage);
+    channel.postMessage({ type: 'REQUEST_SYNC' });
+
+    const interval = setInterval(() => {
+      channel.postMessage({ type: 'REQUEST_SYNC' });
+    }, 1000);
+
+    return () => {
+      channel.removeEventListener('message', handleMessage);
+      clearInterval(interval);
+      channel.close();
+    };
+  }, []);
+
+  const settings = useMemo(() => {
+    if (state?.allScreenSettings && state.allScreenSettings[screenId]) {
+      return state.allScreenSettings[screenId];
+    }
+    return state?.externalScreenSettings || {
+      timerMinutes: 5,
+      timerSeconds: 0,
+      timerRemainingSeconds: 300,
+      timerRunning: false,
+      timerTargetTimestamp: null,
+      timerAmberSeconds: 30,
+      timerRedSeconds: 10,
+    };
+  }, [state, screenId]);
+
+  const handleUpdate = (updates: any) => {
+    channelRef.current?.postMessage({
+      type: 'UPDATE_TIMER_SETTINGS',
+      payload: { screenId, updates }
+    });
+    setState((prev: any) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        allScreenSettings: {
+          ...(prev.allScreenSettings || {}),
+          [screenId]: {
+            ...(prev.allScreenSettings?.[screenId] || {}),
+            ...updates
+          }
+        }
+      };
+    });
+  };
+
+  const outputObj = state?.outputs?.find((o: any) => o.physicalScreenId === screenId || o.id === screenId);
+  const displayName = outputObj ? outputObj.name : `Salida ${screenId}`;
+
+  return (
+    <div className="w-full h-screen bg-obs-bg text-obs-text p-4 font-sans flex flex-col justify-between overflow-hidden">
+      <div className="flex items-center justify-between border-b border-obs-border pb-2 mb-2">
+        <div className="flex items-center gap-1.5 text-obs-accent font-sans">
+          <Clock size={12} className="animate-pulse" />
+          <span className="text-[10px] font-black uppercase tracking-wider font-sans">
+            MANDO: {displayName}
+          </span>
+        </div>
+        <span className="text-[7.5px] font-mono text-obs-muted">Lumin Timer</span>
+      </div>
+      
+      <div className="flex-1 flex flex-col justify-center">
+        <PresenterTimerDisplay 
+          settings={settings}
+          onUpdate={handleUpdate}
+          screenId={screenId}
+        />
+      </div>
+    </div>
+  );
+});
 
 const OutputView = React.memo(() => {
   const [state, setState] = useState<any>(null);
@@ -3006,11 +3202,23 @@ const OutputView = React.memo(() => {
 
     const settings = (allScreenSettings && screenId && allScreenSettings[screenId]) 
       ? allScreenSettings[screenId] 
-      : (state.externalScreenSettings || {
-          brightness: 1, contrast: 1, saturation: 1, opacity: 1, x: 0, y: 0, rotation: 0,
-          scalingW: 1, scalingH: 1, colorBalance: { r: 1, g: 1, b: 1 },
-          bgScalingW: 100, bgScalingH: 100
-        });
+      : {
+          ...(state.externalScreenSettings || {}),
+          brightness: state.externalScreenSettings?.brightness ?? 1,
+          contrast: state.externalScreenSettings?.contrast ?? 1,
+          saturation: state.externalScreenSettings?.saturation ?? 1,
+          opacity: state.externalScreenSettings?.opacity ?? 1,
+          x: state.externalScreenSettings?.x ?? 0,
+          y: state.externalScreenSettings?.y ?? 0,
+          rotation: state.externalScreenSettings?.rotation ?? 0,
+          scalingW: state.externalScreenSettings?.scalingW ?? 1,
+          scalingH: state.externalScreenSettings?.scalingH ?? 1,
+          colorBalance: state.externalScreenSettings?.colorBalance || { r: 1, g: 1, b: 1 },
+          bgScalingW: state.externalScreenSettings?.bgScalingW ?? 100,
+          bgScalingH: state.externalScreenSettings?.bgScalingH ?? 100,
+          timerEnabled: false,
+          timerIsLaunched: false
+        };
 
     const hasGlobalFilters = (() => {
       const b = settings.brightness ?? 1;
@@ -3147,7 +3355,7 @@ const OutputView = React.memo(() => {
                   {/* Bus A Layer */}
                   {(busAClip && (crossfaderValue === undefined || crossfaderValue < 100)) && (
                     <VideoLayer 
-                      key={`bus-A-${busAClip.id}`}
+                      key={`bus-A-${busAClip.id}-${state?.programPlayIndex ?? 0}`}
                       clip={busAClip}
                       volume={programVolume}
                       masterVolume={masterVolume}
@@ -3163,13 +3371,14 @@ const OutputView = React.memo(() => {
                       transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                       onReady={() => setIsBusAReady(true)}
                       perfSettings={perfSettings}
+                      isSlave={true}
                     />
                   )}
  
                   {/* Bus B Layer */}
                   {activeBusBClip && (
                     <VideoLayer 
-                      key={`bus-B-${activeBusBClip.id}`}
+                      key={`bus-B-${activeBusBClip.id}-${state?.programPlayIndex ?? 0}`}
                       clip={activeBusBClip}
                       volume={programVolume}
                       masterVolume={masterVolume}
@@ -3185,6 +3394,7 @@ const OutputView = React.memo(() => {
                       }}
                       transitionDuration={settings?.transitionDuration ? settings.transitionDuration / 1000 : 0.4}
                       perfSettings={perfSettings}
+                      isSlave={true}
                     />
                   )}
                 </AnimatePresence>
@@ -3193,6 +3403,26 @@ const OutputView = React.memo(() => {
                 {state.layers && state.layers.filter((l: any) => l.isVisible && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id])).map((l: any, index: number) => {
                   const activeClip = l.activeClipId ? (state.clips || []).find((c: any) => c.id === l.activeClipId) : null;
                   if (!activeClip) return null;
+
+                  // Compute next clip in the sequence to preload:
+                  let nextSrc = undefined;
+                  if (l.playbackMode === 'sequence') {
+                    const currentSlotIndex = l.activeSlotIndex !== null ? l.activeSlotIndex : l.slots.findIndex(s => s?.id === l.activeClipId);
+                    const nextClipIndex = l.slots.findIndex((s, idx) => idx > currentSlotIndex && s !== null);
+                    let foundNext = null;
+                    if (nextClipIndex !== -1) {
+                      foundNext = l.slots[nextClipIndex];
+                    } else if (l.loop !== false) {
+                      const firstSlotIndex = l.slots.findIndex(s => s !== null);
+                      if (firstSlotIndex !== -1 && l.slots[firstSlotIndex]?.id !== l.activeClipId) {
+                        foundNext = l.slots[firstSlotIndex];
+                      }
+                    }
+                    if (foundNext && foundNext.type === 'video') {
+                      nextSrc = foundNext.url;
+                    }
+                  }
+
                   return (
                     <div 
                       key={l.id} 
@@ -3222,21 +3452,30 @@ const OutputView = React.memo(() => {
                       >
                         <AnimatePresence mode="popLayout" initial={true}>
                           <VideoLayer 
-                      key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}`}
-                      clip={activeClip}
-                      volume={l.muted ? 0 : programVolume}
-                      masterVolume={masterVolume}
-                      opacity={1}
-                      isProgram={true}
-                      isTransmitting={isTransmitting}
-                      transitionType="fade"
-                      transitionDuration={Math.max(0, Math.min(1.5, l.transitionDuration || 0.4))}
+                            key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}-${l.sequenceCounter || 0}`}
+                            clip={activeClip}
+                            nextSrc={nextSrc}
+                            volume={l.muted ? 0 : programVolume}
+                            masterVolume={masterVolume}
+                            opacity={1}
+                            isProgram={true}
+                            isTransmitting={isTransmitting}
+                            transitionType="fade"
+                            transitionDuration={Math.max(0, Math.min(1.5, l.transitionDuration || 0.4))}
                             onEnded={() => {
-                               channelRef.current?.postMessage({ type: 'LAYER_CLIP_ENDED', payload: { layerId: l.id, clipId: activeClip.id } });
+                               channelRef.current?.postMessage({ 
+                                 type: 'LAYER_CLIP_ENDED', 
+                                 payload: { 
+                                   layerId: l.id, 
+                                   clipId: activeClip.id, 
+                                   sequenceCounter: l.sequenceCounter || 0 
+                                 } 
+                               });
                             }}
                             loopOverride={l.playbackMode === 'single' ? (l.loopVideo !== false) : false}
                             perfSettings={perfSettings}
                             onUpdateClip={updateClip}
+                            isSlave={true}
                           />
                         </AnimatePresence>
                       </div>
@@ -3274,6 +3513,7 @@ const OutputView = React.memo(() => {
                         <div className="w-full h-full"> 
                              <VideoLayer 
                               clip={state.clips.find((c: any) => c.id === pip.clipId)!}
+                              isSlave={true}
                               volume={0}
                               opacity={pip.opacity}
                               isProgram={false}
@@ -3328,8 +3568,6 @@ const Inspector = React.memo(({
   allScreenSettings,
   isDarkMode,
   isOutputLaunched,
-  showFloatingTimer,
-  setShowFloatingTimer,
   pipLayers
 }: { 
   selectedItem: Clip | Playlist | any | null, 
@@ -4688,15 +4926,17 @@ const Inspector = React.memo(({
 
               <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
                 <div className="flex flex-col">
-                  <span className="text-[10px] font-bold text-obs-text uppercase">Mando Flotante</span>
+                  <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">Mando Flotante</span>
                   <span className="text-[8px] text-obs-muted">Mando flotante arrastrable del ponente</span>
                 </div>
-                <button 
-                  onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerShowDraggableFloat: !externalScreenSettings.timerShowDraggableFloat })}
-                  className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerShowDraggableFloat ? 'bg-obs-accent' : 'bg-obs-dark-1'}`}
-                >
-                  <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerShowDraggableFloat ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerShowDraggableFloat: !externalScreenSettings.timerShowDraggableFloat })}
+                    className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerShowDraggableFloat ? 'bg-obs-accent' : 'bg-obs-dark-1'}`}
+                  >
+                    <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerShowDraggableFloat ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+                  </button>
+                </div>
               </div>
 
               {(externalScreenSettings.timerEnabled || externalScreenSettings.timerPreview) && (
@@ -4888,57 +5128,64 @@ const Inspector = React.memo(({
                       </select>
                     </div>
 
-                    {/* Marcadores de Alerta y Parpadeo */}
-                    <div className="space-y-2 pt-1 border-t border-obs-text/5">
-                      <span className="text-[7px] text-obs-muted uppercase font-bold">Alertas de Tiempo</span>
-                      <div className="grid grid-cols-2 gap-3">
-                        {/* Amber threshold config */}
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <label className="text-[7px] text-amber-500 uppercase font-bold">Aviso 30s</label>
-                            <input 
-                              type="color" 
-                              value={externalScreenSettings.timerAmberColor ?? '#f59e0b'}
-                              onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerAmberColor: e.target.value })}
-                              className="w-4 h-4 bg-transparent border-0 cursor-pointer"
-                            />
-                          </div>
-                          <div className="flex items-center justify-between bg-obs-dark-1 p-1.5 rounded border border-obs-dark-2">
-                            <span className="text-[7px] uppercase font-bold text-obs-muted">Parpadeo</span>
-                            <button 
-                              onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerBlinkAmberEnabled: !(externalScreenSettings.timerBlinkAmberEnabled ?? true) })}
-                              className={`w-8 h-4 rounded-full p-0.5 transition-colors relative ${externalScreenSettings.timerBlinkAmberEnabled !== false ? 'bg-obs-accent' : 'bg-stone-700'}`}
-                            >
-                              <div className={`w-3 h-3 bg-white rounded-full transition-transform duration-200 ${externalScreenSettings.timerBlinkAmberEnabled !== false ? 'translate-x-4' : 'translate-x-0'}`} />
-                            </button>
+                    {/* Alertas de color */}
+                    <div className="space-y-2 pt-1 border-t border-obs-text/5 font-sans">
+                      <span className="text-[7.5px] text-obs-muted uppercase font-black tracking-widest block mb-1">Color y Alertas de Tiempo</span>
+                      <div className="grid grid-cols-2 gap-2">
+                        {/* Tiempo de aviso (Tiempo Ámbar) */}
+                        <div className="space-y-1 bg-obs-dark-1/25 p-1.5 rounded border border-obs-border/30">
+                          <label className="text-[7.5px] text-obs-muted uppercase font-bold block">Tiempo de aviso (Tiempo ámbar)</label>
+                          <div className="flex gap-1.5 items-center">
+                            <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border flex-1">
+                              <input 
+                                type="color" 
+                                value={externalScreenSettings.timerAmberColor ?? '#f59e0b'}
+                                onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerAmberColor: e.target.value })}
+                                className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
+                              />
+                              <span className="text-[8px] text-obs-text font-mono truncate">{externalScreenSettings.timerAmberColor ?? '#f59e0b'}</span>
+                            </div>
+                            <div className="flex items-center gap-1 bg-obs-bg border border-obs-border rounded p-1 w-14 shrink-0">
+                              <input 
+                                type="number" 
+                                value={externalScreenSettings.timerAmberSeconds ?? 30}
+                                onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerAmberSeconds: parseInt(e.target.value) || 30 })}
+                                className="w-full bg-transparent border-0 text-[10px] text-obs-text outline-none font-mono text-center font-bold"
+                              />
+                              <span className="text-[7.5px] text-obs-muted pr-0.5">s</span>
+                            </div>
                           </div>
                         </div>
-                        {/* Red threshold config */}
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <label className="text-[7px] text-red-500 uppercase font-bold">Aviso 10s</label>
-                            <input 
-                              type="color" 
-                              value={externalScreenSettings.timerRedColor ?? '#ef4444'}
-                              onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerRedColor: e.target.value })}
-                              className="w-4 h-4 bg-transparent border-0 cursor-pointer"
-                            />
-                          </div>
-                          <div className="flex items-center justify-between bg-obs-dark-1 p-1.5 rounded border border-obs-dark-2">
-                            <span className="text-[7px] uppercase font-bold text-obs-muted">Parpadeo</span>
-                            <button 
-                              onClick={() => onUpdateExternalScreen({ ...externalScreenSettings, timerBlinkRedEnabled: !(externalScreenSettings.timerBlinkRedEnabled ?? true) })}
-                              className={`w-8 h-4 rounded-full p-0.5 transition-colors relative ${externalScreenSettings.timerBlinkRedEnabled !== false ? 'bg-obs-accent' : 'bg-stone-700'}`}
-                            >
-                              <div className={`w-3 h-3 bg-white rounded-full transition-transform duration-200 ${externalScreenSettings.timerBlinkRedEnabled !== false ? 'translate-x-4' : 'translate-x-0'}`} />
-                            </button>
+
+                        {/* Tiempo Límite (Tiempo Rojo) */}
+                        <div className="space-y-1 bg-obs-dark-1/25 p-1.5 rounded border border-obs-border/30 font-sans">
+                          <label className="text-[7.5px] text-obs-muted uppercase font-bold block">Tiempo Límite (tiempo rojo)</label>
+                          <div className="flex gap-1.5 items-center font-sans">
+                            <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border flex-1">
+                              <input 
+                                type="color" 
+                                value={externalScreenSettings.timerRedColor ?? '#ef4444'}
+                                onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerRedColor: e.target.value })}
+                                className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
+                              />
+                              <span className="text-[8px] text-obs-text font-mono truncate font-sans">{externalScreenSettings.timerRedColor ?? '#ef4444'}</span>
+                            </div>
+                            <div className="flex items-center gap-1 bg-obs-bg border border-obs-border rounded p-1 w-14 shrink-0 font-sans">
+                              <input 
+                                type="number" 
+                                value={externalScreenSettings.timerRedSeconds ?? 10}
+                                onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerRedSeconds: parseInt(e.target.value) || 10 })}
+                                className="w-full bg-transparent border-0 text-[10px] text-obs-text outline-none font-mono text-center font-bold"
+                              />
+                              <span className="text-[7.5px] text-obs-muted pr-0.5 font-sans">s</span>
+                            </div>
                           </div>
                         </div>
                       </div>
                     </div>
 
                     {/* Color de texto y fondo */}
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2 font-sans">
                       <div className="space-y-1">
                         <label className="text-[7px] text-obs-muted uppercase font-bold">Color Texto</label>
                         <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border">
@@ -4951,7 +5198,7 @@ const Inspector = React.memo(({
                           <span className="text-[8px] text-obs-text font-mono truncate">{externalScreenSettings.timerColor ?? '#ff0000'}</span>
                         </div>
                       </div>
-                      <div className="space-y-1">
+                      <div className="space-y-1 font-sans">
                         <label className="text-[7px] text-obs-muted uppercase font-bold">Color Fondo</label>
                         <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border">
                           <input 
@@ -4962,28 +5209,6 @@ const Inspector = React.memo(({
                           />
                           <span className="text-[8px] text-obs-text font-mono truncate">{externalScreenSettings.timerBgColor ?? '#000000'}</span>
                         </div>
-                      </div>
-                    </div>
-
-                    {/* Alertas de color */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[7px] text-amber-500 uppercase font-bold">Tiempo Ámbar (s)</label>
-                        <input 
-                          type="number" 
-                          value={externalScreenSettings.timerAmberSeconds ?? 30}
-                          onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerAmberSeconds: parseInt(e.target.value) || 30 })}
-                          className="w-full bg-obs-bg border border-obs-border rounded p-1 text-[9px] text-obs-text outline-none focus:border-obs-accent font-mono text-center font-bold"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[7px] text-rose-500 uppercase font-bold">Tiempo Rojo (s)</label>
-                        <input 
-                          type="number" 
-                          value={externalScreenSettings.timerRedSeconds ?? 10}
-                          onChange={(e) => onUpdateExternalScreen({ ...externalScreenSettings, timerRedSeconds: parseInt(e.target.value) || 10 })}
-                          className="w-full bg-obs-bg border border-obs-border rounded p-1 text-[9px] text-obs-text outline-none focus:border-obs-accent font-mono text-center font-bold"
-                        />
                       </div>
                     </div>
 
@@ -7208,6 +7433,7 @@ export default function App() {
 
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
   const [programClipId, setProgramClipId] = useState<string | null>(null);
+  const [programPlayIndex, setProgramPlayIndex] = useState(0);
   const [outputPrograms, setOutputPrograms] = useState<Record<string, string | null>>({});
   const [outputTransitionTargets, setOutputTransitionTargets] = useState<Record<string, string | null>>({});
   const [outputOffStates, setOutputOffStates] = useState<Record<string, boolean>>({});
@@ -7725,6 +7951,7 @@ export default function App() {
   const outputWindowsRef = useRef<Record<string, Window | null>>({});
   const [launchedScreens, setLaunchedScreens] = useState<Record<string, boolean>>({});
   const outputChannel = useRef<BroadcastChannel | null>(null);
+  const lastLayerEndTimesRef = useRef<Record<string, number>>({});
 
   // Close external screens on unmount
   useEffect(() => {
@@ -7858,12 +8085,23 @@ export default function App() {
   // Handle requests from output windows
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'UPDATE_TIMER_SETTINGS') {
+        const { screenId, updates } = event.data.payload;
+        setAllScreenSettings(prev => ({
+          ...prev,
+          [screenId]: {
+            ...(prev[screenId] || DEFAULT_SCREEN_SETTINGS),
+            ...updates
+          }
+        }));
+      }
       if (event.data.type === 'REQUEST_SYNC') {
         outputChannel.current?.postMessage({
           type: 'SYNC_STATE',
           payload: {
             programClipId,
             previewClipId,
+            programPlayIndex,
             outputPrograms,
             outputTransitionTargets,
             outputOffStates,
@@ -7911,6 +8149,7 @@ export default function App() {
              setOutputPrograms(prev => ({ ...prev, [outputId]: nextClip.id }));
              if (outputId === activeOutputId) {
                 setProgramClipId(nextClip.id);
+                setProgramPlayIndex(p => p + 1);
              }
            }
         } else {
@@ -7926,8 +8165,8 @@ export default function App() {
         }
       }
       if (event.data.type === 'LAYER_CLIP_ENDED') {
-        const { layerId, clipId } = event.data.payload;
-        handleLayerEnded(layerId, clipId);
+        const { layerId, clipId, sequenceCounter } = event.data.payload;
+        handleLayerEnded(layerId, clipId, sequenceCounter);
       }
     };
     
@@ -7938,7 +8177,8 @@ export default function App() {
     };
   }, [
     programClipId, 
-    previewClipId, 
+    previewClipId,
+    programPlayIndex,
     outputTransitionTargets, 
     outputPrograms, 
     outputOffStates, 
@@ -8385,9 +8625,24 @@ export default function App() {
   const [columnUIStates, setColumnUIStates] = useState<Record<number, 'play' | 'stop' | null>>({});
   const [activeLayerTriggers, setActiveLayerTriggers] = useState<Record<string, 'play' | 'stop' | null>>({});
 
-  const handleLayerEnded = (layerId: string, clipId: string) => {
+  const handleLayerEnded = (layerId: string, clipId: string, seqCounter?: number) => {
+    const lastTime = lastLayerEndTimesRef.current[layerId] || 0;
+    const now = Date.now();
+    if (now - lastTime < 600) {
+      console.log("Layer ending transition ignored (throttled):", layerId);
+      return;
+    }
+    lastLayerEndTimesRef.current[layerId] = now;
+
     setLayers(prev => prev.map(layer => {
       if (layer.id !== layerId) return layer;
+      
+      // If sequenceCounter is provided, ensure it matches the layer's current sequenceCounter!
+      if (seqCounter !== undefined && (layer.sequenceCounter || 0) !== seqCounter) {
+        console.log("Layer ended ignored due to sequenceCounter mismatch:", layerId, "layer seq:", layer.sequenceCounter, "event seq:", seqCounter);
+        return layer;
+      }
+      
       if (layer.activeClipId !== clipId) return layer; // ALREADY HANDLED
       
       // Mode Single: Only loop the current clip indefinitely if loopVideo is true
@@ -8405,12 +8660,22 @@ export default function App() {
       const nextClipIndex = layer.slots.findIndex((s, idx) => idx > currentSlotIndex && s !== null);
       
       if (nextClipIndex !== -1) {
-        return { ...layer, activeClipId: layer.slots[nextClipIndex]!.id, activeSlotIndex: nextClipIndex };
+        return { 
+          ...layer, 
+          activeClipId: layer.slots[nextClipIndex]!.id, 
+          activeSlotIndex: nextClipIndex,
+          sequenceCounter: (layer.sequenceCounter || 0) + 1 
+        };
       } else if (layer.loop !== false) {
         // Mode Sequence: Find first clip to loop back
         const firstSlotIndex = layer.slots.findIndex(s => s !== null);
         if (firstSlotIndex !== -1) {
-          return { ...layer, activeClipId: layer.slots[firstSlotIndex]!.id, activeSlotIndex: firstSlotIndex };
+          return { 
+            ...layer, 
+            activeClipId: layer.slots[firstSlotIndex]!.id, 
+            activeSlotIndex: firstSlotIndex,
+            sequenceCounter: (layer.sequenceCounter || 0) + 1 
+          };
         }
         return { ...layer, activeClipId: null, activeSlotIndex: null, isPlaying: false };
       } else {
@@ -8939,6 +9204,7 @@ export default function App() {
         onUpdate: (latest) => setCrossfaderValue(latest),
         onComplete: () => {
           setProgramClipId(nextClip.id);
+          setProgramPlayIndex(p => p + 1);
           setProgramPlaylistState({ id: playlist.id, index: nextIndex });
           setOutputPrograms(prev => ({ ...prev, [activeOutputId]: nextClip.id }));
           setCrossfaderValue(0);
@@ -9255,9 +9521,14 @@ export default function App() {
   // Check for output mode
   const params = new URLSearchParams(window.location.search || window.location.hash.substring(window.location.hash.indexOf('?') !== -1 ? window.location.hash.indexOf('?') : window.location.hash.length));
   const isOutputMode = params.get('mode') === 'output';
+  const isFloatingTimerMode = params.get('mode') === 'floating_timer';
 
   if (isOutputMode) {
     return <OutputView />;
+  }
+
+  if (isFloatingTimerMode) {
+    return <FloatingTimerPopoutView />;
   }
 
   return (
@@ -10217,6 +10488,7 @@ export default function App() {
                     clips={clips}
                     programClipId={programClipId}
                     previewClipId={previewClipId}
+                    programPlayIndex={programPlayIndex}
                     targetClipId={outputTransitionTargets[activeOutputId]}
                     hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
                     crossfaderValue={crossfaderValue}
@@ -10775,7 +11047,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-obs-accent shrink-0">
                   <Clock size={13} className="animate-[pulse_1.5s_infinite]" />
                   <span className="text-[9.5px] font-black uppercase tracking-wider truncate max-w-[180px]">
-                    COUNTDOWN: {sId === 'primary' ? 'Salida Principal' : sId === 'default' ? 'Global' : externalScreens.find(s => s.id === sId)?.label || sId}
+                    COUNTDOWN: {outputs.find((o: any) => o.physicalScreenId === sId || o.id === sId)?.name || (sId === 'primary' ? 'Salida Principal' : sId === 'default' ? 'Global' : `Salida ${sId}`)}
                   </span>
                 </div>
                 <button 
@@ -10797,6 +11069,7 @@ export default function App() {
               {/* Timer Display Body */}
               <PresenterTimerDisplay 
                 settings={settings} 
+                screenId={sId}
                 onUpdate={(updates) => {
                   setAllScreenSettings(prev => ({
                     ...prev,
