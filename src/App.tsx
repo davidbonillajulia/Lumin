@@ -2190,8 +2190,8 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
                earlyEndTriggered.current = true;
                onEndedRef.current?.();
              }
-           } else if (isLooping && activePerf.loopMode !== 'standard') {
-             // Seamless sub-frame looper: seeks early to prevent browser thread freeze & black frames
+           } else if (isLooping && !video.loop && activePerf.loopMode !== 'standard') {
+             // Seamless sub-frame looper: seeks early to prevent browser thread freeze & black frames (only do this if native loop is disabled)
              if (remaining > 0 && remaining <= 0.08) {
                video.currentTime = startTime !== undefined ? startTime : (clip.currentTime !== undefined ? clip.currentTime : 0);
                video.play().catch(() => {});
@@ -2201,6 +2201,14 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
       };
       
       video.addEventListener('timeupdate', handleTimeUpdate);
+
+      const handleEndedNative = () => {
+        if (!earlyEndTriggered.current) {
+          earlyEndTriggered.current = true;
+          onEndedRef.current?.();
+        }
+      };
+      video.addEventListener('ended', handleEndedNative);
       
       const handleMetadata = () => {
         const savedTime = (window as any).__luminVideoTimes?.[clip.id];
@@ -2263,6 +2271,7 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
          video.removeEventListener('timeupdate', handleTimeUpdate);
          video.removeEventListener('loadedmetadata', handleMetadata);
          video.removeEventListener('canplay', handleReady);
+         video.removeEventListener('ended', handleEndedNative);
          ch.removeEventListener('message', handleBroadcastMessage);
       };
     }
@@ -2358,18 +2367,7 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
     }
   }, [clip.speed, clip.id]);
 
-  // Aggressive Resource Cleanup
-  useEffect(() => {
-    return () => {
-      const v = videoRef.current;
-      if (v) {
-        v.pause();
-        v.src = "";
-        v.load();
-        v.remove(); // Remove from DOM intent if possible
-      }
-    };
-  }, [clip.id]);
+
 
   const colorBalance = clip.colorBalance || { r: 1, g: 1, b: 1 };
   const brightness = clip.brightness ?? 1;
@@ -2493,12 +2491,11 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
                   willChange: 'transform',
                   imageRendering: activePerf.highResOptimization ? 'auto' : 'pixelated'
                 }}
-                autoPlay 
                 muted={true}
                 loop={clip.type === 'video' ? (loopOverride !== undefined ? loopOverride : clip.loop !== false) : true} 
                 playsInline
                 crossOrigin="anonymous"
-                preload={activePerf.bufferingMode !== 'normal' ? 'auto' : 'metadata'}
+                preload={isProgram || clip.isPlaying || activePerf.bufferingMode === 'ultra_preload' ? "auto" : "metadata"}
                 onCanPlay={() => {
                   setIsReady(true);
                   setFirstFrameRendered(true);
@@ -4957,8 +4954,27 @@ const Inspector = React.memo(({
                 <button
                   onClick={() => {
                     const screenKey = selectedScreenId || 'primary';
-                    const url = `/?mode=floating_timer&screenId=${screenKey}`;
-                    window.open(url, `FloatingTimer_${screenKey}`, 'width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no');
+                    const targetUrl = `/?mode=floating_timer&screenId=${screenKey}`;
+                    
+                    if (window.electron && window.electron.launchOutput) {
+                      window.electron.launchOutput({
+                        screenId: `timer_${screenKey}`,
+                        url: targetUrl
+                      });
+                    } else {
+                      const url = new URL(window.location.href);
+                      if (url.search) {
+                        url.searchParams.set('mode', 'floating_timer');
+                        url.searchParams.set('screenId', screenKey);
+                      } else if (url.hash) {
+                        const hashBase = url.hash.split('?')[0];
+                        url.hash = `${hashBase}?mode=floating_timer&screenId=${screenKey}`;
+                      } else {
+                        url.searchParams.set('mode', 'floating_timer');
+                        url.searchParams.set('screenId', screenKey);
+                      }
+                      window.open(url.toString(), `FloatingTimer_${screenKey}`, 'width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no');
+                    }
                   }}
                   className="px-2.5 py-1.5 rounded-md text-white font-black uppercase text-[8px] transition-all bg-indigo-600 border-b-2 border-indigo-800 hover:bg-indigo-500 active:scale-95 flex items-center gap-1 shrink-0 cursor-pointer"
                   title="Abrir en ventana externa independiente"
@@ -7492,7 +7508,26 @@ export default function App() {
       clips,
       deckClips,
       layers,
-      perfSettings
+      perfSettings,
+      playlists,
+      pipLayers,
+      allScreenSettings,
+      outputs,
+      outputPrograms,
+      outputTransitionTargets,
+      outputOffStates,
+      masterVolume,
+      programVolume,
+      layerOutputs,
+      crossfaderValue,
+      previewClipId,
+      programClipId,
+      activeOutputId,
+      selectedScreenId,
+      isLive,
+      isTransmitting,
+      currentDeck,
+      isDarkMode
     }, null, 2);
   };
 
@@ -7570,24 +7605,86 @@ export default function App() {
         throw new Error("El archivo no tiene el formato de configuración de LUMIN válido.");
       }
       
+      // Helper function to reconstruct URL from path in native mode
+      const getUrlFromPath = (path: string) => {
+        try {
+          const normalized = path.replace(/\\/g, '/');
+          const parts = normalized.split('/');
+          const encodedParts = parts.map((part: string, index: number) => {
+            if (index === 0 && part.endsWith(':')) return part;
+            return encodeURIComponent(part);
+          });
+          let joined = encodedParts.join('/');
+          if (!joined.startsWith('/')) joined = '/' + joined;
+          return `file://${joined}`;
+        } catch (e) {
+          return null;
+        }
+      };
+
       // Re-estructurar files para la sesión local
-      const reconstructedFiles = parsedData.libraryFiles.map((f: any) => ({
-        name: f.name,
-        type: f.type,
-        url: f.url,
-        file: f.file ? { path: f.file.path, name: f.file.name } : null
-      }));
+      // En modo nativo, regeneramos las URLs a partir de los paths absolutos guardados
+      const reconstructedFiles = parsedData.libraryFiles.map((f: any) => {
+        let newUrl = f.url;
+        if (f.file && f.file.path && (window as any).electron) {
+          const nativeUrl = getUrlFromPath(f.file.path);
+          if (nativeUrl) newUrl = nativeUrl;
+        }
+        return {
+          name: f.name,
+          type: f.type,
+          url: newUrl,
+          file: f.file ? { path: f.file.path, name: f.file.name } : null
+        };
+      });
       
+      // Crear mapa de URLs antiguas a nuevas para actualizar clips
+      const urlMap: Record<string, string> = {};
+      parsedData.libraryFiles.forEach((oldF: any, idx: number) => {
+        urlMap[oldF.url] = reconstructedFiles[idx].url;
+      });
+
+      // Actualizar URLs de los clips basándose en el mapa
+      const reconstructedClips = parsedData.clips.map((clip: any) => ({
+        ...clip,
+        url: urlMap[clip.url] || clip.url
+      }));
+
+      // Actualizar deckClips
+      const reconstructedDeckClips = (parsedData.deckClips || []).map((clip: any) => ({
+        ...clip,
+        url: urlMap[clip.url] || clip.url
+      }));
+
+      // Aplicar estados principales
       setLibraryFiles(reconstructedFiles);
-      setClips(parsedData.clips);
+      setClips(reconstructedClips);
+      setDeckClips(reconstructedDeckClips);
       setLayers(parsedData.layers);
       
-      if (parsedData.deckClips) {
-        setDeckClips(parsedData.deckClips);
-      }
-      if (parsedData.perfSettings) {
-        setPerfSettings(parsedData.perfSettings);
-      }
+      // Restaurar configuraciones de pantalla y sistema
+      if (parsedData.perfSettings) setPerfSettings(parsedData.perfSettings);
+      if (parsedData.playlists) setPlaylists(parsedData.playlists);
+      if (parsedData.pipLayers) setPipLayers(parsedData.pipLayers);
+      if (parsedData.allScreenSettings) setAllScreenSettings(parsedData.allScreenSettings);
+      if (parsedData.outputs) setOutputs(parsedData.outputs);
+      if (parsedData.outputPrograms) setOutputPrograms(parsedData.outputPrograms);
+      if (parsedData.outputTransitionTargets) setOutputTransitionTargets(parsedData.outputTransitionTargets);
+      if (parsedData.outputOffStates) setOutputOffStates(parsedData.outputOffStates);
+      if (parsedData.layerOutputs) setLayerOutputs(parsedData.layerOutputs);
+      
+      // Restaurar variables globales
+      if (parsedData.masterVolume !== undefined) setMasterVolume(parsedData.masterVolume);
+      if (parsedData.programVolume !== undefined) setProgramVolume(parsedData.programVolume);
+      if (parsedData.crossfaderValue !== undefined) setCrossfaderValue(parsedData.crossfaderValue);
+      if (parsedData.previewClipId !== undefined) setPreviewClipId(parsedData.previewClipId);
+      if (parsedData.programClipId !== undefined) setProgramClipId(parsedData.programClipId);
+      if (parsedData.activeOutputId !== undefined) setActiveOutputId(parsedData.activeOutputId);
+      if (parsedData.selectedScreenId !== undefined) setSelectedScreenId(parsedData.selectedScreenId);
+      if (parsedData.isLive !== undefined) setIsLive(parsedData.isLive);
+      if (parsedData.isTransmitting !== undefined) setIsTransmitting(parsedData.isTransmitting);
+      if (parsedData.currentDeck !== undefined) setCurrentDeck(parsedData.currentDeck);
+      if (parsedData.isDarkMode !== undefined) setIsDarkMode(parsedData.isDarkMode);
       
       setCurrentLuminPath(filePath);
       alert(`Proyecto cargado con éxito: ${filePath}`);
@@ -11081,8 +11178,27 @@ export default function App() {
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button 
                     onClick={() => {
-                      const url = `/?mode=floating_timer&screenId=${sId}`;
-                      window.open(url, `FloatingTimer_${sId}`, 'width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no');
+                      const targetUrl = `/?mode=floating_timer&screenId=${sId}`;
+                      
+                      if (window.electron && window.electron.launchOutput) {
+                        window.electron.launchOutput({
+                          screenId: `timer_${sId}`,
+                          url: targetUrl
+                        });
+                      } else {
+                        const url = new URL(window.location.href);
+                        if (url.search) {
+                          url.searchParams.set('mode', 'floating_timer');
+                          url.searchParams.set('screenId', sId);
+                        } else if (url.hash) {
+                          const hashBase = url.hash.split('?')[0];
+                          url.hash = `${hashBase}?mode=floating_timer&screenId=${sId}`;
+                        } else {
+                          url.searchParams.set('mode', 'floating_timer');
+                          url.searchParams.set('screenId', sId);
+                        }
+                        window.open(url.toString(), `FloatingTimer_${sId}`, 'width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no');
+                      }
                     }}
                     className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
                     title="Abrir en Ventana Independiente fuera del navegador"
