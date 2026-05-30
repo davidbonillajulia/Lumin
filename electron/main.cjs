@@ -41,6 +41,16 @@ app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('enable-hardware-overlays', 'single-fullscreen,unscaled');
 // Se elimina disable-gpu-vsync para activar V-Sync nativo y eliminar las líneas horizontales (screen tearing) en los monitores/proyectores.
 
+// DIRECTIVAS CRÍTICAS PARA EVITAR CORTES Y CONGELAMIENTOS EN WINDOWS NATIVO MULTIPANTALLA:
+// 1. Evita que Windows deje de renderizar las salidas secundarias fullscreen cuando pierden el foco.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// 2. Impide que Chromium estrangule la CPU/GPU y el temporizador JS de las ventanas de salida en segundo plano.
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// 3. Fuerza la aceleración de decodificación de vídeo por hardware en Chromium.
+app.commandLine.appendSwitch('enable-accelerated-video-decode');
+
 // Configurar la API gráfica (DirectX 11, DirectX 12, OpenGL o Vulkan) de Windows de forma nativa
 if (savedPerfSettings.renderingBackend === 'directx12') {
   app.commandLine.appendSwitch('use-angle', 'd3d12');
@@ -658,37 +668,81 @@ try {
   });
 
   ipcMain.on('launch-output', (event, { screenId, url }) => {
-    const displays = screen.getAllDisplays();
-    const targetDisplay = displays.find(d => d.id.toString() === screenId) || screen.getPrimaryDisplay();
+    const isTimerWindow = (url && url.includes('mode=floating_timer')) || (screenId && screenId.startsWith('timer_'));
 
-    const outputWindow = new BrowserWindow({
-      x: targetDisplay.bounds.x,
-      y: targetDisplay.bounds.y,
-      width: targetDisplay.bounds.width,
-      height: targetDisplay.bounds.height,
-      fullscreen: true,
-      frame: false,
-      title: `LUMIN Output - ${targetDisplay.label}`,
-      backgroundColor: '#000000',
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, 'preload.cjs'),
-        webSecurity: false, // Allow loading local files
-      },
-    });
+    if (isTimerWindow) {
+      // Timer controller: compact, framed, always-on-top window centered on primary display
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
+      const winW = 380;
+      const winH = 260;
 
-    if (isDev) {
-      outputWindow.loadURL(`http://localhost:3000${url}`);
+      const outputWindow = new BrowserWindow({
+        x: primaryDisplay.workArea.x + Math.round((screenW - winW) / 2),
+        y: primaryDisplay.workArea.y + Math.round((screenH - winH) / 2),
+        width: winW,
+        height: winH,
+        fullscreen: false,
+        frame: true,
+        resizable: true,
+        alwaysOnTop: true,
+        title: 'LUMIN Timer Controller',
+        backgroundColor: '#000000',
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: path.join(__dirname, 'preload.cjs'),
+          webSecurity: false,
+        },
+      });
+
+      outputWindow.setMenu(null);
+
+      if (isDev) {
+        outputWindow.loadURL(`http://localhost:3000${url}`);
+      } else {
+        outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url });
+      }
+
+      outputWindows.set(screenId || 'primary', outputWindow);
+
+      outputWindow.on('closed', () => {
+        outputWindows.delete(screenId || 'primary');
+      });
     } else {
-      outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url });
-    }
-    
-    outputWindows.set(screenId || 'primary', outputWindow);
+      // Video output: fullscreen on the target display
+      const displays = screen.getAllDisplays();
+      const targetDisplay = displays.find(d => d.id.toString() === screenId) || screen.getPrimaryDisplay();
 
-    outputWindow.on('closed', () => {
-      outputWindows.delete(screenId || 'primary');
-    });
+      const outputWindow = new BrowserWindow({
+        x: targetDisplay.bounds.x,
+        y: targetDisplay.bounds.y,
+        width: targetDisplay.bounds.width,
+        height: targetDisplay.bounds.height,
+        fullscreen: true,
+        frame: false,
+        title: `LUMIN Output - ${targetDisplay.label}`,
+        backgroundColor: '#000000',
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: path.join(__dirname, 'preload.cjs'),
+          webSecurity: false, // Allow loading local files
+        },
+      });
+
+      if (isDev) {
+        outputWindow.loadURL(`http://localhost:3000${url}`);
+      } else {
+        outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url });
+      }
+
+      outputWindows.set(screenId || 'primary', outputWindow);
+
+      outputWindow.on('closed', () => {
+        outputWindows.delete(screenId || 'primary');
+      });
+    }
   });
 
   ipcMain.on('close-output', (event, screenId) => {
