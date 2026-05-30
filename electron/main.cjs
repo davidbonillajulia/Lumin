@@ -50,6 +50,8 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 // 3. Fuerza la aceleración de decodificación de vídeo por hardware en Chromium.
 app.commandLine.appendSwitch('enable-accelerated-video-decode');
+app.commandLine.appendSwitch('enable-gpu-memory-buffer-video-frames');
+app.commandLine.appendSwitch('enable-hardware-overlays');
 
 // Configurar la API gráfica (DirectX 11, DirectX 12, OpenGL o Vulkan) de Windows de forma nativa
 if (savedPerfSettings.renderingBackend === 'directx12') {

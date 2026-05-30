@@ -2817,45 +2817,13 @@ const VideoLayer = ({
           } catch (err) {}
         }
 
-        // Early transition logic: trigger onEnded slightly before the video physically ends
-        if (video.duration) {
-          const remaining = video.duration - video.currentTime;
-          const isLooping =
-            loopOverride !== undefined ? loopOverride : clip.loop !== false;
-          // If it's not looping, trigger early
-          if (!isLooping && !earlyEndTriggered.current) {
-            const actualTransition = transitionType || "fade";
-            const fadeTriggerTime =
-              actualTransition !== "cut" ? (transitionDuration || 0.4) / 2 : 0;
-            // Add 0.1s tolerance to make sure we don't freeze early on slow decoding
-            if (remaining > 0 && remaining <= fadeTriggerTime + 0.1) {
-              earlyEndTriggered.current = true;
-              onEndedRef.current?.();
-            }
-          } else if (
-            isLooping &&
-            !video.loop &&
-            activePerf.loopMode !== "standard"
-          ) {
-            // Seamless sub-frame looper: seeks early to prevent browser thread freeze & black frames (only do this if native loop is disabled)
-            if (
-              remaining > 0 &&
-              remaining <= 0.08 &&
-              !earlyLoopTriggered.current
-            ) {
-              earlyLoopTriggered.current = true;
-              video.currentTime =
-                startTime !== undefined
-                  ? startTime
-                  : clip.currentTime !== undefined
-                    ? clip.currentTime
-                    : 0;
-              video.play().catch(() => {});
-            } else if (video.currentTime > 0.2) {
-              earlyLoopTriggered.current = false;
-            }
+          // Early transition logic: disabled for troubleshooting as requested
+          if (video.duration) {
+            const remaining = video.duration - video.currentTime;
+            const isLooping =
+              loopOverride !== undefined ? loopOverride : clip.loop !== false;
+            // Native onEnded will handle the switch with duration 0 transitions
           }
-        }
       };
 
       video.addEventListener("timeupdate", handleTimeUpdate);
@@ -3137,17 +3105,15 @@ const VideoLayer = ({
       rotate: clip.transform.rotation,
       rotateX: clip.transform.rotationX,
       transition: {
-        duration: Math.min(1.5, transitionDuration || 0.4),
-        ease: "easeInOut",
-        opacity: { duration: Math.min(1.5, (transitionDuration || 0.4) * 0.8) },
+        duration: 0,
+        ease: "linear",
       },
     },
     exit: {
       opacity: 0,
       zIndex: -1,
       transition: {
-        duration: Math.min(1.5, transitionDuration || 0.4),
-        ease: "easeInOut",
+        duration: 0,
       },
     },
   };
@@ -6578,6 +6544,34 @@ const Inspector = React.memo(
 
 
 
+                <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">
+                      Mando Flotante
+                    </span>
+                    <span className="text-[8px] text-obs-muted">
+                      Mando flotante arrastrable del ponente
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() =>
+                        onUpdateExternalScreen({
+                          ...externalScreenSettings,
+                          timerShowDraggableFloat:
+                            !externalScreenSettings.timerShowDraggableFloat,
+                        })
+                      }
+                      className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerShowDraggableFloat ? "bg-obs-accent" : "bg-obs-dark-1"}`}
+                      title="Mostrar mando flotante interno"
+                    >
+                      <div
+                        className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerShowDraggableFloat ? "translate-x-4.5" : "translate-x-0.5"}`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
                 {(externalScreenSettings.timerEnabled ||
                   externalScreenSettings.timerPreview) && (
                   <>
@@ -7093,16 +7087,14 @@ const Inspector = React.memo(
                         </filter>
                       </svg>
                       {clip.type === "video" ? (
-                        <video
+                        <HoverVideoPreview
                           src={clip.url}
+                          thumbnail={clip.thumbnail}
                           className={`w-full h-full ${clip.fitToScale ? "object-cover" : "object-contain"}`}
                           style={{
                             opacity: clip.opacity ?? 1,
                             filter: `brightness(${clip.brightness ?? 1}) contrast(${clip.contrast ?? 1}) saturate(${clip.saturation ?? 1}) url(#rgbBalanceClipPreview)`,
                           }}
-                          muted
-                          loop
-                          autoPlay
                         />
                       ) : clip.type === "videoinput" ? (
                         <div
@@ -7762,10 +7754,12 @@ const HoverVideoPreview = React.memo(
     src,
     thumbnail,
     className,
+    style,
   }: {
     src: string;
     thumbnail?: string;
     className?: string;
+    style?: React.CSSProperties;
   }) => {
     const [isHovered, setIsHovered] = useState(false);
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -7817,7 +7811,7 @@ const HoverVideoPreview = React.memo(
           loop
           playsInline
           preload="none"
-          style={{ display: isHovered ? "block" : "none" }}
+          style={{ ...style, display: isHovered ? "block" : "none" }}
         />
         {!isHovered &&
           (thumbnail ? (
@@ -7826,16 +7820,12 @@ const HoverVideoPreview = React.memo(
               className={className || "w-full h-full object-cover"}
               alt="Preview"
               referrerPolicy="no-referrer"
+              style={style}
             />
           ) : (
-            <video
-              src={`${src}#t=0.1`}
-              className={className || "w-full h-full object-cover"}
-              muted
-              playsInline
-              preload="metadata"
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
+            <div className="w-full h-full bg-obs-surface flex items-center justify-center">
+              <Play size={16} className="text-obs-muted opacity-20" />
+            </div>
           ))}
       </div>
     );
@@ -7878,13 +7868,16 @@ const LibraryMediaPreview = ({ file }: { file: any }) => {
 
   if (file.type === "videoinput") {
     return (
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="w-full h-full object-cover opacity-80 bg-obs-dark-1"
-      />
+      <div className="w-full h-full relative group">
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-full object-cover opacity-80 bg-obs-dark-1"
+        />
+        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors pointer-events-none" />
+      </div>
     );
   }
   if (file.type?.startsWith("video")) {
@@ -13985,19 +13978,8 @@ export default function App() {
                           selectedLibraryUrls.has(f.url),
                         );
                         if (!selectedFile) return null;
-                        if (selectedFile.type === "videoinput") {
+                        if (selectedFile.type === "videoinput" || selectedFile.type?.startsWith("video")) {
                           return <LibraryMediaPreview file={selectedFile} />;
-                        } else if (selectedFile.type.startsWith("video")) {
-                          return (
-                            <video
-                              key={selectedFile.url}
-                              src={selectedFile.url}
-                              className="w-full h-full object-contain"
-                              autoPlay
-                              muted
-                              loop
-                            />
-                          );
                         } else if (
                           selectedFile.type === "document" ||
                           selectedFile.type === "ppt" ||
@@ -14711,6 +14693,91 @@ export default function App() {
             }}
           />
         )}
+      </AnimatePresence>
+
+      {/* FLOATING WINDOW: CONTROL PANEL DE CONTADOR PARA EL PONENTE */}
+      <AnimatePresence>
+        {Object.entries(allScreenSettings).map(([sId, settings], index) => {
+          if (!settings.timerShowDraggableFloat) return null;
+
+          const pos = floatingTimerPos[sId] || {
+            x: 350 + index * 40,
+            y: 180 + index * 40,
+          };
+
+          return (
+            <motion.div
+              key={`float-timer-${sId}`}
+              drag
+              dragMomentum={false}
+              onDragEnd={(e, info) => {
+                const newX = pos.x + info.offset.x;
+                const newY = pos.y + info.offset.y;
+                setFloatingTimerPos((prev) => ({
+                  ...prev,
+                  [sId]: { x: newX, y: newY },
+                }));
+              }}
+              style={{
+                position: "absolute",
+                left: pos.x,
+                top: pos.y,
+                zIndex: 99999 + index,
+              }}
+              className="w-80 bg-obs-dark-1 border-2 border-obs-border rounded-xl shadow-2xl overflow-hidden font-sans select-none"
+            >
+              {/* Header (Drag handle) */}
+              <div className="flex items-center justify-between bg-obs-surface border-b border-obs-border p-2 cursor-move text-stone-200">
+                <div className="flex items-center gap-2 text-obs-accent shrink-0">
+                  <Clock size={13} className="animate-[pulse_1.5s_infinite]" />
+                  <span className="text-[9.5px] font-black uppercase tracking-wider truncate max-w-[180px]">
+                    COUNTDOWN:{" "}
+                    {outputs.find(
+                      (o: any) => o.physicalScreenId === sId || o.id === sId,
+                    )?.name ||
+                      (sId === "primary"
+                        ? "Salida Principal"
+                        : sId === "default"
+                          ? "Global"
+                          : `Salida ${sId}`)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => {
+                      setAllScreenSettings((prev) => ({
+                        ...prev,
+                        [sId]: {
+                          ...prev[sId],
+                          timerShowDraggableFloat: false,
+                        },
+                      }));
+                    }}
+                    className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
+                    title="Cerrar"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Timer Display Body */}
+              <PresenterTimerDisplay
+                settings={settings}
+                screenId={sId}
+                onUpdate={(updates) => {
+                  setAllScreenSettings((prev) => ({
+                    ...prev,
+                    [sId]: {
+                      ...(prev[sId] || DEFAULT_SCREEN_SETTINGS),
+                      ...updates,
+                    },
+                  }));
+                }}
+              />
+            </motion.div>
+          );
+        })}
       </AnimatePresence>
 
       {/* Performance & GPU Modal */}
