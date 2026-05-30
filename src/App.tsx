@@ -598,12 +598,9 @@ const ClipCard = React.memo(({ clip, onSelect, onDragStart, isDarkMode, isSelect
       }`}
     >
     {clip.type === 'video' ? (
-      <video 
+      <HoverVideoPreview 
         src={clip.url} 
         className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
-        muted
-        loop
-        playsInline
       />
     ) : clip.type === 'videoinput' ? (
       <LibraryMediaPreview file={clip} />
@@ -2095,6 +2092,9 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
     return () => {
       const video = videoRef.current;
       if (video) {
+        // Match the transition duration (with a small safety margin) instead of a hardcoded 2000ms delay.
+        // This prevents hardware decoders from stacking up during rapid switching.
+        const cleanDelay = Math.max(100, ((transitionDuration || 0.4) * 1000) + 100);
         setTimeout(() => {
           try {
             video.pause();
@@ -2102,10 +2102,10 @@ const VideoLayer = ({ clip, nextSrc, volume, masterVolume = 1, opacity, faderOpa
             video.removeAttribute('src');
             video.load();
           } catch (e) {}
-        }, 2000);
+        }, cleanDelay);
       }
     };
-  }, []);
+  }, [transitionDuration]);
 
   // Sync native video loop property directly when clip loop state changes
   useEffect(() => {
@@ -5742,14 +5742,156 @@ const Inspector = React.memo(({
   );
 });
 
-interface LibraryProps {
-  onAddClip: (files: any[]) => void;
-  isDarkMode: boolean;
-  libraryFiles: { name: string, type: string, url: string, file: File }[];
-  setLibraryFiles: React.Dispatch<React.SetStateAction<{ name: string, type: string, url: string, file: File }[]>>;
+interface MediaLibraryPanelProps {
+  onClose: () => void;
+  libraryFiles: any[];
+  onTriggerFile: (file: any) => void;
   selectedLibraryUrls: Set<string>;
   setSelectedLibraryUrls: React.Dispatch<React.SetStateAction<Set<string>>>;
 }
+
+const thumbnailCache = new Map<string, string>();
+
+const HoverVideoPreview = React.memo(({ src, className }: { src: string, className?: string }) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [thumbnail, setThumbnail] = useState<string | null>(() => thumbnailCache.get(src) || null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mountedRef = useRef(true);
+
+  // Generate thumbnail on mount (once per src)
+  useEffect(() => {
+    mountedRef.current = true;
+    if (thumbnailCache.has(src)) {
+      setThumbnail(thumbnailCache.get(src)!);
+      return;
+    }
+
+    const thumbVideo = document.createElement('video');
+    thumbVideo.preload = 'auto';
+    thumbVideo.muted = true;
+    thumbVideo.playsInline = true;
+    thumbVideo.crossOrigin = 'anonymous';
+    thumbVideo.src = src;
+
+    const handleSeeked = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(thumbVideo.videoWidth || 320, 320);
+        canvas.height = Math.min(thumbVideo.videoHeight || 180, 180);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(thumbVideo, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+          thumbnailCache.set(src, dataUrl);
+          if (mountedRef.current) {
+            setThumbnail(dataUrl);
+          }
+        }
+      } catch (e) {}
+      // Release decoder
+      thumbVideo.removeEventListener('seeked', handleSeeked);
+      thumbVideo.pause();
+      thumbVideo.src = '';
+      thumbVideo.removeAttribute('src');
+      thumbVideo.load();
+    };
+
+    const handleLoadedData = () => {
+      thumbVideo.currentTime = 0.1;
+    };
+
+    thumbVideo.addEventListener('loadeddata', handleLoadedData);
+    thumbVideo.addEventListener('seeked', handleSeeked);
+
+    // Timeout fallback: if video fails to load in 5s, abandon
+    const timeout = setTimeout(() => {
+      thumbVideo.removeEventListener('loadeddata', handleLoadedData);
+      thumbVideo.removeEventListener('seeked', handleSeeked);
+      thumbVideo.pause();
+      thumbVideo.src = '';
+      thumbVideo.removeAttribute('src');
+      thumbVideo.load();
+    }, 5000);
+
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(timeout);
+      thumbVideo.removeEventListener('loadeddata', handleLoadedData);
+      thumbVideo.removeEventListener('seeked', handleSeeked);
+      thumbVideo.pause();
+      thumbVideo.src = '';
+      thumbVideo.removeAttribute('src');
+      thumbVideo.load();
+    };
+  }, [src]);
+
+  // Handle hover playback
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (isHovered) {
+      video.src = src;
+      video.preload = 'auto';
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+      video.preload = 'none';
+      try {
+        video.src = '';
+        video.removeAttribute('src');
+        video.load();
+      } catch (e) {}
+    }
+  }, [isHovered, src]);
+
+  // Clean up decoder on unmount
+  useEffect(() => {
+    return () => {
+      const video = videoRef.current;
+      if (video) {
+        try {
+          video.pause();
+          video.src = '';
+          video.removeAttribute('src');
+          video.load();
+        } catch (e) {}
+      }
+    };
+  }, []);
+
+  return (
+    <div 
+      className="w-full h-full relative overflow-hidden"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <video 
+        ref={videoRef}
+        className={className}
+        muted
+        loop
+        playsInline
+        preload="none"
+        style={{ display: isHovered ? 'block' : 'none' }}
+      />
+      {!isHovered && (
+        thumbnail ? (
+          <img 
+            src={thumbnail} 
+            alt="" 
+            className={className || 'w-full h-full object-cover'}
+            draggable={false}
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-1/90 text-obs-text/60 gap-1.5 transition-all group-hover:bg-obs-dark-1/40">
+            <Film size={18} className="text-obs-accent animate-pulse" />
+            <span className="text-[6.5px] font-black uppercase tracking-wider font-sans">CARGANDO...</span>
+          </div>
+        )
+      )}
+    </div>
+  );
+});
 
 const LibraryMediaPreview = ({ file }: { file: any }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -5783,7 +5925,7 @@ const LibraryMediaPreview = ({ file }: { file: any }) => {
     return <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover opacity-80 bg-obs-dark-1" />;
   }
   if (file.type?.startsWith('video')) {
-    return <video src={file.url} className="w-full h-full object-cover opacity-80" muted />;
+    return <HoverVideoPreview src={file.url} className="w-full h-full object-cover opacity-80" />;
   }
   if (file.type?.includes('pdf') || file.name?.toLowerCase().endsWith('.pdf')) {
     return (
@@ -5801,6 +5943,15 @@ const LibraryMediaPreview = ({ file }: { file: any }) => {
   }
   return <img src={file.url} className="w-full h-full object-cover opacity-80" referrerPolicy="no-referrer" />;
 };
+
+interface LibraryProps {
+  onAddClip: (files: any[]) => void;
+  isDarkMode: boolean;
+  libraryFiles: any[];
+  setLibraryFiles: React.Dispatch<React.SetStateAction<any[]>>;
+  selectedLibraryUrls: Set<string>;
+  setSelectedLibraryUrls: React.Dispatch<React.SetStateAction<Set<string>>>;
+}
 
 const Library = React.memo(({ 
   onAddClip, 
@@ -6158,7 +6309,7 @@ const PlaylistsSection = React.memo(({
                     className="flex-shrink-0 w-36 aspect-video rounded border border-obs-border bg-obs-surface overflow-hidden relative group"
                   >
                     {clip.type === 'video' ? (
-                      <video src={clip.url} className="w-full h-full object-cover" muted />
+                      <HoverVideoPreview src={clip.url} className="w-full h-full object-cover" />
                     ) : clip.type === 'videoinput' ? (
                       <LibraryMediaPreview file={clip} />
                     ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (
@@ -6772,7 +6923,7 @@ const LayersSection = React.memo(({
                   {slot ? (
                     <>
                       {slot.type === 'video' ? (
-                        <video src={slot.url} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" muted />
+                        <HoverVideoPreview src={slot.url} className="w-full h-full object-cover opacity-60 group-hover:opacity-100" />
                       ) : slot.type === 'videoinput' ? (
                         <LibraryMediaPreview file={slot} />
                       ) : slot.type === 'document' || slot.type === 'ppt' || slot.name.toLowerCase().endsWith('.pdf') ? (
@@ -11089,7 +11240,7 @@ export default function App() {
                       </div>
                       <div className="w-24 aspect-video rounded overflow-hidden border border-obs-border bg-obs-dark-1">
                         {clip.type === 'video' ? (
-                          <video src={clip.url} className="w-full h-full object-cover" muted />
+                          <HoverVideoPreview src={clip.url} className="w-full h-full object-cover" />
                         ) : clip.type === 'videoinput' ? (
                           <LibraryMediaPreview file={clip} />
                         ) : clip.type === 'document' || clip.type === 'ppt' || clip.name.toLowerCase().endsWith('.pdf') ? (

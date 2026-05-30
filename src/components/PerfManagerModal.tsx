@@ -101,7 +101,10 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
       `[GPU] ${localSettings.renderingBackend === 'opengl' ? 'Modern OpenGL Core Profile' : 'Direct3D 11 Pipeline'} selected.`,
       `[GPU] VRAM persistent allocation mode: ${localSettings.persistentVram ? 'ENABLED' : 'DISABLED'}.`,
       `[GPU] Zero-Copy texture mappings buffer: ${localSettings.zeroCopyUpload ? 'ACTIVE (pinned memory)' : 'OFF'}.`,
-      `[DECODER] Hardware NVDEC (NVIDIA Video Decoder) initialized successfully.`,
+      `[WINDOWS] Window Occlusion Tracker Bypass: ENABLED (CalculateNativeWinOcclusion disabled)`,
+      `[CHROMIUM] Renderer Backgrounding Prevention: ACTIVE (unthrottled JS/timers for displays)`,
+      `[DECODER] Hardware D3D11/NVDEC (NVIDIA Video Decoder) initialized successfully.`,
+      `[DECODER] Thumbnail Release Strategy: DYNAMIC HOVER-TO-PLAY (zero decoder leaks)`,
       `[DECODER] Thread Pool size is set to ${localSettings.maxThreads} worker cores.`,
       `[BUFFER] Frame pre-load cache active: ${localSettings.bufferingMode}. Buffer size: ${localSettings.preBufferFrames} frames.`,
       `[WATCHDOG] Monitoring live outputs. Process recovery pool ONLINE.`,
@@ -116,10 +119,14 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
       setRam(prev => Math.min(4.8, Math.max(1.9, prev + (Math.random() - 0.5) * 0.05)));
 
       // Random logger lines
-      const components = ['NVDEC', 'VRAM', 'WATCHDOG', 'ENGINE', 'FRAME_PACE'];
+      const components = ['D3D11', 'VRAM', 'WATCHDOG', 'ENGINE', 'FRAME_PACE', 'WINDOWS', 'DECODER'];
       const actions = [
         'Sync frame pacing matched perfectly with output V-Sync override',
-        'Direct DMA Zero-Copy texture uploaded in 0.04ms',
+        'Direct DMA Zero-Copy texture uploaded in 0.02ms',
+        'Bypassed occlusion track for secondary display window fullscreen',
+        'Background JS thread unthrottled on physical display outputs',
+        'Released inactive thumbnail video hardware decoder dynamically',
+        'Hover video preview element created and primed for immediate play',
         'Frame buffer pre-fetch thread fetched next 4 steps',
         'Watchdog checked active video feed: OK',
         'VRAM persistent memory blocks sweep: 0 leaking blocks',
@@ -544,16 +551,16 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
 
                 <div className="grid grid-cols-3 gap-3">
                   <div className="bg-obs-surface p-3 rounded border border-obs-border text-center space-y-1">
-                    <span className="text-[9px] text-white uppercase font-black">HAP / DXV</span>
-                    <p className="text-[7.5px] text-obs-muted">Intra-frame nativo para pantallas masivas en directo y mapping.</p>
+                    <span className="text-[9px] text-white uppercase font-black">H.264 (Short GOP)</span>
+                    <p className="text-[7.5px] text-obs-muted">MP4 con fotogramas clave constantes. Decodificación D3D11 a 60 FPS.</p>
                   </div>
                   <div className="bg-obs-surface p-3 rounded border border-obs-border text-center space-y-1">
-                    <span className="text-[9px] text-white uppercase font-black">ProRes Proxy</span>
-                    <p className="text-[7.5px] text-obs-muted">Excelente balance de peso/latencia para cambios inmediatos.</p>
+                    <span className="text-[9px] text-white uppercase font-black">VP9 (WebM Alpha)</span>
+                    <p className="text-[7.5px] text-obs-muted">Ideal para bucles y transparencias. Decodificación nativa en GPU.</p>
                   </div>
                   <div className="bg-obs-surface p-3 rounded border border-obs-border text-center space-y-1">
-                    <span className="text-[9px] text-white uppercase font-black">NotchLC</span>
-                    <p className="text-[7.5px] text-obs-muted">Compresión de nivel profesional a 10 bits de color intacto.</p>
+                    <span className="text-[9px] text-white uppercase font-black">AV1 (Next-Gen)</span>
+                    <p className="text-[7.5px] text-obs-muted">Ultra alta fidelidad a 4K con decodificación dedicada en GPUs modernas.</p>
                   </div>
                 </div>
 
@@ -566,7 +573,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
 
                   <div className="text-[8px] text-obs-muted border-b border-obs-border/50 pb-2 flex justify-between">
                     <span>SELECCIONAR ARCHIVO DE LA LIBRERÍA</span>
-                    <span>HAP TRANCODER INTEGRADO (Pre-producción)</span>
+                    <span>OPTIMIZADOR DE CODECS INTEGRADO (Pre-producción)</span>
                   </div>
 
                   <div className="space-y-2">
@@ -576,7 +583,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                         <span className="font-bold text-white">intro_show_4k.mp4</span>
                         <div className="flex items-center gap-1.5 text-amber-400 font-bold uppercase text-[7px] leading-tight">
                           <AlertTriangle size={10} />
-                          H.264 Long-GOP inter-frame • 64 Mbps (Excesivo para multidisparo)
+                          H.264 Long-GOP inter-frame • 64 Mbps (Excesivo, causa retrasos en salto)
                         </div>
                       </div>
                       <div>
@@ -592,7 +599,7 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                             onClick={() => runTranscodeSimulation('intro_show_4k.mp4')}
                             className="bg-obs-accent/15 border border-obs-accent/30 text-obs-accent uppercase text-[8px] font-black px-3 py-1.5 rounded transition-all hover:bg-obs-accent hover:text-white"
                           >
-                            Transcodificar a HAP
+                            Optimizar GOP a 1:1
                           </button>
                         )}
                       </div>
@@ -601,10 +608,10 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                     {/* Media Item Row 2 */}
                     <div className="bg-obs-bg/60 p-2.5 rounded border border-obs-text/5 flex justify-between items-center text-[9px]">
                       <div className="flex flex-col gap-0.5">
-                        <span className="font-bold text-white">background_loop_loop.mov</span>
+                        <span className="font-bold text-white">background_loop_optimized.mp4</span>
                         <div className="flex items-center gap-1.5 text-emerald-400 font-bold uppercase text-[7px] leading-tight">
                           <Check size={10} />
-                          HAP Intra-frame • 12 Mbps (Óptimo, decodifica directo a GPU)
+                          H.264 Intra-frame • 12 Mbps (Óptimo, decodificación D3D11 en GPU)
                         </div>
                       </div>
                       <span className="text-obs-muted uppercase text-[7px] font-black italic">LISTO PARA EL SHOW</span>
