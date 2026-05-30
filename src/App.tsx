@@ -1498,14 +1498,13 @@ const Monitor = React.memo(
                                 </filter>
                               </svg>
                               <div
-                                className="w-full h-full"
+                                className="w-full h-full relative"
                                 style={{
                                   filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayer-${l.id})`,
                                   transform: `rotate(${l.rotation}deg)`,
                                 }}
                               >
                                 <AnimatePresence
-                                  mode="popLayout"
                                   initial={false}
                                 >
                                   <VideoLayer
@@ -2626,6 +2625,7 @@ const DocumentLayer = ({
 
 const VideoLayer = ({
   clip,
+  isPlaying,
   nextSrc,
   volume,
   masterVolume = 1,
@@ -2649,6 +2649,7 @@ const VideoLayer = ({
   isSlave = false,
 }: {
   clip: any;
+  isPlaying?: boolean;
   nextSrc?: string;
   volume: number;
   masterVolume?: number;
@@ -2676,12 +2677,14 @@ const VideoLayer = ({
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
   const [firstFrameRendered, setFirstFrameRendered] = useState(
-    clip.type !== "video",
+    clip.type !== "video" && clip.type !== "videoinput",
   );
   const earlyEndTriggered = useRef(false);
   const earlyLoopTriggered = useRef(false);
   const lastBroadcastTimeRef = useRef<number>(0);
   const autoPlayNextRef = useRef<boolean>(false);
+
+  const activeIsPlaying = isPlaying !== undefined ? isPlaying : (clip.isPlaying !== false);
 
   const activePerf = useMemo(
     () =>
@@ -2700,7 +2703,7 @@ const VideoLayer = ({
   );
 
   useEffect(() => {
-    if (clip.type === "video") {
+    if (clip.type === "video" || clip.type === "videoinput") {
       setFirstFrameRendered(false);
     } else {
       setFirstFrameRendered(true);
@@ -2879,7 +2882,7 @@ const VideoLayer = ({
       };
 
       const handleReady = () => {
-        if (clip.isPlaying !== false) {
+        if (activeIsPlaying) {
           video.play().catch(() => {});
         } else {
           video.pause();
@@ -2902,7 +2905,7 @@ const VideoLayer = ({
       }
 
       // If playing state changes:
-      if (clip.isPlaying !== false) {
+      if (activeIsPlaying) {
         video.play().catch(() => {});
       } else {
         video.pause();
@@ -3221,7 +3224,7 @@ const VideoLayer = ({
               crossOrigin="anonymous"
               preload={
                 isProgram ||
-                clip.isPlaying ||
+                activeIsPlaying ||
                 activePerf.bufferingMode === "ultra_preload"
                   ? "auto"
                   : "metadata"
@@ -4421,7 +4424,7 @@ const OutputView = React.memo(() => {
                               transform: `rotate(${l.rotation}deg)`,
                             }}
                           >
-                            <AnimatePresence mode="popLayout" initial={true}>
+                            <AnimatePresence initial={true}>
                               <VideoLayer
                                 key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}-${l.sequenceCounter || 0}`}
                                 clip={activeClip}
@@ -6573,80 +6576,7 @@ const Inspector = React.memo(
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">
-                      Mando Flotante
-                    </span>
-                    <span className="text-[8px] text-obs-muted">
-                      Mando flotante arrastrable del ponente
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() =>
-                        onUpdateExternalScreen({
-                          ...externalScreenSettings,
-                          timerShowDraggableFloat:
-                            !externalScreenSettings.timerShowDraggableFloat,
-                        })
-                      }
-                      className={`w-8 h-4 rounded-full transition-colors relative ${externalScreenSettings.timerShowDraggableFloat ? "bg-obs-accent" : "bg-obs-dark-1"}`}
-                      title="Mostrar mando flotante interno"
-                    >
-                      <div
-                        className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${externalScreenSettings.timerShowDraggableFloat ? "translate-x-4.5" : "translate-x-0.5"}`}
-                      />
-                    </button>
-                  </div>
-                </div>
 
-                <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans mt-2">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">
-                      Ventana Independiente
-                    </span>
-                    <span className="text-[8px] text-obs-muted">
-                      Abrir en ventana externa independiente del OS (para otra
-                      pantalla)
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      const screenKey = selectedScreenId || "primary";
-                      const targetUrl = `/?mode=floating_timer&screenId=${screenKey}`;
-
-                      if (window.electron && window.electron.launchOutput) {
-                        window.electron.launchOutput({
-                          screenId: `timer_${screenKey}`,
-                          url: targetUrl,
-                        });
-                      } else {
-                        const url = new URL(window.location.href);
-                        if (url.search) {
-                          url.searchParams.set("mode", "floating_timer");
-                          url.searchParams.set("screenId", screenKey);
-                        } else if (url.hash) {
-                          const hashBase = url.hash.split("?")[0];
-                          url.hash = `${hashBase}?mode=floating_timer&screenId=${screenKey}`;
-                        } else {
-                          url.searchParams.set("mode", "floating_timer");
-                          url.searchParams.set("screenId", screenKey);
-                        }
-                        window.open(
-                          url.toString(),
-                          `FloatingTimer_${screenKey}`,
-                          "width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no",
-                        );
-                      }
-                    }}
-                    className="px-2.5 py-1.5 rounded-md text-white font-black uppercase text-[8px] transition-all bg-indigo-600 border-b-2 border-indigo-800 hover:bg-indigo-500 active:scale-95 flex items-center gap-1 shrink-0 cursor-pointer"
-                    title="Abrir en ventana externa independiente"
-                  >
-                    <ExternalLink size={10} />
-                    <span>Ventana Externa</span>
-                  </button>
-                </div>
 
                 {(externalScreenSettings.timerEnabled ||
                   externalScreenSettings.timerPreview) && (
@@ -7898,12 +7828,14 @@ const HoverVideoPreview = React.memo(
               referrerPolicy="no-referrer"
             />
           ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-obs-dark-m1 via-obs-dark-m2 to-obs-dark-m3 border border-obs-border/30 rounded-sm text-obs-text/60 gap-1.5 transition-all group-hover:border-obs-accent/40">
-              <FileVideo size={18} className="text-obs-accent animate-pulse" />
-              <span className="text-[7px] font-black uppercase tracking-wider font-sans text-obs-text/40">
-                VISTA PREVIA
-              </span>
-            </div>
+            <video
+              src={`${src}#t=0.1`}
+              className={className || "w-full h-full object-cover"}
+              muted
+              playsInline
+              preload="metadata"
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
           ))}
       </div>
     );
@@ -8087,27 +8019,43 @@ const Library = React.memo(
       }
     };
 
-    const handleLibraryLoad = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleLibraryLoad = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
       if (!files) return;
-      const newFiles = Array.from(files).map((f) => {
-        let type: string = f.type;
-        if (f.name.toLowerCase().endsWith(".pdf")) type = "application/pdf";
-        else if (
-          f.name.toLowerCase().endsWith(".ppt") ||
-          f.name.toLowerCase().endsWith(".pptx")
-        )
-          type = "application/vnd.mspowerpoint";
+      const newFiles = await Promise.all(
+        Array.from(files).map(async (f) => {
+          let type: string = f.type;
+          if (f.name.toLowerCase().endsWith(".pdf")) type = "application/pdf";
+          else if (
+            f.name.toLowerCase().endsWith(".ppt") ||
+            f.name.toLowerCase().endsWith(".pptx")
+          )
+            type = "application/vnd.mspowerpoint";
 
-        return {
-          name: f.name,
-          type: type,
-          url: (window as any).electron
+          const url = (window as any).electron
             ? getFileUrl(f)
-            : URL.createObjectURL(f),
-          file: f,
-        };
-      });
+            : URL.createObjectURL(f);
+
+          let thumbnail = undefined;
+          if (type.startsWith("video")) {
+            try {
+              thumbnail = await extractVideoThumbnail(url);
+            } catch (err) {
+              console.error("Error extracting video thumbnail:", err);
+            }
+          } else if (type.startsWith("image")) {
+            thumbnail = url;
+          }
+
+          return {
+            name: f.name,
+            type: type,
+            url,
+            file: f,
+            thumbnail,
+          };
+        }),
+      );
       setLibraryFiles((prev) => [...prev, ...newFiles]);
     };
 
@@ -14923,122 +14871,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* FLOATING WINDOW: CONTROL PANEL DE CONTADOR PARA EL PONENTE */}
-      <AnimatePresence>
-        {Object.entries(allScreenSettings).map(([sId, settings], index) => {
-          if (!settings.timerShowDraggableFloat) return null;
 
-          const pos = floatingTimerPos[sId] || {
-            x: 350 + index * 40,
-            y: 180 + index * 40,
-          };
-
-          return (
-            <div
-              key={`float-timer-${sId}`}
-              style={{
-                position: "absolute",
-                left: pos.x,
-                top: pos.y,
-                zIndex: 99999 + index,
-              }}
-              className="w-80 bg-obs-dark-1 border-2 border-obs-border rounded-xl shadow-2xl overflow-hidden font-sans select-none"
-            >
-              {/* Header (Drag handle) */}
-              <div
-                onMouseDown={(e) => {
-                  setIsDraggingFloatingTimer(sId);
-                  dragStartRef.current = {
-                    x: e.clientX - pos.x,
-                    y: e.clientY - pos.y,
-                  };
-                }}
-                className="px-3.5 py-2.5 bg-obs-surface border-b border-obs-border flex items-center justify-between cursor-move text-stone-200"
-              >
-                <div className="flex items-center gap-2 text-obs-accent shrink-0">
-                  <Clock size={13} className="animate-[pulse_1.5s_infinite]" />
-                  <span className="text-[9.5px] font-black uppercase tracking-wider truncate max-w-[180px]">
-                    COUNTDOWN:{" "}
-                    {outputs.find(
-                      (o: any) => o.physicalScreenId === sId || o.id === sId,
-                    )?.name ||
-                      (sId === "primary"
-                        ? "Salida Principal"
-                        : sId === "default"
-                          ? "Global"
-                          : `Salida ${sId}`)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    onClick={() => {
-                      const targetUrl = `/?mode=floating_timer&screenId=${sId}`;
-
-                      if (window.electron && window.electron.launchOutput) {
-                        window.electron.launchOutput({
-                          screenId: `timer_${sId}`,
-                          url: targetUrl,
-                        });
-                      } else {
-                        const url = new URL(window.location.href);
-                        if (url.search) {
-                          url.searchParams.set("mode", "floating_timer");
-                          url.searchParams.set("screenId", sId);
-                        } else if (url.hash) {
-                          const hashBase = url.hash.split("?")[0];
-                          url.hash = `${hashBase}?mode=floating_timer&screenId=${sId}`;
-                        } else {
-                          url.searchParams.set("mode", "floating_timer");
-                          url.searchParams.set("screenId", sId);
-                        }
-                        window.open(
-                          url.toString(),
-                          `FloatingTimer_${sId}`,
-                          "width=380,height=220,resizable=yes,scrollbars=no,status=no,location=no,toolbar=no,menubar=no",
-                        );
-                      }
-                    }}
-                    className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
-                    title="Abrir en Ventana Independiente fuera del navegador"
-                  >
-                    <ExternalLink size={12} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      setAllScreenSettings((prev) => ({
-                        ...prev,
-                        [sId]: {
-                          ...prev[sId],
-                          timerShowDraggableFloat: false,
-                        },
-                      }));
-                    }}
-                    className="p-1 text-obs-muted hover:text-white transition-colors cursor-pointer"
-                    title="Cerrar"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              </div>
-
-              {/* Timer Display Body */}
-              <PresenterTimerDisplay
-                settings={settings}
-                screenId={sId}
-                onUpdate={(updates) => {
-                  setAllScreenSettings((prev) => ({
-                    ...prev,
-                    [sId]: {
-                      ...(prev[sId] || DEFAULT_SCREEN_SETTINGS),
-                      ...updates,
-                    },
-                  }));
-                }}
-              />
-            </div>
-          );
-        })}
-      </AnimatePresence>
     </div>
   );
 }
