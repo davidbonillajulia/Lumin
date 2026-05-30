@@ -370,21 +370,15 @@ $ppt = $null
 $pres = $null
 
 try {
+    # Check if PowerPoint is already running and kill it if it's stuck from a previous failed run
+    # (Optional, might be aggressive but ensures fresh state)
+    # Stop-Process -Name "powerpnt" -ErrorAction SilentlyContinue
+
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
-    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
-    
-    # Make PowerPoint visible safely so it can paint slides correctly on Windows
-    try {
-        $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
-    } catch {}
-
-    # Minimize the PowerPoint window immediately
-    try {
-        $ppt.WindowState = 2 # ppWindowMinimized
-    } catch {}
+    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoFalse)
     
     # Save deck as a multi-page PDF document
     # 32 is the PowerPoint constant for ppSaveAsPDF
@@ -394,6 +388,12 @@ try {
     $pres.Close()
     $ppt.Quit()
 
+    # Release COM objects
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingBuffers()
+
     $res = @{
         success = $true
         pdfPath = "${normalizedPdfPath}"
@@ -401,8 +401,18 @@ try {
     
     Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
 } catch {
-    if ($pres) { try { $pres.Close() } catch {} }
-    if ($ppt) { try { $ppt.Quit() } catch {} }
+    if ($pres) { 
+        try { 
+            $pres.Close() 
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
+        } catch {} 
+    }
+    if ($ppt) { 
+        try { 
+            $ppt.Quit() 
+            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
+        } catch {} 
+    }
     
     $res = @{
         success = $false

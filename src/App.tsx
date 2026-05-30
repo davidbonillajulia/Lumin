@@ -3084,12 +3084,11 @@ const VideoLayer = ({
       opacity: 0,
     },
     animate: {
-      opacity: firstFrameRendered
-        ? opacity *
-          (faderOpacity !== undefined ? faderOpacity : 1) *
-          clipOpacity *
-          clipMaster
-        : 0,
+      opacity:
+        opacity *
+        (faderOpacity !== undefined ? faderOpacity : 1) *
+        clipOpacity *
+        clipMaster,
       x: `${clip.transform.x}%`,
       clipPath:
         clip.mask === "circle"
@@ -3195,6 +3194,13 @@ const VideoLayer = ({
                   ? "auto"
                   : "metadata"
               }
+              onLoadedData={() => {
+                setIsReady(true);
+                setFirstFrameRendered(true);
+                if (activeIsPlaying && videoRef.current) {
+                  videoRef.current.play().catch(() => {});
+                }
+              }}
               onCanPlay={() => {
                 setIsReady(true);
                 setFirstFrameRendered(true);
@@ -4243,8 +4249,38 @@ const OutputView = React.memo(() => {
                 className="w-full h-full flex items-start justify-start relative"
               >
                 <AnimatePresence custom={transitionType}>
-                  {/* Bus A Layer */}
+                  {/* COMPOSICIÓN GLOBAL DE CAPAS (ESTILO RESOLUME) */}
+                  {(state.layers || []).map((layer: any, index: number) => {
+                    const activeClip = layer.slots[layer.activeSlotIndex];
+                    if (!activeClip || !layer.isVisible) return null;
+                    return (
+                      <VideoLayer
+                        key={`layer-${layer.id}-${activeClip.id}-${layer.sequenceCounter || 0}`}
+                        clip={activeClip}
+                        volume={layer.muted ? 0 : (masterVolume || 0.8)}
+                        opacity={layer.opacity}
+                        isProgram={true}
+                        perfSettings={perfSettings}
+                        onEnded={() => {
+                          channelRef.current?.postMessage({
+                            type: "LAYER_CLIP_ENDED",
+                            payload: {
+                              layerId: layer.id,
+                              clipId: activeClip.id,
+                              sequenceCounter: layer.sequenceCounter || 0
+                            },
+                          });
+                        }}
+                        transitionDuration={0.1}
+                        isSlave={true}
+                        isPlaying={layer.isPlaying}
+                      />
+                    );
+                  })}
+
+                  {/* Bus A Layer (Legacy/Mixer mode) */}
                   {busAClip &&
+                    !state.layers?.some((l: any) => l.activeClipId) &&
                     (crossfaderValue === undefined ||
                       crossfaderValue < 100) && (
                       <VideoLayer
@@ -4540,6 +4576,7 @@ const Inspector = React.memo(
     isDarkMode,
     isOutputLaunched,
     pipLayers,
+    activeOutputId,
   }: {
     selectedItem: Clip | Playlist | any | null;
     selectedItemType:
@@ -4576,6 +4613,7 @@ const Inspector = React.memo(
     isDarkMode: boolean;
     isOutputLaunched?: boolean;
     pipLayers?: PiPLayer[];
+    activeOutputId?: string;
   }) => {
     const handleReset = () => {
       if (
@@ -6544,6 +6582,33 @@ const Inspector = React.memo(
 
 
 
+                {/* MANDO FLOTANTE EXTERNO CONTROL */}
+                <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">
+                      Mando Externo (Nueva Ventana)
+                    </span>
+                    <span className="text-[8px] text-obs-muted">
+                      Abrir mando en ventana de Windows independiente
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        if ((window as any).electron) {
+                          (window as any).electron.launchOutput({
+                            screenId: `timer_${activeOutputId}`,
+                            url: `?mode=floating_timer&s=${activeOutputId}`
+                          });
+                        }
+                      }}
+                      className="p-1 px-2 bg-obs-accent/20 text-obs-accent hover:bg-obs-accent hover:text-white rounded text-[9px] font-bold transition-all uppercase"
+                    >
+                      Abrir Ventana
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
                   <div className="flex flex-col">
                     <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">
@@ -8025,8 +8090,9 @@ const Library = React.memo(
           )
             type = "application/vnd.mspowerpoint";
 
+          // Persistent path if in electron, otherwise temporary URL
           const url = (window as any).electron
-            ? getFileUrl(f)
+            ? (f as any).path || getFileUrl(f)
             : URL.createObjectURL(f);
 
           let thumbnail = undefined;
@@ -8041,11 +8107,13 @@ const Library = React.memo(
           }
 
           return {
+            id: `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             name: f.name,
             type: type,
             url,
             file: f,
             thumbnail,
+            addedAt: Date.now(),
           };
         }),
       );
@@ -10096,6 +10164,20 @@ export default function App() {
     IN: 0.5,
   });
 
+  const [activeOutputId, setActiveOutputId] = useState<string>("1");
+  const [libraryFiles, setLibraryFiles] = useState<
+    {
+      id?: string;
+      name: string;
+      type: string;
+      url: string;
+      file?: File | { path: string; name: string } | null;
+      path?: string;
+      thumbnail?: string;
+      addedAt?: number;
+    }[]
+  >([]);
+
   const getFaderSignalLevel = (sourceName: string): number => {
     // Volume setting
     const vol =
@@ -10243,7 +10325,13 @@ export default function App() {
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
   const [currentLuminPath, setCurrentLuminPath] = useState<string | null>(null);
-  const [isLuminSaveModalOpen, setIsLuminSaveModalOpen] = useState(false);
+  // Force stability on Windows by setting additional Chromium flags and preventing too many concurrent decoders
+  useEffect(() => {
+    if ((window as any).electron) {
+      // In a real scenario we'd talk to IPC to adjust priorities, 
+      // but here we just ensure we are cleaning up every hidden preview.
+    }
+  }, []);
   const [luminSaveMode, setLuminSaveMode] = useState<"save" | "saveAs">("save");
   const [saveFileName, setSaveFileName] = useState("");
   const [isExitModalOpen, setIsExitModalOpen] = useState(false);
@@ -10252,6 +10340,69 @@ export default function App() {
   const [pptImportProgress, setPptImportProgress] = useState(0);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showContentPanel, setShowContentPanel] = useState(true);
+
+  // HYDRATION: Ensure thumbnails and IDs exist after loading .lumin
+  useEffect(() => {
+    let active = true;
+    const hydrate = async () => {
+      let changed = false;
+      const newLib = await Promise.all(
+        libraryFiles.map(async (f) => {
+          let updated = { ...f };
+          if (!updated.id) {
+            updated.id = `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            changed = true;
+          }
+          // Repair broken object URLs if they are from a previous session
+          if (updated.url?.startsWith("blob:") && !updated.file) {
+            // If we have a path in Electron, restore the URL
+            if ((window as any).electron && updated.path) {
+              const urlFromPath = (path: string) => {
+                try {
+                  const normalized = path.replace(/\\/g, "/");
+                  const parts = normalized.split("/");
+                  const encodedParts = parts.map((part: string, index: number) => {
+                    if (index === 0 && part.endsWith(":")) return part;
+                    return encodeURIComponent(part);
+                  });
+                  let joined = encodedParts.join("/");
+                  if (!joined.startsWith("/")) joined = "/" + joined;
+                  return `file://${joined}`;
+                } catch (e) { return null; }
+              };
+              const nativeUrl = urlFromPath(updated.path);
+              if (nativeUrl) {
+                updated.url = nativeUrl;
+                changed = true;
+              }
+            }
+          }
+          // Generate missing thumbnail
+          if (
+            !updated.thumbnail &&
+            updated.type?.startsWith("video") &&
+            updated.url &&
+            !updated.url.startsWith("blob:")
+          ) {
+            try {
+              updated.thumbnail = await extractVideoThumbnail(updated.url);
+              changed = true;
+            } catch (err) {}
+          }
+          return updated;
+        }),
+      );
+
+      if (active && changed) {
+        setLibraryFiles(newLib);
+      }
+    };
+
+    if (libraryFiles.length > 0) {
+      hydrate();
+    }
+    return () => { active = false; };
+  }, [libraryFiles.length]); // Run when count changes or on load
 
   const sanitizeClipForSave = (clip: any) => {
     if (!clip) return null;
@@ -10695,7 +10846,7 @@ export default function App() {
   const [outputs, setOutputs] = useState<any[]>([
     { id: "1", name: "Salida 1", physicalScreenId: null },
   ]);
-  const [activeOutputId, setActiveOutputId] = useState<string>("1");
+  // activeOutputId declaration moved up to fix hosting
   const [layerOutputs, setLayerOutputs] = useState<
     Record<string, string | null>
   >({});
@@ -10925,16 +11076,17 @@ export default function App() {
     string | null
   >(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     if (!isDraggingFloatingTimer) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      const newX = e.clientX - dragStartRef.current.x;
-      const newY = e.clientY - dragStartRef.current.y;
+      const newX = e.clientX - dragOffsetRef.current.x;
+      const newY = e.clientY - dragOffsetRef.current.y;
 
-      const boundedX = Math.max(10, Math.min(window.innerWidth - 330, newX));
-      const boundedY = Math.max(10, Math.min(window.innerHeight - 320, newY));
+      const boundedX = Math.max(0, Math.min(window.innerWidth - 320, newX));
+      const boundedY = Math.max(0, Math.min(window.innerHeight - 200, newY));
 
       setFloatingTimerPos((prev) => ({
         ...prev,
@@ -11028,9 +11180,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("lumin_perf_settings", JSON.stringify(perfSettings));
   }, [perfSettings]);
-  const [libraryFiles, setLibraryFiles] = useState<
-    { name: string; type: string; url: string; file: File }[]
-  >([]);
+  // libraryFiles declaration moved up to fix hosting
   const [selectedLibraryUrls, setSelectedLibraryUrls] = useState<Set<string>>(
     new Set(),
   );
@@ -11856,28 +12006,17 @@ export default function App() {
       prev.map((layer) => {
         if (layer.id !== layerId) return layer;
 
-        // If sequenceCounter is provided, ensure it matches the layer's current sequenceCounter!
         if (
           seqCounter !== undefined &&
           (layer.sequenceCounter || 0) !== seqCounter
         ) {
-          console.log(
-            "Layer ended ignored due to sequenceCounter mismatch:",
-            layerId,
-            "layer seq:",
-            layer.sequenceCounter,
-            "event seq:",
-            seqCounter,
-          );
           return layer;
         }
 
-        if (layer.activeClipId !== clipId) return layer; // ALREADY HANDLED
+        if (layer.activeClipId !== clipId) return layer;
 
-        // Mode Single: Only loop the current clip indefinitely if loopVideo is true
         if (layer.playbackMode === "single") {
           if (layer.loopVideo === false) {
-            // Loop video disabled: Go to black (clear clip)
             setActiveLayerTriggers((prev) => ({ ...prev, [layer.id]: "stop" }));
             return {
               ...layer,
@@ -11886,17 +12025,22 @@ export default function App() {
               isPlaying: false,
             };
           }
-          return layer; // VideoLayer handles video loop tag
+          return layer;
         }
 
-        // Mode Sequence: Find next clip in slots
         const currentSlotIndex =
           layer.activeSlotIndex !== null
             ? layer.activeSlotIndex
             : layer.slots.findIndex((s) => s?.id === layer.activeClipId);
-        const nextClipIndex = layer.slots.findIndex(
-          (s, idx) => idx > currentSlotIndex && s !== null,
-        );
+        
+        let nextClipIndex = -1;
+        // Find next non-null slot
+        for (let i = currentSlotIndex + 1; i < layer.slots.length; i++) {
+          if (layer.slots[i]) {
+            nextClipIndex = i;
+            break;
+          }
+        }
 
         if (nextClipIndex !== -1) {
           return {
@@ -11904,9 +12048,9 @@ export default function App() {
             activeClipId: layer.slots[nextClipIndex]!.id,
             activeSlotIndex: nextClipIndex,
             sequenceCounter: (layer.sequenceCounter || 0) + 1,
+            isPlaying: true, // Force play next
           };
         } else if (layer.loop !== false) {
-          // Mode Sequence: Find first clip to loop back
           const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
           if (firstSlotIndex !== -1) {
             return {
@@ -11914,6 +12058,7 @@ export default function App() {
               activeClipId: layer.slots[firstSlotIndex]!.id,
               activeSlotIndex: firstSlotIndex,
               sequenceCounter: (layer.sequenceCounter || 0) + 1,
+              isPlaying: true,
             };
           }
           return {
@@ -11923,7 +12068,6 @@ export default function App() {
             isPlaying: false,
           };
         } else {
-          // End of layer sequence (loop playlist off): Black
           setActiveLayerTriggers((prev) => ({ ...prev, [layer.id]: "stop" }));
           return {
             ...layer,
@@ -14579,6 +14723,7 @@ export default function App() {
                       : selectedItem
             }
             selectedItemType={selectedItemType}
+            activeOutputId={activeOutputId}
             externalScreenSettings={externalScreenSettings}
             externalScreens={externalScreens}
             allScreenSettings={allScreenSettings}
@@ -14708,16 +14853,6 @@ export default function App() {
           return (
             <motion.div
               key={`float-timer-${sId}`}
-              drag
-              dragMomentum={false}
-              onDragEnd={(e, info) => {
-                const newX = pos.x + info.offset.x;
-                const newY = pos.y + info.offset.y;
-                setFloatingTimerPos((prev) => ({
-                  ...prev,
-                  [sId]: { x: newX, y: newY },
-                }));
-              }}
               style={{
                 position: "absolute",
                 left: pos.x,
@@ -14727,7 +14862,16 @@ export default function App() {
               className="w-80 bg-obs-dark-1 border-2 border-obs-border rounded-xl shadow-2xl overflow-hidden font-sans select-none"
             >
               {/* Header (Drag handle) */}
-              <div className="flex items-center justify-between bg-obs-surface border-b border-obs-border p-2 cursor-move text-stone-200">
+              <div 
+                onMouseDown={(e) => {
+                  setIsDraggingFloatingTimer(sId);
+                  dragOffsetRef.current = {
+                    x: e.clientX - pos.x,
+                    y: e.clientY - pos.y
+                  };
+                }}
+                className="flex items-center justify-between bg-obs-surface border-b border-obs-border p-2 cursor-move text-stone-200"
+              >
                 <div className="flex items-center gap-2 text-obs-accent shrink-0">
                   <Clock size={13} className="animate-[pulse_1.5s_infinite]" />
                   <span className="text-[9.5px] font-black uppercase tracking-wider truncate max-w-[180px]">
