@@ -43,7 +43,7 @@ app.commandLine.appendSwitch('enable-hardware-overlays', 'single-fullscreen,unsc
 
 // DIRECTIVAS CRÍTICAS PARA EVITAR CORTES Y CONGELAMIENTOS EN WINDOWS NATIVO MULTIPANTALLA:
 // 1. Evita que Windows deje de renderizar las salidas secundarias fullscreen cuando pierden el foco.
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-features', 'CalculateWindowOcclusion,CalculateNativeWinOcclusion');
 // 2. Impide que Chromium estrangule la CPU/GPU y el temporizador JS de las ventanas de salida en segundo plano.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -356,9 +356,11 @@ if (!gotTheLock) {
 
   ipcMain.handle('convert-ppt-to-pdf', async (event, filePath) => {
     return new Promise((resolve) => {
+      const normalizedFilePath = filePath.replace(/\\/g, '/');
       const presentationId = `LUMIN_PPT_PDF_${Date.now()}`;
       const tempPdfDirectory = app.getPath('temp');
       const pdfPath = path.join(tempPdfDirectory, `${presentationId}.pdf`);
+      const normalizedPdfPath = pdfPath.replace(/\\/g, '/');
 
       const psScript = `
 $ErrorActionPreference = 'Stop'
@@ -369,12 +371,14 @@ try {
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
-    # Make PowerPoint visible so it can paint slides correctly on Windows
-    $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
-    
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
-    $pres = $ppt.Presentations.Open("${filePath.replace(/"/g, '`"')}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
+    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
     
+    # Make PowerPoint visible safely so it can paint slides correctly on Windows
+    try {
+        $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+    } catch {}
+
     # Minimize the PowerPoint window immediately
     try {
         $ppt.WindowState = 2 # ppWindowMinimized
@@ -382,7 +386,7 @@ try {
     
     # Save deck as a multi-page PDF document
     # 32 is the PowerPoint constant for ppSaveAsPDF
-    $pres.SaveAs("${pdfPath.replace(/"/g, '`"')}", 32)
+    $pres.SaveAs("${normalizedPdfPath}", 32)
     
     # Orderly close presentation and quit PowerPoint
     $pres.Close()
@@ -390,7 +394,7 @@ try {
 
     $res = @{
         success = $true
-        pdfPath = "${pdfPath.replace(/\\/g, '/')}"
+        pdfPath = "${normalizedPdfPath}"
     }
     
     Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
@@ -447,9 +451,11 @@ try {
 
   ipcMain.handle('convert-pptx', async (event, filePath) => {
     return new Promise((resolve) => {
+      const normalizedFilePath = filePath.replace(/\\/g, '/');
       // Create a temporary directory dedicated to this PowerPoint presentation's slide images
       const presentationId = `LUMIN_PPT_${Date.now()}`;
       const tempDir = path.join(app.getPath('temp'), presentationId);
+      const normalizedTempDir = tempDir.replace(/\\/g, '/');
       
       try {
         if (!fs.existsSync(tempDir)) {
@@ -471,13 +477,15 @@ try {
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
-    # Make PowerPoint visible so it can paint slides correctly on Windows
-    $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
-    
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
     # WithWindow matches [Microsoft.Office.Core.MsoTriState]::msoTrue (provides graphics context for slide exports)
-    $pres = $ppt.Presentations.Open("${filePath.replace(/"/g, '`"')}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
+    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
     
+    # Make PowerPoint visible safely so it can paint slides correctly on Windows
+    try {
+        $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+    } catch {}
+
     # Minimize the PowerPoint window immediately so it doesn't steal focus or cover LUMIN fullscreen displays
     try {
         $ppt.WindowState = 2 # ppWindowMinimized
@@ -485,7 +493,7 @@ try {
     
     # Save entire deck as individual PNG slide frames in the target directory
     # 18 is the PowerPoint constant for ppSaveAsPNG
-    $pres.SaveAs("${tempDir.replace(/"/g, '`"')}", 18)
+    $pres.SaveAs("${normalizedTempDir}", 18)
     
     # Collect metadata like Slide Title and full body text for synchronization
     $slideData = @()
