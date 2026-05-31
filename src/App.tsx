@@ -1029,6 +1029,127 @@ const ScaleToFit = ({
   );
 };
 
+  // Helper component for gapless layer sequence playback
+  const LayerPlaybox = React.memo(({ 
+    layer, 
+    clips, 
+    volume, 
+    masterVolume, 
+    opacity, 
+    isProgram, 
+    isTransmitting, 
+    onLayerEnded, 
+    updateClip, 
+    perfSettings 
+  }: { 
+    layer: Layer; 
+    clips: Clip[]; 
+    volume: number; 
+    masterVolume: number; 
+    opacity: number; 
+    isProgram: boolean; 
+    isTransmitting: boolean; 
+    onLayerEnded: any; 
+    updateClip: any; 
+    perfSettings: any; 
+  }) => {
+    const activeClip = layer.activeClipId ? clips?.find((c) => c.id === layer.activeClipId) : null;
+    const [busA, setBusA] = useState<Clip | null>(activeClip);
+    const [busB, setBusB] = useState<Clip | null>(null);
+    const [isBusAReady, setIsBusAReady] = useState(true);
+    const [activeId, setActiveId] = useState(activeClip?.id);
+
+    useEffect(() => {
+      if (activeClip?.id !== activeId) {
+        if (!isBusAReady) {
+          // If we were already transitioning, force swap
+          setBusA(activeClip);
+          setIsBusAReady(false);
+        } else {
+          setBusB(activeClip);
+          setIsBusAReady(false);
+        }
+        setActiveId(activeClip?.id);
+      }
+    }, [activeClip?.id, activeId, isBusAReady]);
+
+    // Handle transition swap
+    useEffect(() => {
+      if (busB && isBusAReady) {
+        setBusA(busB);
+        setBusB(null);
+      }
+    }, [isBusAReady, busB]);
+
+    if (!activeClip && !busA && !busB) return null;
+
+    // Preload next
+    let nextSrc = undefined;
+    if (layer.playbackMode === "sequence" && activeClip) {
+      const currentSlotIndex = layer.activeSlotIndex !== null 
+        ? layer.activeSlotIndex 
+        : layer.slots.findIndex((s) => s?.id === activeClip.id);
+      
+      const nextClipIndex = layer.slots.findIndex((s, idx) => idx > currentSlotIndex && s !== null);
+      let foundNext = null;
+      if (nextClipIndex !== -1) {
+        foundNext = layer.slots[nextClipIndex];
+      } else if (layer.loop !== false || layer.playbackMode === "sequence") {
+        const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
+        if (firstSlotIndex !== -1 && layer.slots[firstSlotIndex]?.id !== activeClip.id) {
+          foundNext = layer.slots[firstSlotIndex];
+        }
+      }
+      if (foundNext && foundNext.type === "video") nextSrc = foundNext.url;
+    }
+
+    return (
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <AnimatePresence initial={false}>
+          {busA && (
+            <VideoLayer
+              key={`layer-bus-A-${layer.id}-${busA.id}-${layer.sequenceCounter || 0}`}
+              clip={busA}
+              nextSrc={nextSrc}
+              volume={layer.muted ? 0 : volume}
+              masterVolume={masterVolume}
+              opacity={opacity * (busB && !isBusAReady ? 0 : 1)}
+              isProgram={isProgram && !busB}
+              isTransmitting={isTransmitting}
+              onEnded={() => onLayerEnded?.(layer.id, busA.id, layer.sequenceCounter || 0)}
+              loopOverride={layer.playbackMode === "single" ? layer.loopVideo !== false : false}
+              isPlaylistSequence={layer.playbackMode === "sequence"}
+              transitionType="fade"
+              transitionDuration={Math.min(1.5, layer.transitionDuration || 0.4)}
+              perfSettings={perfSettings}
+              onUpdateClip={updateClip}
+              onReady={() => setIsBusAReady(true)}
+            />
+          )}
+          {busB && (
+            <VideoLayer
+              key={`layer-bus-B-${layer.id}-${busB.id}-${layer.sequenceCounter || 0}`}
+              clip={busB}
+              volume={layer.muted ? 0 : volume}
+              masterVolume={masterVolume}
+              opacity={opacity}
+              isProgram={isProgram && !isBusAReady}
+              isTransmitting={isTransmitting}
+              onEnded={() => onLayerEnded?.(layer.id, busB.id, layer.sequenceCounter || 0)}
+              loopOverride={layer.playbackMode === "single" ? layer.loopVideo !== false : false}
+              isPlaylistSequence={layer.playbackMode === "sequence"}
+              transitionType="fade"
+              transitionDuration={Math.min(1.5, layer.transitionDuration || 0.4)}
+              perfSettings={perfSettings}
+              onUpdateClip={updateClip}
+              onReady={() => setIsBusAReady(true)}
+            />
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  });
+
 const Monitor = React.memo(
   ({
     title,
@@ -1437,110 +1558,51 @@ const Monitor = React.memo(
                             (layerOutputs[l.id] === activeOutputId ||
                               !layerOutputs[l.id]),
                         )
-                        .map((l, index) => {
-                          const activeClip = l.activeClipId
-                            ? clips?.find((c) => c.id === l.activeClipId)
-                            : null;
-                          if (!activeClip) return null;
-
-                          // Compute next clip in the sequence to preload:
-                          let nextSrc = undefined;
-                          if (l.playbackMode === "sequence") {
-                            const currentSlotIndex =
-                              l.activeSlotIndex !== null
-                                ? l.activeSlotIndex
-                                : l.slots.findIndex(
-                                    (s) => s?.id === l.activeClipId,
-                                  );
-                            const nextClipIndex = l.slots.findIndex(
-                              (s, idx) => idx > currentSlotIndex && s !== null,
-                            );
-                            let foundNext = null;
-                            if (nextClipIndex !== -1) {
-                              foundNext = l.slots[nextClipIndex];
-                            } else if (l.loop !== false) {
-                              const firstSlotIndex = l.slots.findIndex(
-                                (s) => s !== null,
-                              );
-                              if (
-                                firstSlotIndex !== -1 &&
-                                l.slots[firstSlotIndex]?.id !== l.activeClipId
-                              ) {
-                                foundNext = l.slots[firstSlotIndex];
-                              }
-                            }
-                            if (foundNext && foundNext.type === "video") {
-                              nextSrc = foundNext.url;
-                            }
-                          }
-
-                          return (
+                        .map((l, index) => (
+                          <div
+                            key={l.id}
+                            className="absolute inset-0 pointer-events-none"
+                            style={{
+                              opacity: l.opacity,
+                              zIndex: layers.length - index + 10,
+                            }}
+                          >
+                            <svg width="0" height="0" className="absolute">
+                              <filter
+                                id={`rgbLayer-${l.id}`}
+                                colorInterpolationFilters="sRGB"
+                              >
+                                <feColorMatrix
+                                  type="matrix"
+                                  values={`${l.colorBalance.r} 0 0 0 0
+                                    0 ${l.colorBalance.g} 0 0 0
+                                    0 0 ${l.colorBalance.b} 0 0
+                                    0 0 0 1 0`}
+                                />
+                              </filter>
+                            </svg>
                             <div
-                              key={l.id}
-                              className="absolute inset-0 pointer-events-none"
+                              className="w-full h-full relative"
                               style={{
-                                opacity: l.opacity,
-                                zIndex: layers.length - index + 10,
+                                filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayer-${l.id})`,
+                                transform: `rotate(${l.rotation}deg)`,
                               }}
                             >
-                              <svg width="0" height="0" className="absolute">
-                                <filter
-                                  id={`rgbLayer-${l.id}`}
-                                  colorInterpolationFilters="sRGB"
-                                >
-                                  <feColorMatrix
-                                    type="matrix"
-                                    values={`${l.colorBalance.r} 0 0 0 0
-                                      0 ${l.colorBalance.g} 0 0 0
-                                      0 0 ${l.colorBalance.b} 0 0
-                                      0 0 0 1 0`}
-                                  />
-                                </filter>
-                              </svg>
-                              <div
-                                className="w-full h-full relative"
-                                style={{
-                                  filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayer-${l.id})`,
-                                  transform: `rotate(${l.rotation}deg)`,
-                                }}
-                              >
-                                <AnimatePresence
-                                  initial={false}
-                                >
-                                  <VideoLayer
-                                    key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}-${l.sequenceCounter || 0}`}
-                                    clip={activeClip}
-                                    nextSrc={nextSrc}
-                                    volume={l.muted ? 0 : volume}
-                                    masterVolume={masterVolume}
-                                    opacity={opacity}
-                                    isProgram={!!isProgram}
-                                    isTransmitting={isTransmitting}
-                                    onEnded={() =>
-                                      onLayerEnded?.(
-                                        l.id,
-                                        activeClip.id,
-                                        l.sequenceCounter || 0,
-                                      )
-                                    }
-                                    loopOverride={
-                                      l.playbackMode === "single"
-                                        ? l.loopVideo !== false
-                                        : false
-                                    }
-                                    transitionType="fade"
-                                    transitionDuration={Math.min(
-                                      1.5,
-                                      l.transitionDuration || 0.4,
-                                    )}
-                                    perfSettings={perfSettings}
-                                    onUpdateClip={updateClip}
-                                  />
-                                </AnimatePresence>
-                              </div>
+                              <LayerPlaybox 
+                                layer={l}
+                                clips={clips || []}
+                                volume={volume}
+                                masterVolume={masterVolume}
+                                opacity={opacity}
+                                isProgram={!!isProgram}
+                                isTransmitting={isTransmitting}
+                                onLayerEnded={onLayerEnded}
+                                updateClip={updateClip}
+                                perfSettings={perfSettings}
+                              />
                             </div>
-                          );
-                        })}
+                          </div>
+                        ))}
 
                       <AnimatePresence>
                         {pipLayers
@@ -2822,8 +2884,8 @@ const VideoLayer = ({
         // Sequential Playback Stability: Trigger next clip slightly before actual end to hide browser seeker latency
         if (isPlaylistSequence && video.duration > 0) {
           const remaining = video.duration - video.currentTime;
-          // Trigger 150ms early for smooth "Resolume-style" gapless transitions
-          if (remaining < 0.15 && !earlyEndTriggered.current) {
+          // Trigger 80ms early for smooth "Resolume-style" transition, reduced from 150ms to ensure full play
+          if (remaining < 0.08 && !earlyEndTriggered.current) {
             earlyEndTriggered.current = true;
             onEndedRef.current?.();
           }
@@ -11780,7 +11842,7 @@ export default function App() {
             sequenceCounter: (layer.sequenceCounter || 0) + 1,
             isPlaying: true, // Force play next
           };
-        } else if (layer.loop !== false) {
+        } else if (layer.loop !== false || layer.playbackMode === "sequence") {
           const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
           if (firstSlotIndex !== -1) {
             return {
