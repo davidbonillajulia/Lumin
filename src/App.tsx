@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import JSZip from "jszip";
 import { PDFRenderer } from "./components/PDFRenderer";
 import { PerfManagerModal } from "./components/PerfManagerModal";
@@ -951,8 +951,8 @@ const useAudioLevel = (
             sum += dataArrayRef.current[i];
           }
           const average = sum / dataArrayRef.current.length;
-          // Level should reflect raw signal level normalized
-          setLevel(Math.min(1, average / 75));
+          // Level should reflect raw signal level normalized - increased sensitivity
+          setLevel(Math.min(1, average / 45));
 
           animationFrameRef.current = requestAnimationFrame(updateLevel);
         };
@@ -2647,6 +2647,7 @@ const VideoLayer = ({
   onReady,
   perfSettings,
   isSlave = false,
+  isPlaylistSequence = false,
 }: {
   clip: any;
   isPlaying?: boolean;
@@ -2671,6 +2672,7 @@ const VideoLayer = ({
   onReady?: () => void;
   perfSettings?: any;
   isSlave?: boolean;
+  isPlaylistSequence?: boolean;
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>("");
@@ -2817,13 +2819,15 @@ const VideoLayer = ({
           } catch (err) {}
         }
 
-          // Early transition logic: disabled for troubleshooting as requested
-          if (video.duration) {
-            const remaining = video.duration - video.currentTime;
-            const isLooping =
-              loopOverride !== undefined ? loopOverride : clip.loop !== false;
-            // Native onEnded will handle the switch with duration 0 transitions
+        // Sequential Playback Stability: Trigger next clip slightly before actual end to hide browser seeker latency
+        if (isPlaylistSequence && video.duration > 0) {
+          const remaining = video.duration - video.currentTime;
+          // Trigger 150ms early for smooth "Resolume-style" gapless transitions
+          if (remaining < 0.15 && !earlyEndTriggered.current) {
+            earlyEndTriggered.current = true;
+            onEndedRef.current?.();
           }
+        }
       };
 
       video.addEventListener("timeupdate", handleTimeUpdate);
@@ -3161,6 +3165,15 @@ const VideoLayer = ({
           ...style,
         }}
       >
+        {nextSrc && (
+          <video
+            src={nextSrc}
+            preload="auto"
+            muted
+            className="hidden pointer-events-none"
+            aria-hidden="true"
+          />
+        )}
         {clip.type === "video" || clip.type === "videoinput" ? (
           <>
             <video
@@ -4249,35 +4262,6 @@ const OutputView = React.memo(() => {
                 className="w-full h-full flex items-start justify-start relative"
               >
                 <AnimatePresence custom={transitionType}>
-                  {/* COMPOSICIÓN GLOBAL DE CAPAS (ESTILO RESOLUME) */}
-                  {(state.layers || []).map((layer: any, index: number) => {
-                    const activeClip = layer.slots[layer.activeSlotIndex];
-                    if (!activeClip || !layer.isVisible) return null;
-                    return (
-                      <VideoLayer
-                        key={`layer-${layer.id}-${activeClip.id}-${layer.sequenceCounter || 0}`}
-                        clip={activeClip}
-                        volume={layer.muted ? 0 : (masterVolume || 0.8)}
-                        opacity={layer.opacity}
-                        isProgram={true}
-                        perfSettings={perfSettings}
-                        onEnded={() => {
-                          channelRef.current?.postMessage({
-                            type: "LAYER_CLIP_ENDED",
-                            payload: {
-                              layerId: layer.id,
-                              clipId: activeClip.id,
-                              sequenceCounter: layer.sequenceCounter || 0
-                            },
-                          });
-                        }}
-                        transitionDuration={0.1}
-                        isSlave={true}
-                        isPlaying={layer.isPlaying}
-                      />
-                    );
-                  })}
-
                   {/* Bus A Layer (Legacy/Mixer mode) */}
                   {busAClip &&
                     !state.layers?.some((l: any) => l.activeClipId) &&
@@ -4349,15 +4333,15 @@ const OutputView = React.memo(() => {
                 </AnimatePresence>
 
                 {/* Layer Rendering - Multi-layer mixing */}
-                {state.layers &&
-                  state.layers
-                    .filter(
-                      (l: any) =>
-                        l.isVisible &&
-                        (state.layerOutputs?.[l.id] === mappedOutput?.id ||
-                          !state.layerOutputs?.[l.id]),
-                    )
-                    .map((l: any, index: number) => {
+                {(state.layers || [])
+                  .filter(
+                    (l: any) =>
+                      l.isVisible &&
+                      (state.layerOutputs?.[l.id] === mappedOutput?.id ||
+                        !state.layerOutputs?.[l.id] ||
+                        state.layerOutputs?.[l.id] === "all"),
+                  )
+                  .map((l: any, index: number) => {
                       const activeClip = l.activeClipId
                         ? (state.clips || []).find(
                             (c: any) => c.id === l.activeClipId,
@@ -4367,16 +4351,22 @@ const OutputView = React.memo(() => {
 
                       // Compute next clip in the sequence to preload:
                       let nextSrc = undefined;
-                      if (l.playbackMode === "sequence") {
+                      const playbackMode = l.playbackMode || "single";
+                      if (playbackMode === "sequence") {
                         const currentSlotIndex =
                           l.activeSlotIndex !== null
                             ? l.activeSlotIndex
                             : l.slots.findIndex(
                                 (s) => s?.id === l.activeClipId,
                               );
-                        const nextClipIndex = l.slots.findIndex(
-                          (s, idx) => idx > currentSlotIndex && s !== null,
-                        );
+                        let nextClipIndex = -1;
+                        for (let i = currentSlotIndex + 1; i < l.slots.length; i++) {
+                          if (l.slots[i]) {
+                            nextClipIndex = i;
+                            break;
+                          }
+                        }
+
                         let foundNext = null;
                         if (nextClipIndex !== -1) {
                           foundNext = l.slots[nextClipIndex];
@@ -4426,7 +4416,7 @@ const OutputView = React.memo(() => {
                               transform: `rotate(${l.rotation}deg)`,
                             }}
                           >
-                            <AnimatePresence initial={true}>
+                            <AnimatePresence initial={false}>
                               <VideoLayer
                                 key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}-${l.sequenceCounter || 0}`}
                                 clip={activeClip}
@@ -4436,8 +4426,8 @@ const OutputView = React.memo(() => {
                                 opacity={1}
                                 isProgram={true}
                                 isTransmitting={isTransmitting}
-                                transitionType="fade"
-                                transitionDuration={Math.max(
+                                transitionType={playbackMode === "sequence" ? "cut" : "fade"}
+                                transitionDuration={playbackMode === "sequence" ? 0 : Math.max(
                                   0,
                                   Math.min(1.5, l.transitionDuration || 0.4),
                                 )}
@@ -4452,13 +4442,14 @@ const OutputView = React.memo(() => {
                                   });
                                 }}
                                 loopOverride={
-                                  l.playbackMode === "single"
+                                  playbackMode === "single"
                                     ? l.loopVideo !== false
                                     : false
                                 }
                                 perfSettings={perfSettings}
                                 onUpdateClip={updateClip}
                                 isSlave={true}
+                                isPlaylistSequence={playbackMode === "sequence"}
                               />
                             </AnimatePresence>
                           </div>
@@ -5102,182 +5093,6 @@ const Inspector = React.memo(
       );
     }
 
-    if (selectedItemType === "preview") {
-      const preview = previews.find((p) => p.id === selectedItem?.id);
-      if (!preview) return null;
-
-      return (
-        <div className="h-full flex flex-col overflow-hidden bg-obs-bg">
-          <div className="px-3 py-2 border-b border-obs-border flex justify-between items-center bg-obs-surface">
-            <div className="flex items-center gap-2">
-              <MonitorIcon size={12} className="text-obs-accent" />
-              <span className="text-[11px] font-semibold text-obs-text uppercase tracking-widest text-obs-accent">
-                PROPIEDADES PREVIEW
-              </span>
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-6">
-            <div className="space-y-4">
-              <div className="flex flex-col gap-1">
-                <label className="text-[9px] text-obs-muted uppercase font-bold tracking-tighter">
-                  Nombre del Preview
-                </label>
-                <input
-                  type="text"
-                  value={preview.name}
-                  onChange={(e) =>
-                    setPreviews((prevs) =>
-                      prevs.map((pr) =>
-                        pr.id === preview.id
-                          ? { ...pr, name: e.target.value }
-                          : pr,
-                      ),
-                    )
-                  }
-                  className="bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] text-obs-text focus:border-obs-accent outline-none font-medium"
-                />
-              </div>
-
-              <CollapsibleSection
-                title="Asignación de Salidas"
-                defaultOpen={true}
-              >
-                <div className="space-y-4">
-                  {outputs.length === 0 ? (
-                    <div className="p-4 bg-obs-accent/10 border border-obs-accent/30 rounded text-[10px] text-obs-accent text-center">
-                      Primero define pantallas en el menú de Programa
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-4 gap-2">
-                      {outputs.map((out) => (
-                        <button
-                          key={out.id}
-                          onClick={() => {
-                            setPreviews((prevs) =>
-                              prevs.map((pr) =>
-                                pr.id === preview.id
-                                  ? {
-                                      ...pr,
-                                      selectedOutputs:
-                                        pr.selectedOutputs.includes(out.id)
-                                          ? pr.selectedOutputs.filter(
-                                              (o: any) => o !== out.id,
-                                            )
-                                          : [...pr.selectedOutputs, out.id],
-                                    }
-                                  : pr,
-                              ),
-                            );
-                          }}
-                          className={`aspect-square rounded font-bold text-xs flex items-center justify-center transition-all border ${preview.selectedOutputs.includes(out.id) ? "bg-obs-accent text-white border-obs-accent shadow-[0_0_8px_rgba(0,163,245,0.3)]" : "bg-obs-dark-1 text-obs-muted border-obs-text/10 hover:border-obs-text/30"}`}
-                        >
-                          {out.id}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-[9px] text-obs-muted leading-tight mt-2 italic">
-                    Los números seleccionados indican a qué pantallas se enviará
-                    este contenido al pulsar TAKE.
-                  </p>
-                </div>
-              </CollapsibleSection>
-
-              <CollapsibleSection title="Estado Maestro" defaultOpen={true}>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between bg-obs-dark-1 p-3 rounded border border-obs-text/10">
-                    <div className="flex flex-col">
-                      <span className="text-[11px] font-bold text-white uppercase">
-                        Modo Preparado (LIVE)
-                      </span>
-                      <span className="text-[9px] text-obs-muted">
-                        Mantener activo para incluir en el TAKE
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setPreviews((prevs) =>
-                          prevs.map((p) =>
-                            p.id === preview.id
-                              ? { ...p, isLive: !p.isLive }
-                              : p,
-                          ),
-                        );
-                      }}
-                      className={`w-12 h-6 rounded-full transition-all relative ${preview.isLive ? "bg-red-600" : "bg-gray-600"}`}
-                    >
-                      <div
-                        className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${preview.isLive ? "left-7" : "left-1"}`}
-                      />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between bg-obs-dark-1 p-3 rounded border border-obs-text/10">
-                    <div className="flex flex-col">
-                      <span className="text-[11px] font-bold text-white uppercase">
-                        Ocultar Overlays
-                      </span>
-                      <span className="text-[9px] text-obs-muted">
-                        Ocultar textos de STANDBY y PREVIEW
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setPreviews((prevs) =>
-                          prevs.map((p) =>
-                            p.id === preview.id
-                              ? { ...p, hideOverlays: !p.hideOverlays }
-                              : p,
-                          ),
-                        );
-                      }}
-                      className={`w-12 h-6 rounded-full transition-all relative ${preview.hideOverlays ? "bg-obs-accent" : "bg-gray-600"}`}
-                    >
-                      <div
-                        className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${preview.hideOverlays ? "left-7" : "left-1"}`}
-                      />
-                    </button>
-                  </div>
-
-                  <div className="space-y-2 pt-2">
-                    <label className="text-[9px] text-obs-muted uppercase font-bold tracking-tighter">
-                      Color de Acento
-                    </label>
-                    <div className="flex gap-2 flex-wrap">
-                      {[
-                        "#00a3f5",
-                        "#FF4444",
-                        "#44FF44",
-                        "#FFAA00",
-                        "#FF00FF",
-                        "#FFFFFF",
-                      ].map((color) => (
-                        <button
-                          key={color}
-                          onClick={() => {
-                            setPreviews((prevs) =>
-                              prevs.map((p) =>
-                                p.id === preview.id
-                                  ? { ...p, accentColor: color }
-                                  : p,
-                              ),
-                            );
-                          }}
-                          className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 ${preview.accentColor === color ? "border-white scale-110 shadow-lg" : "border-transparent"}`}
-                          style={{ backgroundColor: color }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </CollapsibleSection>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
     if (selectedItemType === "layer" && selectedItem) {
       const layer = selectedItem as Layer;
       return (
@@ -5494,49 +5309,6 @@ const Inspector = React.memo(
             )}
 
             <CollapsibleSection
-              title="TRANSICIONES"
-              defaultOpen={true}
-              onReset={() =>
-                onUpdateLayer(layer.id, {
-                  transition: "fade",
-                  transitionDuration: 0.4,
-                })
-              }
-            >
-              <div className="space-y-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-[8px] text-obs-muted uppercase font-black">
-                    Transición Fundido
-                  </label>
-                  <div className="bg-obs-accent/20 border border-obs-accent/40 rounded py-1 px-3 text-[10px] text-obs-accent font-black uppercase text-center shadow-[0_0_10px_rgba(0,163,245,0.2)]">
-                    CROSSFADE (ESTÁNDAR)
-                  </div>
-                </div>
-
-                <PropertyControl
-                  label="Duración"
-                  value={
-                    (layer.transitionDuration !== undefined
-                      ? layer.transitionDuration
-                      : 0.4) * 1000
-                  }
-                  displayValue={`${Math.round((layer.transitionDuration !== undefined ? layer.transitionDuration : 0.4) * 1000)}ms`}
-                  min={0}
-                  max={1500}
-                  step={10}
-                  onChange={(val) =>
-                    onUpdateLayer(layer.id, { transitionDuration: val / 1000 })
-                  }
-                />
-
-                <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
-                  {(layer.transition === "fade" || !layer.transition) &&
-                    "Fundido cruzado de opacidad."}
-                </div>
-              </div>
-            </CollapsibleSection>
-
-            <CollapsibleSection
               title="Direccionamiento"
               defaultOpen={true}
               onReset={() => onUpdateLayer(layer.id, { outputId: null })}
@@ -5728,49 +5500,6 @@ const Inspector = React.memo(
                       className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-transform ${playlist.loop !== false ? "translate-x-6" : "translate-x-1"}`}
                     />
                   </button>
-                </div>
-              </div>
-            </CollapsibleSection>
-
-            <CollapsibleSection
-              title="TRANSICIONES"
-              defaultOpen={true}
-              onReset={() =>
-                onUpdate(playlist.id, {
-                  transition: "fade",
-                  transitionDuration: 0.4,
-                })
-              }
-            >
-              <div className="space-y-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-[8px] text-obs-muted uppercase font-black">
-                    Transición Fundido
-                  </label>
-                  <div className="bg-obs-accent/20 border border-obs-accent/40 rounded py-1 px-3 text-[10px] text-obs-accent font-black uppercase text-center shadow-[0_0_10px_rgba(0,163,245,0.2)]">
-                    CROSSFADE
-                  </div>
-                </div>
-
-                <PropertyControl
-                  label="Duración"
-                  value={
-                    (playlist.transitionDuration !== undefined
-                      ? playlist.transitionDuration
-                      : 0.4) * 1000
-                  }
-                  displayValue={`${Math.round((playlist.transitionDuration !== undefined ? playlist.transitionDuration : 0.4) * 1000)}ms`}
-                  min={0}
-                  max={1500}
-                  step={10}
-                  onChange={(val) =>
-                    onUpdate(playlist.id, { transitionDuration: val / 1000 })
-                  }
-                />
-
-                <div className="p-2 bg-obs-dark-1 rounded border border-obs-text/5 text-[8.5px] text-obs-muted leading-tight italic">
-                  {(playlist.transition === "fade" || !playlist.transition) &&
-                    "Fundido cruzado de opacidad."}
                 </div>
               </div>
             </CollapsibleSection>
@@ -6919,7 +6648,7 @@ const Inspector = React.memo(
                               Tiempo de aviso (Tiempo ámbar)
                             </label>
                             <div className="flex gap-1.5 items-center">
-                              <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border flex-1">
+                              <div className="flex items-center bg-obs-bg rounded p-1 border border-obs-border shrink-0">
                                 <input
                                   type="color"
                                   value={
@@ -6934,10 +6663,6 @@ const Inspector = React.memo(
                                   }
                                   className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
                                 />
-                                <span className="text-[8px] text-obs-text font-mono truncate">
-                                  {externalScreenSettings.timerAmberColor ??
-                                    "#f59e0b"}
-                                </span>
                               </div>
                               <div className="flex items-center gap-1 bg-obs-bg border border-obs-border rounded p-1 w-14 shrink-0">
                                 <input
@@ -6968,7 +6693,7 @@ const Inspector = React.memo(
                               Tiempo Límite (tiempo rojo)
                             </label>
                             <div className="flex gap-1.5 items-center font-sans">
-                              <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border flex-1">
+                              <div className="flex items-center bg-obs-bg rounded p-1 border border-obs-border shrink-0">
                                 <input
                                   type="color"
                                   value={
@@ -6983,10 +6708,6 @@ const Inspector = React.memo(
                                   }
                                   className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
                                 />
-                                <span className="text-[8px] text-obs-text font-mono truncate font-sans">
-                                  {externalScreenSettings.timerRedColor ??
-                                    "#ef4444"}
-                                </span>
                               </div>
                               <div className="flex items-center gap-1 bg-obs-bg border border-obs-border rounded p-1 w-14 shrink-0 font-sans">
                                 <input
@@ -7018,7 +6739,7 @@ const Inspector = React.memo(
                           <label className="text-[7px] text-obs-muted uppercase font-bold">
                             Color Texto
                           </label>
-                          <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border">
+                          <div className="flex items-center bg-obs-bg rounded p-1 border border-obs-border w-fit">
                             <input
                               type="color"
                               value={
@@ -7032,16 +6753,13 @@ const Inspector = React.memo(
                               }
                               className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
                             />
-                            <span className="text-[8px] text-obs-text font-mono truncate">
-                              {externalScreenSettings.timerColor ?? "#ff0000"}
-                            </span>
                           </div>
                         </div>
                         <div className="space-y-1 font-sans">
                           <label className="text-[7px] text-obs-muted uppercase font-bold">
                             Color Fondo
                           </label>
-                          <div className="flex gap-1 items-center bg-obs-bg rounded p-1 border border-obs-border">
+                          <div className="flex items-center bg-obs-bg rounded p-1 border border-obs-border w-fit">
                             <input
                               type="color"
                               value={
@@ -7055,9 +6773,6 @@ const Inspector = React.memo(
                               }
                               className="w-4 h-4 bg-transparent border-0 cursor-pointer rounded overflow-hidden shrink-0"
                             />
-                            <span className="text-[8px] text-obs-text font-mono truncate">
-                              {externalScreenSettings.timerBgColor ?? "#000000"}
-                            </span>
                           </div>
                         </div>
                       </div>
@@ -10157,6 +9872,11 @@ export default function App() {
     "Programa",
   ]);
   const [isAudioConfigModalOpen, setIsAudioConfigModalOpen] = useState(false);
+
+  // Audio signals
+  const [programLevel, setProgramLevel] = useState(0);
+  const micVolumeRef = useRef<number>(0);
+
   const [audioVolumes, setAudioVolumes] = useState<Record<string, number>>({
     Master: 0.5,
     Programa: 0.5,
@@ -10178,7 +9898,7 @@ export default function App() {
     }[]
   >([]);
 
-  const getFaderSignalLevel = (sourceName: string): number => {
+  const getFaderSignalLevel = useCallback((sourceName: string): number => {
     // Volume setting
     const vol =
       sourceName === "Master"
@@ -10193,33 +9913,42 @@ export default function App() {
 
     if (vol <= 0.001) return 0;
 
-    // Check if there is active playing video program audio
-    const hasProgramVideoAudio = !!programClipId;
-
+    let baseSignal = 0;
+    
+    // Logic for individual faders
     if (sourceName === "Programa") {
-      return Math.max(0, Math.min(1, programLevel * vol));
+      baseSignal = programLevel;
+    } else if (sourceName === "IN" || sourceName.startsWith("in-") || sourceName === selectedAudioInput) {
+      baseSignal = micVolumeRef.current;
+    } else if (sourceName === "USB" || sourceName.startsWith("out-")) {
+      baseSignal = programLevel; // Default out faders to program signal
+    } else if (sourceName === "Master") {
+      // Master is a mix of Programa level and Mic level
+      const progSig = programLevel * programVolume;
+      const micSig = micVolumeRef.current * usbInVolume;
+      baseSignal = Math.max(progSig, micSig);
+      
+      // Also consider dynamic faders from audioVolumes
+      Object.keys(audioVolumes).forEach(id => {
+        if (id !== "Master") {
+          const fV = audioVolumes[id] ?? 0.5;
+          if (id === "Programa") baseSignal = Math.max(baseSignal, programLevel * fV);
+          else if (id === "IN" || id === selectedAudioInput) baseSignal = Math.max(baseSignal, micVolumeRef.current * fV);
+        }
+      });
     }
 
-    if (sourceName === "IN" || sourceName.startsWith("in-")) {
-      const level = micVolumeRef.current;
-      return Math.max(0, Math.min(1, level * vol));
-    }
-
-    if (sourceName.startsWith("out-") || sourceName === "USB") {
-      return Math.max(0, Math.min(1, programLevel * vol));
-    }
-
-    if (sourceName === "Master") {
-      // Sum mix of all active sub-faders
-      const activeSignals = activeFaderIds
-        .filter((id) => id !== "Master")
-        .map((id) => getFaderSignalLevel(id));
-      const maxSig = activeSignals.length > 0 ? Math.max(...activeSignals) : 0;
-      return Math.max(0, Math.min(1, maxSig * vol));
-    }
-
-    return 0;
-  };
+    // Return the signal scaled by this fader's volume
+    // Multiply by a small gain (1.15) to make it look "lively"
+    return Math.max(0, Math.min(1, baseSignal * vol * 1.15));
+  }, [
+    masterVolume,
+    programVolume,
+    usbInVolume,
+    audioVolumes,
+    programLevel,
+    selectedAudioInput
+  ]);
 
   const DEFAULT_SCREEN_SETTINGS: ExternalScreenSettings = {
     resolution: "1920x1080",
@@ -10925,7 +10654,7 @@ export default function App() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const micVolumeRef = useRef<number>(0);
+  // micVolumeRef moved to top
 
   // Hook up real dynamic capture for the selected audio input
   useEffect(() => {
@@ -10992,7 +10721,8 @@ export default function App() {
           }
           const average = sum / bufferLength;
           const rawVolume = average / 128;
-          micVolumeRef.current = Math.min(1, rawVolume * 1.5);
+          // Increased sensitivity for mic input
+          micVolumeRef.current = Math.min(1, rawVolume * 2.8);
           animationFrameId = requestAnimationFrame(updateMicLevel);
         };
 
@@ -12413,7 +12143,24 @@ export default function App() {
   };
 
   const [previewLevel, setPreviewLevel] = useState(0);
-  const [programLevel, setProgramLevel] = useState(0);
+  // programLevel moved up to be available for getFaderSignalLevel
+
+  // Global Audio Context Auto-Resume on User Interaction
+  useEffect(() => {
+    const resumeAudio = () => {
+      if (audioContext && audioContext.state === "suspended") {
+        audioContext.resume().catch(() => {});
+      }
+    };
+    window.addEventListener("click", resumeAudio);
+    window.addEventListener("mousedown", resumeAudio);
+    window.addEventListener("keydown", resumeAudio);
+    return () => {
+      window.removeEventListener("click", resumeAudio);
+      window.removeEventListener("mousedown", resumeAudio);
+      window.removeEventListener("keydown", resumeAudio);
+    };
+  }, []);
 
   updateClip = (id: string, updates: Partial<Clip>) => {
     setClips((prev) =>
@@ -13637,16 +13384,6 @@ export default function App() {
                       </button>
                       <button
                         onClick={() => {
-                          setIsPreviewModalOpen(true);
-                          setIsEditMenuOpen(false);
-                        }}
-                        className="w-full text-left px-4 py-2.5 text-[10px] font-bold capitalize tracking-widest text-obs-text hover:bg-obs-accent hover:text-white transition-colors flex items-center justify-between border-b border-obs-text/5"
-                      >
-                        <span>Preview</span>
-                        <Eye size={12} />
-                      </button>
-                      <button
-                        onClick={() => {
                           if (window.electron?.openSettings) {
                             window.electron.openSettings();
                           } else {
@@ -13801,13 +13538,15 @@ export default function App() {
                                         : (audioVolumes[sourceName] ?? 0.5);
 
                               const onChange = (val: number) => {
-                                if (sourceName === "Master")
+                                if (sourceName === "Master") {
                                   setMasterVolume(val);
-                                else if (sourceName === "Programa")
+                                  (window.electron as any)?.setWindowsVolume(val).catch(() => {});
+                                } else if (sourceName === "Programa")
                                   setProgramVolume(val);
-                                else if (sourceName === "USB")
+                                else if (sourceName === "USB") {
                                   setUsbOutVolume(val);
-                                else if (sourceName === "IN")
+                                  (window.electron as any)?.setWindowsVolume(val).catch(() => {});
+                                } else if (sourceName === "IN")
                                   setUsbInVolume(val);
 
                                 setAudioVolumes((prev) => ({
@@ -14195,12 +13934,7 @@ export default function App() {
                     )}
                   </div>
                   <div
-                    className={`w-full aspect-video shadow-xl relative border rounded overflow-hidden cursor-pointer transition-all ${selectedItemType === "preview" && selectedItemId === preview.id ? "ring-2 ring-[#00a3f5] border-transparent" : "border-obs-muted/40 hover:border-obs-muted/70"}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedItemType("preview");
-                      setSelectedItemId(preview.id);
-                    }}
+                    className={`w-full aspect-video shadow-xl relative border rounded overflow-hidden transition-all ${selectedItemType === "preview" && selectedItemId === preview.id ? "ring-2 ring-[#00a3f5] border-transparent" : "border-obs-muted/40 hover:border-obs-muted/70"}`}
                     onDrop={(e) => onDropOnMultiPreview(preview.id, e)}
                   >
                     <Monitor
@@ -14555,26 +14289,7 @@ export default function App() {
                   })()}
 
                   <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        setWorkMode("layers");
-                        setShowLayers(true);
-                        setShowPlaylists(false);
-                      }}
-                      className={`px-3 py-1 rounded-md text-[10px] font-black tracking-wide transition-all border ${workMode === "layers" ? "bg-obs-accent text-black border-obs-accent scale-100" : "bg-transparent text-white border-white hover:bg-white/10 scale-95"}`}
-                    >
-                      GESTIÓN DE CAPAS
-                    </button>
-                    <button
-                      onClick={() => {
-                        setWorkMode("previews");
-                        setShowLayers(false);
-                        setShowPlaylists(true);
-                      }}
-                      className={`px-3 py-1 rounded-md text-[10px] font-black tracking-wide transition-all border ${workMode === "previews" ? "bg-obs-accent text-black border-obs-accent scale-100" : "bg-transparent text-white border-white hover:bg-white/10 scale-95"}`}
-                    >
-                      PREVIEWS / PLAYLIST
-                    </button>
+                    {/* Work mode buttons removed as requested - defaulting to layers only */}
                   </div>
                 </div>
               </div>
@@ -14651,34 +14366,7 @@ export default function App() {
                 </div>
               )}
 
-              {workMode === "previews" && (
-                <CollapsibleSection title="Playlists" defaultOpen={true}>
-                  <div className="h-32 overflow-hidden p-2">
-                    <div className="h-full border-2 border-dashed border-obs-accent/30 rounded-lg overflow-hidden relative group">
-                      <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[8px] font-black uppercase tracking-[0.3em] text-obs-accent/50 pointer-events-none z-10 transition-opacity group-hover:opacity-20">
-                        DRAG AND DROP VIDEOS PLAY LIST
-                      </div>
-                      <PlaylistsSection
-                        playlists={playlists}
-                        onAddPlaylist={addPlaylist}
-                        onDropOnPlaylist={onDropOnPlaylist}
-                        onSelectPlaylist={(p) => {
-                          setSelectedItemType("playlist");
-                          setSelectedItemId(p.id);
-                        }}
-                        onSetEditingPlaylist={setEditingPlaylistId}
-                        selectedPlaylistId={
-                          selectedItemType === "playlist"
-                            ? selectedItemId
-                            : null
-                        }
-                        isDarkMode={isDarkMode}
-                        isHorizontal={true}
-                      />
-                    </div>
-                  </div>
-                </CollapsibleSection>
-              )}
+              {/* Playlists work mode removed as requested */}
             </div>
 
             {/* Bottom Docks Area - Fixed at bottom */}

@@ -378,7 +378,11 @@ try {
     $ppt = New-Object -ComObject PowerPoint.Application
     
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
-    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoFalse)
+    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
+    
+    # Optional: Minimize the window immediately if wanted, but WithWindow=True often fixes hang/failure issues
+    # $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+    # $ppt.WindowState = 2 # ppWindowMinimized
     
     # Save deck as a multi-page PDF document
     # 32 is the PowerPoint constant for ppSaveAsPDF
