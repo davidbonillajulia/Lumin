@@ -218,7 +218,7 @@ interface Layer {
   isActive?: boolean;
   loop?: boolean;
   loopVideo?: boolean;
-  playbackMode?: "single" | "sequence";
+  playbackMode?: "single" | "sequence" | "column";
   sequenceCounter?: number;
 }
 
@@ -412,12 +412,25 @@ const FluidTimeDisplay = ({
   eventId,
   isRemaining,
   className,
+  clipId,
+  outputId,
+  clips,
 }: {
   eventId: string;
   isRemaining?: boolean;
   className?: string;
+  clipId?: string | null;
+  outputId?: string;
+  clips?: any[];
 }) => {
   const spanRef = useRef<HTMLSpanElement>(null);
+
+  const trackerId = useMemo(() => {
+    if (outputId && clipId) {
+      return `output_${outputId}_${clipId}`;
+    }
+    return null;
+  }, [outputId, clipId]);
 
   useEffect(() => {
     let animId: number;
@@ -425,46 +438,85 @@ const FluidTimeDisplay = ({
     let smoothedTime = 0;
 
     const loop = () => {
-      const now = performance.now();
-      const dt = (now - lastSysTime) / 1000;
-      lastSysTime = now;
+      try {
+        const now = performance.now();
+        const dt = (now - lastSysTime) / 1000;
+        lastSysTime = now;
 
-      if (spanRef.current) {
-        let displayTime = 0;
-        const video = (window as any).__luminProgramVideo;
+        if (spanRef.current) {
+          let displayTime = 0;
+          const video = (window as any).__luminProgramVideo;
 
-        if (video) {
-          const actualCurrent = video.currentTime || 0;
-          const actualTotal = video.duration || 0;
+          const clip = clips?.find((c) => c.id === clipId);
+          const activeIsPlaying = clip ? (clip.isPlaying !== false) : false;
+          const actualTotal = clip?.duration || 0;
 
-          if (!video.paused && !video.ended && video.readyState >= 2) {
-            const diff = actualCurrent - smoothedTime;
-            // If the video time jumped significantly (seeking or starting), snap to it
-            if (Math.abs(diff) > 0.3) {
-              smoothedTime = actualCurrent;
-            } else {
-              // Extrapolate forward with the clock
-              smoothedTime += dt * video.playbackRate;
-              // Prevent it from drifting too far above real time
-              if (smoothedTime < actualCurrent) smoothedTime = actualCurrent;
-              else if (smoothedTime > actualCurrent + 0.1)
-                smoothedTime = actualCurrent + 0.1;
+          if (video) {
+            const actualCurrent = video.currentTime || 0;
+            const actualTotalVideo = video.duration || 0;
+
+            // If the video global reference changed, reset smoothedTime to prevent garbage jumps
+            if ((window as any).__lastVideoRef !== video) {
+              (window as any).__lastVideoRef = video;
+              if (trackerId) {
+                smoothedTime = (window as any).__luminVideoTimes?.[trackerId] ?? actualCurrent;
+              } else {
+                smoothedTime = actualCurrent;
+              }
             }
+
+            if (!video.paused && !video.ended && video.readyState >= 2) {
+              const diff = actualCurrent - smoothedTime;
+              // If the video time jumped significantly (seeking or starting), snap to it
+              if (Math.abs(diff) > 0.3) {
+                smoothedTime = actualCurrent;
+              } else {
+                // Extrapolate forward with the clock
+                smoothedTime += dt * video.playbackRate;
+                // Prevent it from drifting too far above real time
+                if (smoothedTime < actualCurrent) smoothedTime = actualCurrent;
+                else if (smoothedTime > actualCurrent + 0.1)
+                  smoothedTime = actualCurrent + 0.1;
+              }
+            } else {
+              smoothedTime = actualCurrent;
+            }
+
+            displayTime = isRemaining
+              ? Math.max(0, actualTotalVideo - Math.min(smoothedTime, actualTotalVideo))
+              : Math.min(smoothedTime, actualTotalVideo);
           } else {
-            smoothedTime = actualCurrent;
+            // Fallback to background Broadcast value
+            const actualCurrent = trackerId ? ((window as any).__luminVideoTimes?.[trackerId] || 0) : 0;
+
+            if (activeIsPlaying && actualCurrent > 0 && actualCurrent < actualTotal) {
+              const diff = actualCurrent - smoothedTime;
+              if (smoothedTime === 0 || Math.abs(diff) > 0.6) {
+                smoothedTime = actualCurrent;
+              } else {
+                smoothedTime += dt;
+                if (smoothedTime < actualCurrent) {
+                  smoothedTime = actualCurrent;
+                } else if (smoothedTime > actualCurrent + 0.3) {
+                  smoothedTime = actualCurrent + 0.3;
+                }
+              }
+            } else {
+              smoothedTime = actualCurrent;
+            }
+
+            displayTime = isRemaining
+              ? Math.max(0, actualTotal - Math.min(smoothedTime, actualTotal))
+              : Math.min(smoothedTime, actualTotal);
           }
 
-          displayTime = isRemaining
-            ? Math.max(0, actualTotal - Math.min(smoothedTime, actualTotal))
-            : Math.min(smoothedTime, actualTotal);
-        } else {
-          smoothedTime = 0;
+          const text = (isRemaining ? "-" : "") + formatTime(displayTime);
+          if (spanRef.current.innerText !== text) {
+            spanRef.current.innerText = text;
+          }
         }
-
-        const text = (isRemaining ? "-" : "") + formatTime(displayTime);
-        if (spanRef.current.innerText !== text) {
-          spanRef.current.innerText = text;
-        }
+      } catch (e) {
+        console.error("FluidTimeDisplay loop error:", e);
       }
       animId = requestAnimationFrame(loop);
     };
@@ -473,12 +525,10 @@ const FluidTimeDisplay = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [eventId, isRemaining]);
+  }, [eventId, isRemaining, clipId, trackerId, clips]);
 
   return (
-    <span ref={spanRef} className={className}>
-      {isRemaining ? "-" : ""}00:00:00
-    </span>
+    <span ref={spanRef} className={className}></span>
   );
 };
 
@@ -1040,7 +1090,11 @@ const ScaleToFit = ({
     isTransmitting, 
     onLayerEnded, 
     updateClip, 
-    perfSettings 
+    perfSettings,
+    isSlave = false,
+    allowClockAuthority = false,
+    onProgressUpdate = undefined,
+    outputId
   }: { 
     layer: Layer; 
     clips: Clip[]; 
@@ -1052,26 +1106,45 @@ const ScaleToFit = ({
     onLayerEnded: any; 
     updateClip: any; 
     perfSettings: any; 
+    isSlave?: boolean;
+    allowClockAuthority?: boolean;
+    onProgressUpdate?: (current: number, total: number) => void;
+    outputId?: string;
   }) => {
     const activeClip = layer.activeClipId ? clips?.find((c) => c.id === layer.activeClipId) : null;
-    const [busA, setBusA] = useState<Clip | null>(activeClip);
-    const [busB, setBusB] = useState<Clip | null>(null);
+    const initialKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
+    const [busA, setBusA] = useState<{ clip: Clip; key: string } | null>(() => {
+      return activeClip
+        ? { clip: activeClip, key: initialKey! }
+        : null;
+    });
+    const [busB, setBusB] = useState<{ clip: Clip; key: string } | null>(null);
     const [isBusAReady, setIsBusAReady] = useState(true);
-    const [activeId, setActiveId] = useState(activeClip?.id);
+    const [activeKey, setActiveKey] = useState<string | null>(initialKey);
 
     useEffect(() => {
-      if (activeClip?.id !== activeId) {
-        if (!isBusAReady) {
+      const currentKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
+      if (currentKey !== activeKey) {
+        if (!activeClip) {
+          setBusA(null);
+          setBusB(null);
+          setIsBusAReady(true);
+        } else if (!isBusAReady) {
           // If we were already transitioning, force swap
-          setBusA(activeClip);
+          setBusA({ clip: activeClip, key: currentKey });
+          setBusB(null);
           setIsBusAReady(false);
         } else {
-          setBusB(activeClip);
+          setBusB({ clip: activeClip, key: currentKey });
           setIsBusAReady(false);
         }
-        setActiveId(activeClip?.id);
+        setActiveKey(currentKey);
+      } else if (activeClip) {
+        // Keep clip properties (like fitToScale, colors) up-to-date real-time
+        setBusA(prev => (prev && prev.clip.id === activeClip.id && prev.clip !== activeClip) ? { ...prev, clip: activeClip } : prev);
+        setBusB(prev => (prev && prev.clip.id === activeClip.id && prev.clip !== activeClip) ? { ...prev, clip: activeClip } : prev);
       }
-    }, [activeClip?.id, activeId, isBusAReady]);
+    }, [activeClip, activeKey, isBusAReady, layer.sequenceCounter]);
 
     // Handle transition swap
     useEffect(() => {
@@ -1094,7 +1167,7 @@ const ScaleToFit = ({
       let foundNext = null;
       if (nextClipIndex !== -1) {
         foundNext = layer.slots[nextClipIndex];
-      } else if (layer.loop !== false || layer.playbackMode === "sequence") {
+      } else if (layer.loop !== false) {
         const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
         if (firstSlotIndex !== -1 && layer.slots[firstSlotIndex]?.id !== activeClip.id) {
           foundNext = layer.slots[firstSlotIndex];
@@ -1103,48 +1176,54 @@ const ScaleToFit = ({
       if (foundNext && foundNext.type === "video") nextSrc = foundNext.url;
     }
 
+    const activeNodes = [
+      busA && { ...busA, isBusA: true },
+      busB && { ...busB, isBusA: false }
+    ].filter(Boolean) as ({ clip: Clip; key: string; isBusA: boolean })[];
+
     return (
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <AnimatePresence initial={false}>
-          {busA && (
+          {activeNodes.map((bus) => (
             <VideoLayer
-              key={`layer-bus-A-${layer.id}-${busA.id}-${layer.sequenceCounter || 0}`}
-              clip={busA}
-              nextSrc={nextSrc}
-              volume={layer.muted ? 0 : volume}
-              masterVolume={masterVolume}
-              opacity={opacity * (busB && !isBusAReady ? 0 : 1)}
-              isProgram={isProgram && !busB}
-              isTransmitting={isTransmitting}
-              onEnded={() => onLayerEnded?.(layer.id, busA.id, layer.sequenceCounter || 0)}
-              loopOverride={layer.playbackMode === "single" ? layer.loopVideo !== false : false}
-              isPlaylistSequence={layer.playbackMode === "sequence"}
-              transitionType="fade"
-              transitionDuration={Math.min(1.5, layer.transitionDuration || 0.4)}
-              perfSettings={perfSettings}
-              onUpdateClip={updateClip}
-              onReady={() => setIsBusAReady(true)}
-            />
-          )}
-          {busB && (
-            <VideoLayer
-              key={`layer-bus-B-${layer.id}-${busB.id}-${layer.sequenceCounter || 0}`}
-              clip={busB}
+              key={`layer-video-${layer.id}-${bus.key}`}
+              clip={bus.clip}
+              nextSrc={bus.isBusA ? nextSrc : undefined}
               volume={layer.muted ? 0 : volume}
               masterVolume={masterVolume}
               opacity={opacity}
-              isProgram={isProgram && !isBusAReady}
+              isProgram={isProgram}
+              isPlaying={layer.isPlaying}
               isTransmitting={isTransmitting}
-              onEnded={() => onLayerEnded?.(layer.id, busB.id, layer.sequenceCounter || 0)}
-              loopOverride={layer.playbackMode === "single" ? layer.loopVideo !== false : false}
+              onEnded={() =>
+                onLayerEnded?.(
+                  layer.id,
+                  bus.clip.id,
+                  parseInt(bus.key.split("-").pop() || "0"),
+                )
+              }
+              loopOverride={
+                layer.playbackMode === "single"
+                  ? layer.loopVideo !== false
+                  : layer.playbackMode === "column"
+                    ? layer.loop !== false
+                    : false
+              }
               isPlaylistSequence={layer.playbackMode === "sequence"}
               transitionType="fade"
               transitionDuration={Math.min(1.5, layer.transitionDuration || 0.4)}
               perfSettings={perfSettings}
+              onProgressUpdate={onProgressUpdate}
               onUpdateClip={updateClip}
               onReady={() => setIsBusAReady(true)}
+              isSlave={isSlave}
+              isClockSource={
+                bus.isBusA ? (isProgram && allowClockAuthority && (!busB || !isBusAReady)) : false
+              }
+              layerId={layer.id}
+              outputId={outputId}
             />
-          )}
+          ))}
         </AnimatePresence>
       </div>
     );
@@ -1200,6 +1279,7 @@ const Monitor = React.memo(
     onUpdateClip,
     perfSettings,
     programPlayIndex = 0,
+    isSlave = false,
   }: {
     title: string;
     isActive?: boolean;
@@ -1253,6 +1333,7 @@ const Monitor = React.memo(
     onUpdateClip?: (id: string, updates: Partial<Clip>) => void;
     perfSettings?: any;
     programPlayIndex?: number;
+    isSlave?: boolean;
   }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const lastSrc = useRef<string>("");
@@ -1500,10 +1581,11 @@ const Monitor = React.memo(
                     >
                       <AnimatePresence custom={transitionType}>
                         {busAClip &&
+                          !layers?.some((l: any) => l.activeClipId && (layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id] || layerOutputs[l.id] === "all")) &&
                           (crossfaderValue === undefined ||
                             crossfaderValue < 100) && (
                             <VideoLayer
-                              key={`bus-A-${busAClip.id}-${programPlayIndex}`}
+                              key={`bus-A-${busAClip.id}-${activeOutputId || "1"}-${programPlayIndex}`}
                               clip={busAClip}
                               volume={volume}
                               masterVolume={masterVolume}
@@ -1523,11 +1605,14 @@ const Monitor = React.memo(
                               }
                               onReady={() => setIsBusAReady(true)}
                               perfSettings={perfSettings}
+                              isSlave={isSlave}
+                              isClockSource={crossfaderValue === 0}
+                              outputId={activeOutputId || "1"}
                             />
                           )}
                         {activeBusBClip && (
                           <VideoLayer
-                            key={`bus-B-${activeBusBClip.id}-${programPlayIndex}`}
+                            key={`bus-B-${activeBusBClip.id}-${activeOutputId || "1"}-${programPlayIndex}`}
                             clip={activeBusBClip}
                             volume={volume}
                             masterVolume={masterVolume}
@@ -1535,7 +1620,7 @@ const Monitor = React.memo(
                             style={{ clipPath: wipeTransform }}
                             faderOpacity={audioOpacityB}
                             isProgram={crossfaderValue === 100 || !isBusAReady}
-                            crossfaderValue={crossfaderValue}
+                            isClockSource={crossfaderValue === 100 || !isBusAReady}
                             transitionType={transitionType}
                             isTransmitting={isTransmitting}
                             onProgressUpdate={onProgressUpdate}
@@ -1546,63 +1631,89 @@ const Monitor = React.memo(
                                 : 0.4
                             }
                             perfSettings={perfSettings}
+                            onUpdateClip={onUpdateClip}
+                            onReady={() => setIsBusAReady(true)}
+                            isSlave={isSlave}
+                            outputId={activeOutputId || "1"}
                           />
                         )}
                       </AnimatePresence>
 
                       {/* Layer Rendering - Multi-layer mixing */}
-                      {layers
-                        .filter(
-                          (l) =>
-                            l.isVisible &&
-                            (layerOutputs[l.id] === activeOutputId ||
-                              !layerOutputs[l.id]),
-                        )
-                        .map((l, index) => (
-                          <div
-                            key={l.id}
-                            className="absolute inset-0 pointer-events-none"
-                            style={{
-                              opacity: l.opacity,
-                              zIndex: layers.length - index + 10,
-                            }}
-                          >
-                            <svg width="0" height="0" className="absolute">
-                              <filter
-                                id={`rgbLayer-${l.id}`}
-                                colorInterpolationFilters="sRGB"
-                              >
-                                <feColorMatrix
-                                  type="matrix"
-                                  values={`${l.colorBalance.r} 0 0 0 0
-                                    0 ${l.colorBalance.g} 0 0 0
-                                    0 0 ${l.colorBalance.b} 0 0
-                                    0 0 0 1 0`}
-                                />
-                              </filter>
-                            </svg>
+                      {(() => {
+                        const hasGlobalSource = !!busAClip || !!activeBusBClip;
+                        return layers.map((l, index) => {
+                          const isTargetOutput = layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id] || layerOutputs[l.id] === "all";
+                          // Always render the layer to maintain sequencing and playback state (master),
+                          // but make it visually hidden if it's not meant for the current active preview.
+                          const isVisuallyActive = l.isVisible && isTargetOutput;
+                          
+                          return (
                             <div
-                              className="w-full h-full relative"
+                              key={`${l.id}`}
+                              className="absolute inset-0 pointer-events-none"
                               style={{
-                                filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayer-${l.id})`,
-                                transform: `rotate(${l.rotation}deg)`,
+                                opacity: isVisuallyActive ? l.opacity : 0,
+                                zIndex: layers.length - index + 10,
+                                visibility: isVisuallyActive ? 'visible' : 'hidden'
                               }}
                             >
-                              <LayerPlaybox 
-                                layer={l}
-                                clips={clips || []}
-                                volume={volume}
-                                masterVolume={masterVolume}
-                                opacity={opacity}
-                                isProgram={!!isProgram}
-                                isTransmitting={isTransmitting}
-                                onLayerEnded={onLayerEnded}
-                                updateClip={updateClip}
-                                perfSettings={perfSettings}
-                              />
+                              <svg width="0" height="0" className="absolute">
+                                <filter
+                                  id={`rgbLayer-${l.id}`}
+                                  colorInterpolationFilters="sRGB"
+                                >
+                                  <feColorMatrix
+                                    type="matrix"
+                                    values={`${l.colorBalance.r} 0 0 0 0
+                                      0 ${l.colorBalance.g} 0 0 0
+                                      0 0 ${l.colorBalance.b} 0 0
+                                      0 0 0 1 0`}
+                                  />
+                                </filter>
+                              </svg>
+                              <div
+                                className="w-full h-full relative"
+                                style={{
+                                  filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayer-${l.id})`,
+                                  transform: `rotate(${l.rotation}deg)`,
+                                }}
+                              >
+                                  <LayerPlaybox
+                                    layer={l}
+                                    clips={clips || []}
+                                    volume={isVisuallyActive ? volume : 0}
+                                    masterVolume={masterVolume}
+                                    opacity={opacity}
+                                    isProgram={!!isProgram}
+                                    isTransmitting={isTransmitting}
+                                    onLayerEnded={onLayerEnded}
+                                    onProgressUpdate={(current, total) => {
+                                      if (!!isProgram && isVisuallyActive) {
+                                        onProgressUpdate?.(current, total);
+                                        try {
+                                          window.dispatchEvent(
+                                            new CustomEvent("video-progress-program", {
+                                              detail: { current, total },
+                                            }),
+                                          );
+                                        } catch (e) {}
+                                      }
+                                    }}
+                                    updateClip={updateClip}
+                                    perfSettings={perfSettings}
+                                    isSlave={isSlave}
+                                    allowClockAuthority={
+                                      !hasGlobalSource && index === 0
+                                    }
+                                    outputId={activeOutputId}
+                                  />
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        });
+                      })()}
+
 
                       <AnimatePresence>
                         {pipLayers
@@ -1662,6 +1773,7 @@ const Monitor = React.memo(
                                       opacity={pip.opacity}
                                       isProgram={false}
                                       onUpdateClip={updateClip}
+                                      layerId={pip.id}
                                     />
                                   </div>
                                 )}
@@ -1712,6 +1824,7 @@ const Monitor = React.memo(
                         : 0.4
                     }
                     perfSettings={perfSettings}
+                    outputId={activeOutputId}
                   />
                 ) : (
                   <motion.div
@@ -2710,6 +2823,9 @@ const VideoLayer = ({
   perfSettings,
   isSlave = false,
   isPlaylistSequence = false,
+  isClockSource = false,
+  layerId,
+  outputId,
 }: {
   clip: any;
   isPlaying?: boolean;
@@ -2735,6 +2851,9 @@ const VideoLayer = ({
   perfSettings?: any;
   isSlave?: boolean;
   isPlaylistSequence?: boolean;
+  isClockSource?: boolean;
+  layerId?: string;
+  outputId?: string;
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>("");
@@ -2747,6 +2866,16 @@ const VideoLayer = ({
   const earlyLoopTriggered = useRef(false);
   const lastBroadcastTimeRef = useRef<number>(0);
   const autoPlayNextRef = useRef<boolean>(false);
+
+  const trackerId = useMemo(() => {
+    if (layerId) {
+      return `layer_${outputId || "1"}_${layerId}_${clip.id}`;
+    }
+    if (outputId) {
+      return `output_${outputId}_${clip.id}`;
+    }
+    return `clip_${clip.id}`;
+  }, [layerId, outputId, clip.id]);
 
   const activeIsPlaying = isPlaying !== undefined ? isPlaying : (clip.isPlaying !== false);
 
@@ -2818,6 +2947,8 @@ const VideoLayer = ({
   }, [firstFrameRendered, onReady]);
 
   const handleEnded = () => {
+    if (earlyEndTriggered.current) return;
+    earlyEndTriggered.current = true;
     onEndedRef.current?.();
   };
 
@@ -2827,15 +2958,18 @@ const VideoLayer = ({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (video && isProgram) {
+    if (video && isClockSource && !isSlave) {
       (window as any).__luminProgramVideo = video;
+      if (typeof window !== "undefined") {
+        (window as any).__lastProgramVideo = video;
+      }
       return () => {
         if ((window as any).__luminProgramVideo === video) {
           (window as any).__luminProgramVideo = null;
         }
       };
     }
-  }, [isProgram]);
+  }, [isClockSource, clip.id, isSlave]);
 
   const filterId = useMemo(
     () => `filter-${clip.id}-${Math.random().toString(36).substr(2, 9)}`,
@@ -2860,32 +2994,45 @@ const VideoLayer = ({
         onTimeUpdate?.(video.currentTime);
         onProgressUpdate?.(video.currentTime, video.duration || 0);
 
-        // Throttle BroadcastChannel updates to keep performance outstanding
+        // Periodically record and broadcast time updates to keep other screens in sync
         const now = Date.now();
-        if (!isSlave && now - lastBroadcastTimeRef.current >= 300) {
+        if (now - lastBroadcastTimeRef.current >= 300) {
           lastBroadcastTimeRef.current = now;
-          if (!(window as any).__luminVideoTimes) {
-            (window as any).__luminVideoTimes = {};
-          }
-          (window as any).__luminVideoTimes[clip.id] = video.currentTime;
-          try {
-            if (!(window as any).__luminTimeChannel) {
-              (window as any).__luminTimeChannel = new BroadcastChannel(
-                "lumin-output",
-              );
+          if (typeof window !== "undefined") {
+            if (!(window as any).__luminVideoTimes) {
+              (window as any).__luminVideoTimes = {};
             }
-            (window as any).__luminTimeChannel.postMessage({
-              type: "VIDEO_TIME_UPDATE",
-              payload: { clipId: clip.id, currentTime: video.currentTime },
-            });
-          } catch (err) {}
+            (window as any).__luminVideoTimes[trackerId] = video.currentTime;
+            
+            // Both the master (controller) and active slave playing in the output can broadcast.
+            // If it is a slave, only broadcast when actually playing so we don't interfere when paused.
+            if (!isSlave || (isSlave && activeIsPlaying)) {
+              const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+              if (ch) {
+                if (!(window as any).__luminTimeChannel) (window as any).__luminTimeChannel = ch;
+                try {
+                  ch.postMessage({
+                    type: "VIDEO_TIME_UPDATE",
+                    payload: { trackerId, clipId: clip.id, currentTime: video.currentTime },
+                  });
+                } catch (err) {}
+              }
+            }
+          }
         }
 
-        // Sequential Playback Stability: Trigger next clip slightly before actual end to hide browser seeker latency
+        // Sequential Playback Stability
         if (isPlaylistSequence && video.duration > 0) {
           const remaining = video.duration - video.currentTime;
-          // Trigger 80ms early for smooth "Resolume-style" transition, reduced from 150ms to ensure full play
-          if (remaining < 0.08 && !earlyEndTriggered.current) {
+          
+          // For sequences, we trigger slightly before the end to hide buffer delay
+          const threshold = transitionType === "cut" ? 0.15 : 0.35;
+
+          if (
+            remaining > 0 &&
+            remaining <= threshold &&
+            !earlyEndTriggered.current
+          ) {
             earlyEndTriggered.current = true;
             onEndedRef.current?.();
           }
@@ -2903,7 +3050,7 @@ const VideoLayer = ({
       video.addEventListener("ended", handleEndedNative);
 
       const handleMetadata = () => {
-        const savedTime = (window as any).__luminVideoTimes?.[clip.id];
+        const savedTime = (window as any).__luminVideoTimes?.[trackerId];
         if (savedTime !== undefined) {
           video.currentTime = savedTime;
         } else if (startTime !== undefined) {
@@ -2946,32 +3093,44 @@ const VideoLayer = ({
       }
 
       const handleBroadcastMessage = (e: MessageEvent) => {
-        if (isSlave && e.data?.type === "VIDEO_TIME_UPDATE") {
-          const { clipId, currentTime } = e.data.payload;
-          if (clipId === clip.id && videoRef.current) {
-            const diff = Math.abs(videoRef.current.currentTime - currentTime);
-            // 0.5s tolerance to prevent rapid seek fight oscillation on same-frame renders
-            if (diff > 0.5) {
-              videoRef.current.currentTime = currentTime;
+        if (e.data?.type === "VIDEO_TIME_UPDATE") {
+          const payload = e.data.payload;
+          if (payload && payload.trackerId === trackerId) {
+            if (isSlave && videoRef.current) {
+              const diff = Math.abs(videoRef.current.currentTime - payload.currentTime);
+              if (diff > 0.15) {
+                videoRef.current.currentTime = payload.currentTime;
+              }
+            } else if (!isSlave) {
+              // Main controller page tracking: keep our local video state memory in sync with real playback:
+              if (typeof window !== "undefined") {
+                if (!(window as any).__luminVideoTimes) {
+                  (window as any).__luminVideoTimes = {};
+                }
+                (window as any).__luminVideoTimes[trackerId] = payload.currentTime;
+              }
             }
           }
         }
       };
 
-      const ch =
-        (window as any).__luminTimeChannel ||
-        new BroadcastChannel("lumin-output");
-      ch.addEventListener("message", handleBroadcastMessage);
+      const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+      if (ch) {
+        if (!(window as any).__luminTimeChannel) (window as any).__luminTimeChannel = ch;
+        ch.addEventListener("message", handleBroadcastMessage);
+      }
 
       return () => {
         video.removeEventListener("timeupdate", handleTimeUpdate);
         video.removeEventListener("loadedmetadata", handleMetadata);
         video.removeEventListener("canplay", handleReady);
         video.removeEventListener("ended", handleEndedNative);
-        ch.removeEventListener("message", handleBroadcastMessage);
+        if (ch) {
+          ch.removeEventListener("message", handleBroadcastMessage);
+        }
       };
     }
-  }, [clip.id, clip.url, clip.isPlaying, isSlave]);
+  }, [clip.id, clip.url, clip.isPlaying, isPlaying, isSlave, trackerId]);
 
   // Video IN (Capturadoras USB / HDMI en Windows)
   const streamRef = useRef<MediaStream | null>(null);
@@ -3082,6 +3241,20 @@ const VideoLayer = ({
       video.playbackRate = clip.speed || 1;
     }
   }, [clip.speed, clip.id]);
+
+  // Support real-time seeking tracking (Slave only - Authority ignores state sync to avoid loops)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (
+      video &&
+      isSlave &&
+      clip.type === "video" &&
+      clip.currentTime !== undefined &&
+      Math.abs(video.currentTime - clip.currentTime) > 0.5
+    ) {
+      video.currentTime = clip.currentTime;
+    }
+  }, [clip.currentTime, clip.id, isSlave]);
 
   const colorBalance = clip.colorBalance || { r: 1, g: 1, b: 1 };
   const brightness = clip.brightness ?? 1;
@@ -3281,6 +3454,26 @@ const VideoLayer = ({
                 setFirstFrameRendered(true);
               }}
               onPlaying={() => setFirstFrameRendered(true)}
+              onWaiting={() => {
+                if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
+                  videoRef.current.play().catch(() => {});
+                }
+              }}
+              onStalled={() => {
+                if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
+                  videoRef.current.play().catch(() => {});
+                }
+              }}
+              onError={(e) => {
+                console.warn("Video element error encountered in VideoLayer, retrying source...", e);
+                if (activeIsPlaying && videoRef.current) {
+                  const currentSrc = videoRef.current.src;
+                  if (currentSrc) {
+                    videoRef.current.load();
+                    videoRef.current.play().catch(() => {});
+                  }
+                }
+              }}
               onTimeUpdate={(e) => {
                 if (
                   clip.type === "video" &&
@@ -4326,7 +4519,7 @@ const OutputView = React.memo(() => {
                 <AnimatePresence custom={transitionType}>
                   {/* Bus A Layer (Legacy/Mixer mode) */}
                   {busAClip &&
-                    !state.layers?.some((l: any) => l.activeClipId) &&
+                    !state.layers?.some((l: any) => l.activeClipId && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id] || state.layerOutputs?.[l.id] === "all")) &&
                     (crossfaderValue === undefined ||
                       crossfaderValue < 100) && (
                       <VideoLayer
@@ -4357,6 +4550,7 @@ const OutputView = React.memo(() => {
                         onReady={() => setIsBusAReady(true)}
                         perfSettings={perfSettings}
                         isSlave={true}
+                        outputId={mappedOutput?.id || "1"}
                       />
                     )}
 
@@ -4390,6 +4584,7 @@ const OutputView = React.memo(() => {
                       }
                       perfSettings={perfSettings}
                       isSlave={true}
+                      outputId={mappedOutput?.id || "1"}
                     />
                   )}
                 </AnimatePresence>
@@ -4410,43 +4605,6 @@ const OutputView = React.memo(() => {
                           )
                         : null;
                       if (!activeClip) return null;
-
-                      // Compute next clip in the sequence to preload:
-                      let nextSrc = undefined;
-                      const playbackMode = l.playbackMode || "single";
-                      if (playbackMode === "sequence") {
-                        const currentSlotIndex =
-                          l.activeSlotIndex !== null
-                            ? l.activeSlotIndex
-                            : l.slots.findIndex(
-                                (s) => s?.id === l.activeClipId,
-                              );
-                        let nextClipIndex = -1;
-                        for (let i = currentSlotIndex + 1; i < l.slots.length; i++) {
-                          if (l.slots[i]) {
-                            nextClipIndex = i;
-                            break;
-                          }
-                        }
-
-                        let foundNext = null;
-                        if (nextClipIndex !== -1) {
-                          foundNext = l.slots[nextClipIndex];
-                        } else if (l.loop !== false) {
-                          const firstSlotIndex = l.slots.findIndex(
-                            (s) => s !== null,
-                          );
-                          if (
-                            firstSlotIndex !== -1 &&
-                            l.slots[firstSlotIndex]?.id !== l.activeClipId
-                          ) {
-                            foundNext = l.slots[firstSlotIndex];
-                          }
-                        }
-                        if (foundNext && foundNext.type === "video") {
-                          nextSrc = foundNext.url;
-                        }
-                      }
 
                       return (
                         <div
@@ -4478,42 +4636,30 @@ const OutputView = React.memo(() => {
                               transform: `rotate(${l.rotation}deg)`,
                             }}
                           >
-                            <AnimatePresence initial={false}>
-                              <VideoLayer
-                                key={`${l.id}-${l.activeSlotIndex}-${l.activeClipId}-${l.sequenceCounter || 0}`}
-                                clip={activeClip}
-                                nextSrc={nextSrc}
-                                volume={l.muted ? 0 : programVolume}
-                                masterVolume={masterVolume}
-                                opacity={1}
-                                isProgram={true}
-                                isTransmitting={isTransmitting}
-                                transitionType={playbackMode === "sequence" ? "cut" : "fade"}
-                                transitionDuration={playbackMode === "sequence" ? 0 : Math.max(
-                                  0,
-                                  Math.min(1.5, l.transitionDuration || 0.4),
-                                )}
-                                onEnded={() => {
-                                  channelRef.current?.postMessage({
-                                    type: "LAYER_CLIP_ENDED",
-                                    payload: {
-                                      layerId: l.id,
-                                      clipId: activeClip.id,
-                                      sequenceCounter: l.sequenceCounter || 0,
-                                    },
-                                  });
-                                }}
-                                loopOverride={
-                                  playbackMode === "single"
-                                    ? l.loopVideo !== false
-                                    : false
-                                }
-                                perfSettings={perfSettings}
-                                onUpdateClip={updateClip}
-                                isSlave={true}
-                                isPlaylistSequence={playbackMode === "sequence"}
-                              />
-                            </AnimatePresence>
+                            <LayerPlaybox 
+                              layer={l}
+                              clips={state.clips || []}
+                              volume={l.muted ? 0 : programVolume}
+                              masterVolume={masterVolume}
+                              opacity={1}
+                              isProgram={true}
+                              isTransmitting={isTransmitting}
+                              onLayerEnded={(layerId: string, clipId: string, seqCounter: number) => {
+                                channelRef.current?.postMessage({
+                                  type: "LAYER_CLIP_ENDED",
+                                  payload: {
+                                    layerId: layerId,
+                                    clipId: clipId,
+                                    sequenceCounter: seqCounter,
+                                    outputId: mappedOutput?.id || "1",
+                                  },
+                                });
+                              }}
+                              updateClip={updateClip}
+                              perfSettings={perfSettings}
+                              isSlave={true}
+                              outputId={mappedOutput?.id || "1"}
+                            />
                           </div>
                         </div>
                       );
@@ -4574,6 +4720,7 @@ const OutputView = React.memo(() => {
                                   volume={0}
                                   opacity={pip.opacity}
                                   isProgram={false}
+                                  layerId={pip.id}
                                 />
                               </div>
                             )}
@@ -8690,6 +8837,7 @@ const LayersSection = React.memo(
     onUpdateClip,
     onSelectLayer,
     onPreviewClip,
+    onProgressUpdate,
     outputs,
     externalScreens,
     clips,
@@ -8727,6 +8875,7 @@ const LayersSection = React.memo(
     onUpdateClip: (clipId: string, updates: Partial<Clip>) => void;
     onSelectLayer: (layerId: string) => void;
     onPreviewClip: (clip: Clip) => void;
+    onProgressUpdate?: (current: number, total: number) => void;
     outputs: any[];
     externalScreens: Screen[];
     clips: Clip[];
@@ -8826,11 +8975,31 @@ const LayersSection = React.memo(
                                   ...prev,
                                   [layer.id]: "stop",
                                 }));
+                                onProgressUpdate?.(0, 0);
                                 onUpdateLayer(layer.id, {
                                   isPlaying: false,
                                   activeClipId: null,
                                   activeSlotIndex: null,
                                 });
+                                if (typeof window !== "undefined") {
+                                  (window as any).__luminVideoTimes = {};
+                                }
+                                if (clips && onUpdateClip) {
+                                  clips.forEach((c) => {
+                                    onUpdateClip(c.id, { currentTime: 0 });
+                                  });
+                                }
+                                const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+                                if (ch && clips) {
+                                    clips.forEach((c) => {
+                                      try {
+                                        ch.postMessage({
+                                          type: "VIDEO_TIME_UPDATE",
+                                          payload: { clipId: c.id, currentTime: 0 },
+                                        });
+                                      } catch (err) {}
+                                    });
+                                }
                               }}
                               className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${!layer.isPlaying && !layer.activeClipId ? "border-red-500 bg-red-500 text-white" : "border-white/80 bg-white text-black hover:bg-gray-200"}`}
                               title="Stop Layer"
@@ -8845,14 +9014,11 @@ const LayersSection = React.memo(
                                   ...prev,
                                   [layer.id]: "play",
                                 }));
-                                const currentIdx =
-                                  layer.activeSlotIndex !== null
-                                    ? layer.activeSlotIndex
-                                    : layer.slots.findIndex((s) => s !== null);
-                                if (currentIdx !== -1) {
+                                const firstIdx = layer.slots.findIndex((s) => s !== null);
+                                if (firstIdx !== -1) {
                                   onTriggerClip(
                                     layer.id,
-                                    currentIdx,
+                                    firstIdx,
                                     "sequence",
                                   );
                                 }
@@ -11139,6 +11305,17 @@ export default function App() {
   // Handle requests from output windows
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === "VIDEO_TIME_UPDATE") {
+        const { trackerId, currentTime } = event.data.payload;
+        if (trackerId) {
+          if (typeof window !== "undefined") {
+            if (!(window as any).__luminVideoTimes) {
+              (window as any).__luminVideoTimes = {};
+            }
+            (window as any).__luminVideoTimes[trackerId] = currentTime;
+          }
+        }
+      }
       if (event.data.type === "UPDATE_TIMER_SETTINGS") {
         const { screenId, updates } = event.data.payload;
         setAllScreenSettings((prev) => ({
@@ -11181,6 +11358,24 @@ export default function App() {
       if (event.data.type === "CLIP_ENDED") {
         const { outputId, clipId } = event.data.payload;
         const clip = clips.find((c: any) => c.id === clipId);
+        
+        // Reset the currentTime of the ended clip to 0 so it starts fresh next time
+        const programTrackerId = `output_${outputId || "1"}_${clipId}`;
+        if (typeof window !== "undefined") {
+          if (!(window as any).__luminVideoTimes) {
+            (window as any).__luminVideoTimes = {};
+          }
+          (window as any).__luminVideoTimes[programTrackerId] = 0;
+        }
+        const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+        if (ch) {
+          try {
+            ch.postMessage({
+              type: "VIDEO_TIME_UPDATE",
+              payload: { trackerId: programTrackerId, clipId, currentTime: 0 },
+            });
+          } catch (err) {}
+        }
         const playlist = playlists.find(
           (p: any) =>
             p.id === clip?.playlistId ||
@@ -11225,8 +11420,8 @@ export default function App() {
         }
       }
       if (event.data.type === "LAYER_CLIP_ENDED") {
-        const { layerId, clipId, sequenceCounter } = event.data.payload;
-        handleLayerEnded(layerId, clipId, sequenceCounter);
+        const { layerId, clipId, sequenceCounter, outputId } = event.data.payload;
+        handleLayerEnded(layerId, clipId, sequenceCounter, outputId);
       }
     };
 
@@ -11308,10 +11503,11 @@ export default function App() {
       }
       doSync();
     } else {
-      if (!pendingSyncRef.current) {
-        const remainingDelay = 33 - timeSinceLastSync;
-        pendingSyncRef.current = setTimeout(doSync, remainingDelay);
+      if (pendingSyncRef.current) {
+        clearTimeout(pendingSyncRef.current);
       }
+      const remainingDelay = 33 - timeSinceLastSync;
+      pendingSyncRef.current = setTimeout(doSync, remainingDelay);
     }
   }, [
     programClipId,
@@ -11785,19 +11981,40 @@ export default function App() {
     layerId: string,
     clipId: string,
     seqCounter?: number,
+    outputId?: string,
   ) => {
     const lastTime = lastLayerEndTimesRef.current[layerId] || 0;
     const now = Date.now();
-    if (now - lastTime < 600) {
-      console.log("Layer ending transition ignored (throttled):", layerId);
+    // Reduce throttle to 50ms as in working versions to allow rapid sequence continuation
+    if (now - lastTime < 50) {
       return;
     }
     lastLayerEndTimesRef.current[layerId] = now;
 
-    setLayers((prev) =>
-      prev.map((layer) => {
+    // Reset the currentTime of the ended clip to 0 so it starts fresh next time
+    const layerTrackerId = `layer_${outputId || "1"}_${layerId}_${clipId}`;
+    if (typeof window !== "undefined") {
+      if (!(window as any).__luminVideoTimes) {
+        (window as any).__luminVideoTimes = {};
+      }
+      (window as any).__luminVideoTimes[layerTrackerId] = 0;
+    }
+    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    if (ch) {
+      try {
+        ch.postMessage({
+          type: "VIDEO_TIME_UPDATE",
+          payload: { trackerId: layerTrackerId, clipId, currentTime: 0 },
+        });
+      } catch (err) {}
+    }
+
+    setLayers((prev) => {
+      let sideEffectStop = false;
+      const nextLayers = prev.map((layer) => {
         if (layer.id !== layerId) return layer;
 
+        // Verify sequence counter to prevent historical events from triggering next
         if (
           seqCounter !== undefined &&
           (layer.sequenceCounter || 0) !== seqCounter
@@ -11805,11 +12022,12 @@ export default function App() {
           return layer;
         }
 
+        // Verify we are still on the same clip
         if (layer.activeClipId !== clipId) return layer;
 
         if (layer.playbackMode === "single") {
           if (layer.loopVideo === false) {
-            setActiveLayerTriggers((prev) => ({ ...prev, [layer.id]: "stop" }));
+            sideEffectStop = true;
             return {
               ...layer,
               activeClipId: null,
@@ -11820,13 +12038,13 @@ export default function App() {
           return layer;
         }
 
+        // Mode Sequence/Playlist: Find next non-null slot in current layer
         const currentSlotIndex =
           layer.activeSlotIndex !== null
             ? layer.activeSlotIndex
             : layer.slots.findIndex((s) => s?.id === layer.activeClipId);
-        
+
         let nextClipIndex = -1;
-        // Find next non-null slot
         for (let i = currentSlotIndex + 1; i < layer.slots.length; i++) {
           if (layer.slots[i]) {
             nextClipIndex = i;
@@ -11835,41 +12053,80 @@ export default function App() {
         }
 
         if (nextClipIndex !== -1) {
+          const nextClip = layer.slots[nextClipIndex]!;
+          // Reset the next clip's stored time to 0 immediately so it starts fresh
+          const nextTrackerId = `layer_${outputId || "1"}_${layerId}_${nextClip.id}`;
+          if (typeof window !== "undefined") {
+            if (!(window as any).__luminVideoTimes) {
+              (window as any).__luminVideoTimes = {};
+            }
+            (window as any).__luminVideoTimes[nextTrackerId] = 0;
+          }
+          const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+          if (ch) {
+            try {
+              ch.postMessage({
+                type: "VIDEO_TIME_UPDATE",
+                payload: { trackerId: nextTrackerId, clipId: nextClip.id, currentTime: 0 },
+              });
+            } catch (err) {}
+          }
+          
           return {
             ...layer,
-            activeClipId: layer.slots[nextClipIndex]!.id,
+            activeClipId: nextClip.id,
             activeSlotIndex: nextClipIndex,
             sequenceCounter: (layer.sequenceCounter || 0) + 1,
-            isPlaying: true, // Force play next
+            isPlaying: true,
           };
-        } else if (layer.loop !== false || layer.playbackMode === "sequence") {
+        } else if (layer.loop !== false) {
+          // Restart from beginning if loop is enabled
           const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
           if (firstSlotIndex !== -1) {
+            const firstClip = layer.slots[firstSlotIndex]!;
+            const firstTrackerId = `layer_${outputId || "1"}_${layerId}_${firstClip.id}`;
+            if (typeof window !== "undefined") {
+              if (!(window as any).__luminVideoTimes) {
+                (window as any).__luminVideoTimes = {};
+              }
+              (window as any).__luminVideoTimes[firstTrackerId] = 0;
+            }
+            const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+            if (ch) {
+              try {
+                ch.postMessage({
+                  type: "VIDEO_TIME_UPDATE",
+                  payload: { trackerId: firstTrackerId, clipId: firstClip.id, currentTime: 0 },
+                });
+              } catch (err) {}
+            }
+
             return {
               ...layer,
-              activeClipId: layer.slots[firstSlotIndex]!.id,
+              activeClipId: firstClip.id,
               activeSlotIndex: firstSlotIndex,
               sequenceCounter: (layer.sequenceCounter || 0) + 1,
               isPlaying: true,
             };
           }
-          return {
-            ...layer,
-            activeClipId: null,
-            activeSlotIndex: null,
-            isPlaying: false,
-          };
-        } else {
-          setActiveLayerTriggers((prev) => ({ ...prev, [layer.id]: "stop" }));
-          return {
-            ...layer,
-            activeClipId: null,
-            activeSlotIndex: null,
-            isPlaying: false,
-          };
         }
-      }),
-    );
+
+        // Final fallback: no more clips and no loop
+        sideEffectStop = true;
+        return {
+          ...layer,
+          activeClipId: null,
+          activeSlotIndex: null,
+          isPlaying: false,
+        };
+      });
+
+      if (sideEffectStop) {
+        setActiveLayerTriggers((p) => ({ ...p, [layerId]: "stop" }));
+        setProgramProgress({ current: 0, total: 0 });
+      }
+      return nextLayers;
+    });
   };
 
   const onTriggerLayerClip = (
@@ -11877,13 +12134,85 @@ export default function App() {
     slotIdx: number,
     mode: "single" | "sequence" = "single",
   ) => {
-    // Throttle switching to 300ms to prevent browser-level video deadlocks
-    const now = Date.now();
-    if (now - lastSwitchTime < 300) return;
-    setLastSwitchTime(now);
+    const targetLayer = layers.find((l) => l.id === layerId);
+    const isStopClick = !targetLayer || !targetLayer.slots[slotIdx];
+    const linkedOutputId = layerOutputs[layerId] || "1";
 
-    setActiveColumnTrigger(null);
-    setColumnUIStates({});
+    if (isStopClick) {
+      if (typeof window !== "undefined") {
+        (window as any).__luminVideoTimes = {};
+      }
+      setClips(prev => {
+        const next = prev.map(c => ({ ...c, currentTime: 0 }));
+        return next;
+      });
+      const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+      if (ch) {
+        clips.forEach((c) => {
+          try {
+            ch.postMessage({
+              type: "VIDEO_TIME_UPDATE",
+              payload: { clipId: c.id, currentTime: 0 },
+            });
+          } catch (err) {}
+        });
+      }
+    } else if (targetLayer) {
+      const clip = targetLayer.slots[slotIdx];
+      if (clip) {
+        // ALWAYS reset the time of the clip we are about to play to 0
+        const trackerId = `layer_${linkedOutputId}_${layerId}_${clip.id}`;
+        if (typeof window !== "undefined") {
+          if (!(window as any).__luminVideoTimes) {
+            (window as any).__luminVideoTimes = {};
+          }
+          (window as any).__luminVideoTimes[trackerId] = 0;
+        }
+        const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+        if (ch) {
+          try {
+            ch.postMessage({
+              type: "VIDEO_TIME_UPDATE",
+              payload: { trackerId, clipId: clip.id, currentTime: 0 },
+            });
+          } catch (err) {}
+        }
+      }
+
+      if (mode === "single" && targetLayer.activeClipId) {
+        const prevActiveClipId = targetLayer.activeClipId;
+        if (prevActiveClipId !== targetLayer.slots[slotIdx]?.id) {
+          const prevTrackerId = `layer_${linkedOutputId}_${layerId}_${prevActiveClipId}`;
+          if (typeof window !== "undefined") {
+            if (!(window as any).__luminVideoTimes) {
+              (window as any).__luminVideoTimes = {};
+            }
+            (window as any).__luminVideoTimes[prevTrackerId] = 0;
+          }
+          const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+          if (ch) {
+            try {
+              ch.postMessage({
+                type: "VIDEO_TIME_UPDATE",
+                payload: { trackerId: prevTrackerId, clipId: prevActiveClipId, currentTime: 0 },
+              });
+            } catch (err) {}
+          }
+        }
+      }
+    }
+
+    // Throttle switching to 300ms to prevent browser-level video deadlocks, but DO NOT throttle stops
+    const now = Date.now();
+    if (!isStopClick && now - lastSwitchTime < 100) return;
+    if (!isStopClick) {
+      setLastSwitchTime(now);
+    }
+
+    if (mode !== "single") {
+      setActiveColumnTrigger(null);
+      setColumnUIStates({});
+    }
     setLayers((prev) =>
       prev.map((l) => {
         if (l.id !== layerId) return l;
@@ -11898,6 +12227,7 @@ export default function App() {
             ...l,
             activeClipId: clip.id,
             activeSlotIndex: slotIdx,
+            sequenceCounter: (l.sequenceCounter || 0) + 1,
             isPlaying: true,
             playbackMode: mode,
           };
@@ -11937,7 +12267,7 @@ export default function App() {
             activeClipId: clip.id,
             activeSlotIndex: colIdx,
             isPlaying: true,
-            playbackMode: "single",
+            playbackMode: "column",
           };
         }
         return {
@@ -11951,6 +12281,24 @@ export default function App() {
   };
 
   const handleColumnStop = (colIdx: number) => {
+    if (typeof window !== "undefined") {
+      (window as any).__luminVideoTimes = {};
+    }
+    clips.forEach((c) => {
+      updateClip(c.id, { currentTime: 0 });
+    });
+    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    if (ch) {
+      clips.forEach((c) => {
+        try {
+          ch.postMessage({
+            type: "VIDEO_TIME_UPDATE",
+            payload: { clipId: c.id, currentTime: 0 },
+          });
+        } catch (err) {}
+      });
+    }
+
     setActiveColumnTrigger(null);
     setColumnUIStates({});
     setLayers((prev) =>
@@ -12556,6 +12904,24 @@ export default function App() {
   };
 
   const handleStop = () => {
+    if (typeof window !== "undefined") {
+      (window as any).__luminVideoTimes = {};
+    }
+    clips.forEach((c) => {
+      updateClip(c.id, { currentTime: 0 });
+    });
+    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    if (ch) {
+      clips.forEach((c) => {
+        try {
+          ch.postMessage({
+            type: "VIDEO_TIME_UPDATE",
+            payload: { clipId: c.id, currentTime: 0 },
+          });
+        } catch (err) {}
+      });
+    }
+
     setProgramClipId(null);
     setProgramPlaylistState(null);
     setCrossfaderValue(0);
@@ -14157,29 +14523,32 @@ export default function App() {
                     onSkip={handleSkip}
                     onProgressUpdate={(current, total) => {
                       setProgramProgress({ current, total });
-                      window.dispatchEvent(
-                        new CustomEvent("video-progress-program", {
-                          detail: { current, total },
-                        }),
-                      );
+                      try {
+                        window.dispatchEvent(
+                          new CustomEvent("video-progress-program", {
+                            detail: { current, total },
+                          }),
+                        );
+                      } catch (e) {}
                     }}
                     onUpdateClip={updateClip}
                     isPlaylist={!!programPlaylistState}
                     volume={programVolume}
-                    brightness={externalScreenSettings.brightness}
-                    contrast={externalScreenSettings.contrast}
-                    saturation={externalScreenSettings.saturation}
-                    opacity={externalScreenSettings.opacity}
-                    x={externalScreenSettings.x}
-                    y={externalScreenSettings.y}
-                    rotation={externalScreenSettings.rotation}
-                    scalingW={externalScreenSettings.scalingW}
-                    scalingH={externalScreenSettings.scalingH}
-                    transitionType={externalScreenSettings.transitionType}
-                    colorBalance={externalScreenSettings.colorBalance}
+                    brightness={allScreenSettings[activeOutputId]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
+                    contrast={allScreenSettings[activeOutputId]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
+                    saturation={allScreenSettings[activeOutputId]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
+                    opacity={allScreenSettings[activeOutputId]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
+                    x={allScreenSettings[activeOutputId]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
+                    y={allScreenSettings[activeOutputId]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
+                    rotation={allScreenSettings[activeOutputId]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
+                    scalingW={allScreenSettings[activeOutputId]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
+                    scalingH={allScreenSettings[activeOutputId]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
+                    transitionType={allScreenSettings[activeOutputId]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
+                    colorBalance={allScreenSettings[activeOutputId]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
                     pipLayers={pipLayers}
                     activeOutputId={activeOutputId}
                     perfSettings={perfSettings}
+                    isSlave={false}
                   />
                 </div>
               </div>
@@ -14329,6 +14698,9 @@ export default function App() {
                               <FluidTimeDisplay
                                 eventId="video-progress-program"
                                 isRemaining={timerMode === "remaining"}
+                                clipId={activeProgramId}
+                                outputId={activeOutputId}
+                                clips={clips}
                               />
                             )}
                           </span>
@@ -14401,6 +14773,9 @@ export default function App() {
                       setSelectedItemType("layer" as any);
                     }}
                     onUpdateClip={updateClip}
+                    onProgressUpdate={(current, total) => {
+                      setProgramProgress({ current, total });
+                    }}
                     onSelectLayer={(lid) => {
                       setSelectedItemId(lid);
                       setSelectedItemType("layer" as any);
@@ -14518,6 +14893,7 @@ export default function App() {
                 outputChannel.current.postMessage({
                   type: "SYNC_STATE",
                   payload: {
+                    lastUpdateId: Date.now(),
                     programClipId,
                     previewClipId,
                     outputPrograms,
