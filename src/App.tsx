@@ -6611,32 +6611,7 @@ const Inspector = React.memo(
 
 
 
-                {/* MANDO FLOTANTE EXTERNO CONTROL */}
-                <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-bold text-obs-text uppercase font-black tracking-wide">
-                      Mando Externo (Nueva Ventana)
-                    </span>
-                    <span className="text-[8px] text-obs-muted">
-                      Abrir mando en ventana de Windows independiente
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        if ((window as any).electron) {
-                          (window as any).electron.launchOutput({
-                            screenId: `timer_${activeOutputId}`,
-                            url: `?mode=floating_timer&s=${activeOutputId}`
-                          });
-                        }
-                      }}
-                      className="p-1 px-2 bg-obs-accent/20 text-obs-accent hover:bg-obs-accent hover:text-white rounded text-[9px] font-bold transition-all uppercase"
-                    >
-                      Abrir Ventana
-                    </button>
-                  </div>
-                </div>
+
 
                 <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
                   <div className="flex flex-col">
@@ -10208,6 +10183,12 @@ export default function App() {
   const [timerMode, setTimerMode] = useState<"elapsed" | "remaining">(
     "remaining",
   );
+  const [audioVolumes, setAudioVolumes] = useState<Record<string, number>>({
+    Master: 0.5,
+    Programa: 0.5,
+    USB: 0.5,
+    IN: 0.5,
+  });
   const [audioInputDevices, setAudioInputDevices] = useState<any[]>([]);
   const [audioOutputDevices, setAudioOutputDevices] = useState<any[]>([]);
   const [windowsDevicesList, setWindowsDevicesList] = useState<any[]>([]);
@@ -10220,17 +10201,46 @@ export default function App() {
     "Programa",
   ]);
   const [isAudioConfigModalOpen, setIsAudioConfigModalOpen] = useState(false);
+  const [mutedFaders, setMutedFaders] = useState<Record<string, boolean>>({});
+
+  const toggleMute = useCallback((sourceName: string) => {
+    setMutedFaders((prev) => {
+      const isMuted = !prev[sourceName];
+      
+      // Enforce physical muting if Windows electron API available
+      if (sourceName === "Master") {
+        if (isMuted) {
+          (window.electron as any)?.setWindowsVolume?.(0).catch(() => {});
+        } else {
+          (window.electron as any)?.setWindowsVolume?.(masterVolume).catch(() => {});
+        }
+      } else if (sourceName === "USB") {
+        if (isMuted) {
+          (window.electron as any)?.setWindowsVolume?.(0).catch(() => {});
+        } else {
+          (window.electron as any)?.setWindowsVolume?.(usbOutVolume).catch(() => {});
+        }
+      } else if (sourceName === "IN") {
+        const defIn = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+        if (defIn) {
+          (window.electron as any)?.setWindowsDeviceVolume?.(defIn.id, isMuted ? 0 : usbInVolume).catch(() => {});
+        }
+      } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
+        const cleanId = sourceName.replace("out-", "").replace("in-", "");
+        const currentVol = audioVolumes[sourceName] ?? 0.5;
+        (window.electron as any)?.setWindowsDeviceVolume?.(cleanId, isMuted ? 0 : currentVol).catch(() => {});
+      }
+
+      return {
+        ...prev,
+        [sourceName]: isMuted
+      };
+    });
+  }, [masterVolume, usbOutVolume, usbInVolume, audioVolumes, windowsDevicesList]);
 
   // Audio signals
   const [programLevel, setProgramLevel] = useState(0);
   const micVolumeRef = useRef<number>(0);
-
-  const [audioVolumes, setAudioVolumes] = useState<Record<string, number>>({
-    Master: 0.5,
-    Programa: 0.5,
-    USB: 0.5,
-    IN: 0.5,
-  });
 
   const [activeOutputId, setActiveOutputId] = useState<string>("1");
   const [libraryFiles, setLibraryFiles] = useState<
@@ -10247,6 +10257,9 @@ export default function App() {
   >([]);
 
   const getFaderSignalLevel = useCallback((sourceName: string): number => {
+    // If the fader is muted, return exactly 0 immediately
+    if (mutedFaders[sourceName]) return 0;
+
     // Volume setting
     const vol =
       sourceName === "Master"
@@ -10261,18 +10274,55 @@ export default function App() {
 
     if (vol <= 0.001) return 0;
 
-    // Windows native WASAPI real-time peak signal integration
+    // Windows native WASAPI real-time peak signal integration gated by our app's active content sending
     if (typeof window !== "undefined" && (window as any).electron && windowsDevicesList.length > 0) {
       if (sourceName === "Master") {
         const dev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
-        if (dev) return Math.max(0, Math.min(1, dev.peak));
+        if (dev) {
+          const progSig = programLevel * programVolume;
+          const micSig = micVolumeRef.current * usbInVolume;
+          let ourAppLevel = Math.max(progSig, micSig);
+
+          Object.keys(audioVolumes).forEach((id) => {
+            if (id !== "Master" && !mutedFaders[id]) {
+              const fV = audioVolumes[id] ?? 0.5;
+              if (id === "Programa") ourAppLevel = Math.max(ourAppLevel, programLevel * fV);
+              else if (id === "IN" || id === selectedAudioInput) ourAppLevel = Math.max(ourAppLevel, micVolumeRef.current * fV);
+            }
+          });
+
+          if (ourAppLevel <= 0.005) return 0; // Gated: our app is silent, show zero on Master VU meter
+          let peak = dev.peak;
+          if (peak < 0.005) peak = 0; // noise gate
+          return Math.max(0, Math.min(1, peak * vol * 1.15));
+        }
       } else if (sourceName === "IN") {
         const dev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
-        if (dev) return Math.max(0, Math.min(1, dev.peak));
-      } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
-        const cleanId = sourceName.replace("out-", "").replace("in-", "");
+        if (dev) {
+          if (micVolumeRef.current <= 0.005) return 0; // Gated
+          let peak = dev.peak;
+          if (peak < 0.005) peak = 0; // noise gate
+          return Math.max(0, Math.min(1, peak * vol * 1.15));
+        }
+      } else if (sourceName.startsWith("out-")) {
+        const cleanId = sourceName.replace("out-", "");
         const dev = windowsDevicesList.find((d) => d.id === cleanId);
-        if (dev) return Math.max(0, Math.min(1, dev.peak));
+        if (dev) {
+          const ourAppLevel = programLevel * vol;
+          if (ourAppLevel <= 0.005) return 0; // Gated
+          let peak = dev.peak;
+          if (peak < 0.005) peak = 0; // noise gate
+          return Math.max(0, Math.min(1, peak * vol * 1.15));
+        }
+      } else if (sourceName.startsWith("in-")) {
+        const cleanId = sourceName.replace("in-", "");
+        const dev = windowsDevicesList.find((d) => d.id === cleanId);
+        if (dev) {
+          if (selectedAudioInput !== cleanId || micVolumeRef.current <= 0.005) return 0; // Gated
+          let peak = dev.peak;
+          if (peak < 0.005) peak = 0; // noise gate
+          return Math.max(0, Math.min(1, peak * vol * 1.15));
+        }
       }
     }
 
@@ -10308,10 +10358,12 @@ export default function App() {
     masterVolume,
     programVolume,
     usbInVolume,
+    usbOutVolume,
     audioVolumes,
     programLevel,
     selectedAudioInput,
-    windowsDevicesList
+    windowsDevicesList,
+    mutedFaders
   ]);
 
   const DEFAULT_SCREEN_SETTINGS: ExternalScreenSettings = {
@@ -14218,17 +14270,36 @@ export default function App() {
                                   : `IN: ${cleanId}`;
                               }
 
-                              const sigLevel = getFaderSignalLevel(sourceName);
-
                               return (
                                 <div
                                   key={sourceName}
-                                  className="p-1.5 bg-obs-bg/40 rounded border border-obs-border/40 space-y-1 font-sans"
+                                  className={`p-1.5 rounded border space-y-1.5 font-sans transition-all duration-200 ${
+                                    mutedFaders[sourceName]
+                                      ? "bg-red-950/20 border-red-900/40 shadow-inner"
+                                      : "bg-obs-bg/40 border-obs-border/40"
+                                  }`}
                                 >
+                                  <div className="flex items-center justify-between gap-2 px-1">
+                                    <span className={`text-[8.5px] font-black uppercase tracking-wider truncate flex-1 transition-colors ${mutedFaders[sourceName] ? "text-red-400" : "text-obs-text"}`}>
+                                      {faderLabel}
+                                    </span>
+                                    <button
+                                      onClick={() => toggleMute(sourceName)}
+                                      className={`px-1.5 py-0.5 rounded text-[7px] font-black uppercase tracking-wider transition-all cursor-pointer select-none shrink-0 border ${
+                                        mutedFaders[sourceName]
+                                          ? "bg-red-600 border-red-500 text-white hover:bg-red-500 shadow-md shadow-red-900/20"
+                                          : "bg-obs-dark-2 border-white/5 text-obs-muted hover:bg-obs-surface hover:text-white"
+                                      }`}
+                                      title={mutedFaders[sourceName] ? "Desmutear" : "Mutear canal"}
+                                    >
+                                      {mutedFaders[sourceName] ? "MUTED" : "MUTE"}
+                                    </button>
+                                  </div>
+
                                   <PropertyControl
-                                    label={faderLabel}
-                                    value={volume}
-                                    displayValue={volToDb(volume)}
+                                    label="Volumen"
+                                    value={mutedFaders[sourceName] ? 0 : volume}
+                                    displayValue={mutedFaders[sourceName] ? "-∞ dB" : volToDb(volume)}
                                     min={0}
                                     max={1}
                                     step={0.01}
@@ -14236,10 +14307,10 @@ export default function App() {
                                     isAudioControl={true}
                                   />
                                   <AudioBumeter
-                                    volume={volume}
+                                    volume={mutedFaders[sourceName] ? 0 : volume}
                                     isActive={true}
                                     getSignalLevel={() =>
-                                      getFaderSignalLevel(sourceName)
+                                      mutedFaders[sourceName] ? 0 : getFaderSignalLevel(sourceName)
                                     }
                                   />
                                 </div>

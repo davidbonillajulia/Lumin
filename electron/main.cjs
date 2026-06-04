@@ -653,11 +653,15 @@ if (!gotTheLock) {
 
   ipcMain.handle('convert-ppt-to-pdf', async (event, filePath) => {
     return new Promise((resolve) => {
-      const normalizedFilePath = filePath.replace(/\\/g, '/');
       const presentationId = `LUMIN_PPT_PDF_${Date.now()}`;
       const tempPdfDirectory = app.getPath('temp');
       const pdfPath = path.join(tempPdfDirectory, `${presentationId}.pdf`);
-      const normalizedPdfPath = pdfPath.replace(/\\/g, '/');
+
+      const env = { 
+        ...process.env, 
+        _LUMIN_PPT_INPUT: filePath, 
+        _LUMIN_PPT_OUTPUT: pdfPath 
+      };
 
       const psScript = `
 $ErrorActionPreference = 'Stop'
@@ -665,43 +669,48 @@ $ppt = $null
 $pres = $null
 
 try {
-    # Check if PowerPoint is already running and kill it if it's stuck from a previous failed run
-    # (Optional, might be aggressive but ensures fresh state)
-    # Stop-Process -Name "powerpnt" -ErrorAction SilentlyContinue
+    $inputPath = $Env:_LUMIN_PPT_INPUT
+    $outputPath = $Env:_LUMIN_PPT_OUTPUT
 
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
-    # Make PowerPoint visible safely so it can paint slides and convert correctly on Windows
+    # Make PowerPoint visible safely
     try {
-        $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+        $ppt.Visible = -1
     } catch {}
 
-    # Keep a small pause or minimize if requested, but visible = msoTrue is required for PDF conversion
+    # Minimize window immediately
     try {
         $ppt.WindowState = 2 # ppWindowMinimized
     } catch {}
 
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
-    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
+    # Using integer literals: ReadOnly=-1, Untitled=0, WithWindow=-1
+    $pres = $ppt.Presentations.Open($inputPath, -1, 0, -1)
     
     # Save deck as a multi-page PDF document
-    # 32 is the PowerPoint constant for ppSaveAsPDF
-    $pres.SaveAs("${normalizedPdfPath}", 32)
+    # Try both SaveAs(outputPath, 32) and ExportAsFixedFormat(outputPath, 2) for maximum compatibility.
+    try {
+        $pres.SaveAs($outputPath, 32)
+    } catch {
+        # Fallback to ExportAsFixedFormat if SaveAs fails
+        $pres.ExportAsFixedFormat($outputPath, 2, 1) # 2 = ppFixedFormatTypePDF, 1 = ppFixedFormatIntentScreen
+    }
     
     # Orderly close presentation and quit PowerPoint
     $pres.Close()
     $ppt.Quit()
 
     # Release COM objects
-    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
-    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
+    try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null } catch {}
+    try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null } catch {}
     [System.GC]::Collect()
     [System.GC]::WaitForPendingBuffers()
 
     $res = @{
         success = $true
-        pdfPath = "${normalizedPdfPath}"
+        pdfPath = $outputPath
     }
     
     Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
@@ -739,7 +748,7 @@ try {
 
       const runCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScriptPath}"`;
       
-      exec(runCmd, { maxBuffer: 10 * 1024 * 1024 }, (execError, stdout, stderr) => {
+      exec(runCmd, { env, maxBuffer: 10 * 1024 * 1024 }, (execError, stdout, stderr) => {
         try {
           if (fs.existsSync(psScriptPath)) {
             fs.unlinkSync(psScriptPath);
@@ -768,11 +777,9 @@ try {
 
   ipcMain.handle('convert-pptx', async (event, filePath) => {
     return new Promise((resolve) => {
-      const normalizedFilePath = filePath.replace(/\\/g, '/');
       // Create a temporary directory dedicated to this PowerPoint presentation's slide images
       const presentationId = `LUMIN_PPT_${Date.now()}`;
       const tempDir = path.join(app.getPath('temp'), presentationId);
-      const normalizedTempDir = tempDir.replace(/\\/g, '/');
       
       try {
         if (!fs.existsSync(tempDir)) {
@@ -784,6 +791,12 @@ try {
         return;
       }
 
+      const env = {
+        ...process.env,
+        _LUMIN_PPT_INPUT: filePath,
+        _LUMIN_PPT_OUTPUT_DIR: tempDir
+      };
+
       // Compile discrete powershell script to execute
       const psScript = `
 $ErrorActionPreference = 'Stop'
@@ -791,26 +804,29 @@ $ppt = $null
 $pres = $null
 
 try {
+    $inputPath = $Env:_LUMIN_PPT_INPUT
+    $outputDir = $Env:_LUMIN_PPT_OUTPUT_DIR
+
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
-    # Make PowerPoint visible safely so it can paint slides correctly on Windows
+    # Make PowerPoint visible safely
     try {
-        $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+        $ppt.Visible = -1
     } catch {}
 
-    # Minimize the PowerPoint window immediately so it doesn't steal focus or cover LUMIN fullscreen displays
+    # Minimize the PowerPoint window immediately
     try {
         $ppt.WindowState = 2 # ppWindowMinimized
     } catch {}
 
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
-    # WithWindow matches [Microsoft.Office.Core.MsoTriState]::msoTrue (provides graphics context for slide exports)
-    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
+    # Using integer literals: ReadOnly=-1, Untitled=0, WithWindow=-1
+    $pres = $ppt.Presentations.Open($inputPath, -1, 0, -1)
     
     # Save entire deck as individual PNG slide frames in the target directory
     # 18 is the PowerPoint constant for ppSaveAsPNG
-    $pres.SaveAs("${normalizedTempDir}", 18)
+    $pres.SaveAs($outputDir, 18)
     
     # Collect metadata like Slide Title and full body text for synchronization
     $slideData = @()
@@ -867,6 +883,12 @@ try {
     $pres.Close()
     $ppt.Quit()
 
+    # Release COM objects
+    try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null } catch {}
+    try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null } catch {}
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingBuffers()
+
     $res = @{
         success = $true
         slides = $slideData
@@ -899,7 +921,7 @@ try {
 
       const runCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScriptPath}"`;
       
-      exec(runCmd, { maxBuffer: 25 * 1024 * 1024 }, (execError, stdout, stderr) => {
+      exec(runCmd, { env, maxBuffer: 25 * 1024 * 1024 }, (execError, stdout, stderr) => {
         // Cleaning up temporary script
         try {
           if (fs.existsSync(psScriptPath)) {
