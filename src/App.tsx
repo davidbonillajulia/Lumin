@@ -1094,7 +1094,8 @@ const ScaleToFit = ({
     isSlave = false,
     allowClockAuthority = false,
     onProgressUpdate = undefined,
-    outputId
+    outputId,
+    isVisuallyActive = true
   }: { 
     layer: Layer; 
     clips: Clip[]; 
@@ -1110,6 +1111,7 @@ const ScaleToFit = ({
     allowClockAuthority?: boolean;
     onProgressUpdate?: (current: number, total: number) => void;
     outputId?: string;
+    isVisuallyActive?: boolean;
   }) => {
     const activeClip = layer.activeClipId ? clips?.find((c) => c.id === layer.activeClipId) : null;
     const initialKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
@@ -1222,6 +1224,7 @@ const ScaleToFit = ({
               }
               layerId={layer.id}
               outputId={outputId}
+              isVisuallyActive={isVisuallyActive}
             />
           ))}
         </AnimatePresence>
@@ -1648,14 +1651,18 @@ const Monitor = React.memo(
                           // but make it visually hidden if it's not meant for the current active preview.
                           const isVisuallyActive = l.isVisible && isTargetOutput;
                           
+                          // Resolve target output route (defaults to "1" or active preview if PROGRAM routing is selected)
+                          const resolvedOutputId = layerOutputs[l.id] && layerOutputs[l.id] !== "all" 
+                            ? layerOutputs[l.id] 
+                            : (activeOutputId || "1");
+                          
                           return (
                             <div
                               key={`${l.id}`}
                               className="absolute inset-0 pointer-events-none"
                               style={{
                                 opacity: isVisuallyActive ? l.opacity : 0,
-                                zIndex: layers.length - index + 10,
-                                visibility: isVisuallyActive ? 'visible' : 'hidden'
+                                zIndex: layers.length - index + 10
                               }}
                             >
                               <svg width="0" height="0" className="absolute">
@@ -1706,7 +1713,8 @@ const Monitor = React.memo(
                                     allowClockAuthority={
                                       !hasGlobalSource && index === 0
                                     }
-                                    outputId={activeOutputId}
+                                    outputId={resolvedOutputId}
+                                    isVisuallyActive={isVisuallyActive}
                                   />
                               </div>
                             </div>
@@ -2826,6 +2834,7 @@ const VideoLayer = ({
   isClockSource = false,
   layerId,
   outputId,
+  isVisuallyActive = true,
 }: {
   clip: any;
   isPlaying?: boolean;
@@ -2854,6 +2863,7 @@ const VideoLayer = ({
   isClockSource?: boolean;
   layerId?: string;
   outputId?: string;
+  isVisuallyActive?: boolean;
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>("");
@@ -3005,8 +3015,10 @@ const VideoLayer = ({
             (window as any).__luminVideoTimes[trackerId] = video.currentTime;
             
             // Both the master (controller) and active slave playing in the output can broadcast.
+            // If it is a master (not isSlave), only broadcast when actually visually active in the controller UI!
             // If it is a slave, only broadcast when actually playing so we don't interfere when paused.
-            if (!isSlave || (isSlave && activeIsPlaying)) {
+            const shouldBroadcast = !isSlave ? isVisuallyActive : activeIsPlaying;
+            if (shouldBroadcast) {
               const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
               if (ch) {
                 if (!(window as any).__luminTimeChannel) (window as any).__luminTimeChannel = ch;
@@ -3108,6 +3120,14 @@ const VideoLayer = ({
                   (window as any).__luminVideoTimes = {};
                 }
                 (window as any).__luminVideoTimes[trackerId] = payload.currentTime;
+              }
+              // If the master video element is currently NOT visually active, keep its video time
+              // strictly synchronized with the active slave to prevent jumping when transitioned active!
+              if (!isVisuallyActive && videoRef.current) {
+                const diff = Math.abs(videoRef.current.currentTime - payload.currentTime);
+                if (diff > 0.3) {
+                  videoRef.current.currentTime = payload.currentTime;
+                }
               }
             }
           }
@@ -3318,6 +3338,8 @@ const VideoLayer = ({
     return `${baseOffset}%`;
   }, [clip.transform.x, isProgram, transitionType, crossfaderValue]);
 
+  const isCut = transitionType === "cut";
+  const activeDuration = isCut ? 0 : (typeof transitionDuration === "number" ? transitionDuration : 0.4);
   const variants: any = {
     initial: {
       opacity: 0,
@@ -3343,15 +3365,26 @@ const VideoLayer = ({
       rotate: clip.transform.rotation,
       rotateX: clip.transform.rotationX,
       transition: {
-        duration: 0,
-        ease: "linear",
+        opacity: {
+          duration: activeDuration,
+          ease: [0.25, 0.1, 0.25, 1.0],
+        },
+        default: {
+          duration: 0,
+        }
       },
     },
     exit: {
       opacity: 0,
       zIndex: -1,
       transition: {
-        duration: 0,
+        opacity: {
+          duration: activeDuration,
+          ease: [0.25, 0.1, 0.25, 1.0],
+        },
+        default: {
+          duration: 0,
+        }
       },
     },
   };
@@ -11991,8 +12024,10 @@ export default function App() {
     }
     lastLayerEndTimesRef.current[layerId] = now;
 
+    const targetOutputId = outputId || layerOutputs[layerId] || "1";
+
     // Reset the currentTime of the ended clip to 0 so it starts fresh next time
-    const layerTrackerId = `layer_${outputId || "1"}_${layerId}_${clipId}`;
+    const layerTrackerId = `layer_${targetOutputId}_${layerId}_${clipId}`;
     if (typeof window !== "undefined") {
       if (!(window as any).__luminVideoTimes) {
         (window as any).__luminVideoTimes = {};
@@ -12055,7 +12090,7 @@ export default function App() {
         if (nextClipIndex !== -1) {
           const nextClip = layer.slots[nextClipIndex]!;
           // Reset the next clip's stored time to 0 immediately so it starts fresh
-          const nextTrackerId = `layer_${outputId || "1"}_${layerId}_${nextClip.id}`;
+          const nextTrackerId = `layer_${targetOutputId}_${layerId}_${nextClip.id}`;
           if (typeof window !== "undefined") {
             if (!(window as any).__luminVideoTimes) {
               (window as any).__luminVideoTimes = {};
@@ -12084,7 +12119,7 @@ export default function App() {
           const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
           if (firstSlotIndex !== -1) {
             const firstClip = layer.slots[firstSlotIndex]!;
-            const firstTrackerId = `layer_${outputId || "1"}_${layerId}_${firstClip.id}`;
+            const firstTrackerId = `layer_${targetOutputId}_${layerId}_${firstClip.id}`;
             if (typeof window !== "undefined") {
               if (!(window as any).__luminVideoTimes) {
                 (window as any).__luminVideoTimes = {};
