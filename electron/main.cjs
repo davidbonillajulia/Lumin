@@ -715,18 +715,19 @@ try {
     
     Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
 } catch {
-    if ($pres) { 
-        try { 
-            $pres.Close() 
-            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
-        } catch {} 
-    }
-    if ($ppt) { 
-        try { 
-            $ppt.Quit() 
-            [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
-        } catch {} 
-    }
+    try { 
+        $pres.Close() 
+    } catch {}
+    try { 
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
+    } catch {}
+
+    try { 
+        $ppt.Quit() 
+    } catch {}
+    try { 
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
+    } catch {}
     
     $res = @{
         success = $false
@@ -897,8 +898,19 @@ try {
     # Output outcome in clean JSON format
     Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
 } catch {
-    if ($pres) { try { $pres.Close() } catch {} }
-    if ($ppt) { try { $ppt.Quit() } catch {} }
+    try { 
+        $pres.Close() 
+    } catch {}
+    try { 
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
+    } catch {}
+
+    try { 
+        $ppt.Quit() 
+    } catch {}
+    try { 
+        [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
+    } catch {}
     
     $res = @{
         success = $false

@@ -4417,10 +4417,14 @@ const OutputView = React.memo(() => {
       isTransmitting,
       programVolume,
       masterVolume,
+      mutedFaders,
       transitionType,
       transitionDuration,
       externalScreenSettings,
     } = state;
+
+    const finalProgramVolume = mutedFaders?.["Programa"] ? 0 : (programVolume ?? 0.5);
+    const finalMasterVolume = mutedFaders?.["Master"] ? 0 : (masterVolume ?? 0.5);
 
     // Find if this screen is mapped to a specific LUMIN Output
     const mappedOutput = outputs?.find(
@@ -4616,8 +4620,8 @@ const OutputView = React.memo(() => {
                       <VideoLayer
                         key={`bus-A-${busAClip.id}-${state?.programPlayIndex ?? 0}`}
                         clip={busAClip}
-                        volume={programVolume}
-                        masterVolume={masterVolume}
+                        volume={finalProgramVolume}
+                        masterVolume={finalMasterVolume}
                         opacity={1}
                         faderOpacity={audioOpacityA}
                         isProgram={crossfaderValue === 0}
@@ -4650,8 +4654,8 @@ const OutputView = React.memo(() => {
                     <VideoLayer
                       key={`bus-B-${activeBusBClip.id}-${state?.programPlayIndex ?? 0}`}
                       clip={activeBusBClip}
-                      volume={programVolume}
-                      masterVolume={masterVolume}
+                      volume={finalProgramVolume}
+                      masterVolume={finalMasterVolume}
                       opacity={1}
                       style={{ clipPath: wipeTransformOut }}
                       faderOpacity={audioOpacityB}
@@ -4730,8 +4734,8 @@ const OutputView = React.memo(() => {
                             <LayerPlaybox 
                               layer={l}
                               clips={state.clips || []}
-                              volume={l.muted ? 0 : programVolume}
-                              masterVolume={masterVolume}
+                              volume={l.muted ? 0 : finalProgramVolume}
+                              masterVolume={finalMasterVolume}
                               opacity={1}
                               isProgram={true}
                               isTransmitting={isTransmitting}
@@ -10196,10 +10200,24 @@ export default function App() {
     useState<string>("default");
   const [selectedAudioOutput, setSelectedAudioOutput] =
     useState<string>("default");
-  const [activeFaderIds, setActiveFaderIds] = useState<string[]>([
-    "Master",
-    "Programa",
-  ]);
+  const activeFaders = useMemo(() => {
+    const list = ["Master"];
+    if (selectedAudioOutput && selectedAudioOutput !== "none") {
+      list.push(
+        selectedAudioOutput.startsWith("out-")
+          ? selectedAudioOutput
+          : `out-${selectedAudioOutput}`
+      );
+    }
+    if (selectedAudioInput && selectedAudioInput !== "none") {
+      list.push(
+        selectedAudioInput.startsWith("in-")
+          ? selectedAudioInput
+          : `in-${selectedAudioInput}`
+      );
+    }
+    return list;
+  }, [selectedAudioOutput, selectedAudioInput]);
   const [isAudioConfigModalOpen, setIsAudioConfigModalOpen] = useState(false);
   const [mutedFaders, setMutedFaders] = useState<Record<string, boolean>>({});
 
@@ -10214,6 +10232,20 @@ export default function App() {
         } else {
           (window.electron as any)?.setWindowsVolume?.(masterVolume).catch(() => {});
         }
+      } else if (sourceName === "out-default") {
+        const defDev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
+        const currentVol = audioVolumes["out-default"] ?? 0.5;
+        if (defDev) {
+          (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, isMuted ? 0 : currentVol).catch(() => {});
+        } else {
+          (window.electron as any)?.setWindowsVolume?.(isMuted ? 0 : currentVol).catch(() => {});
+        }
+      } else if (sourceName === "in-default") {
+        const defDev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+        const currentVol = audioVolumes["in-default"] ?? 0.5;
+        if (defDev) {
+          (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, isMuted ? 0 : currentVol).catch(() => {});
+        }
       } else if (sourceName === "USB") {
         if (isMuted) {
           (window.electron as any)?.setWindowsVolume?.(0).catch(() => {});
@@ -10227,7 +10259,9 @@ export default function App() {
         }
       } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
         const cleanId = sourceName.replace("out-", "").replace("in-", "");
-        const currentVol = audioVolumes[sourceName] ?? 0.5;
+        const flow = sourceName.startsWith("out-") ? 0 : 1;
+        const dev = windowsDevicesList.find((d: any) => d.flow === flow && d.id === cleanId);
+        const currentVol = dev?.volume ?? audioVolumes[sourceName] ?? 0.5;
         (window.electron as any)?.setWindowsDeviceVolume?.(cleanId, isMuted ? 0 : currentVol).catch(() => {});
       }
 
@@ -10264,13 +10298,17 @@ export default function App() {
     const vol =
       sourceName === "Master"
         ? masterVolume
-        : sourceName === "Programa"
-          ? programVolume
-          : sourceName === "USB"
-            ? usbOutVolume
-            : sourceName === "IN"
-              ? usbInVolume
-              : (audioVolumes[sourceName] ?? 0.5);
+        : sourceName === "out-default"
+          ? (windowsDevicesList.find((d) => d.flow === 0 && d.isDefault)?.volume ?? audioVolumes["out-default"] ?? 0.5)
+          : sourceName === "in-default"
+            ? (windowsDevicesList.find((d) => d.flow === 1 && d.isDefault)?.volume ?? audioVolumes["in-default"] ?? 0.5)
+            : sourceName === "Programa"
+              ? programVolume
+              : sourceName === "USB"
+                ? usbOutVolume
+                : sourceName === "IN"
+                  ? usbInVolume
+                  : (audioVolumes[sourceName] ?? 0.5);
 
     if (vol <= 0.001) return 0;
 
@@ -10292,6 +10330,23 @@ export default function App() {
           });
 
           if (ourAppLevel <= 0.005) return 0; // Gated: our app is silent, show zero on Master VU meter
+          let peak = dev.peak;
+          if (peak < 0.005) peak = 0; // noise gate
+          return Math.max(0, Math.min(1, peak * vol * 1.15));
+        }
+      } else if (sourceName === "out-default") {
+        const dev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
+        if (dev) {
+          const ourAppLevel = programLevel * vol;
+          if (ourAppLevel <= 0.005) return 0; // Gated
+          let peak = dev.peak;
+          if (peak < 0.005) peak = 0; // noise gate
+          return Math.max(0, Math.min(1, peak * vol * 1.15));
+        }
+      } else if (sourceName === "in-default") {
+        const dev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+        if (dev) {
+          if (micVolumeRef.current <= 0.005) return 0; // Gated
           let peak = dev.peak;
           if (peak < 0.005) peak = 0; // noise gate
           return Math.max(0, Math.min(1, peak * vol * 1.15));
@@ -11204,6 +11259,9 @@ export default function App() {
             // Sync master fader with Windows default output endpoint
             const defPlayback = winDevices.find((d: any) => d.flow === 0 && d.isDefault);
             if (defPlayback) {
+              if (selectedAudioOutput === "default") {
+                setSelectedAudioOutput(defPlayback.id);
+              }
               if (Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03) {
                 lastVolumeRef.current = defPlayback.volume;
                 setMasterVolume(defPlayback.volume);
@@ -11213,6 +11271,9 @@ export default function App() {
             // Update default IN fader with volume of default audio record input device if active
             const defRecord = winDevices.find((d: any) => d.flow === 1 && d.isDefault);
             if (defRecord) {
+              if (selectedAudioInput === "default") {
+                setSelectedAudioInput(defRecord.id);
+              }
               setAudioVolumes((prev) => {
                 if (prev["IN"] !== undefined && Math.abs(defRecord.volume - prev["IN"]) > 0.03) {
                   return { ...prev, IN: defRecord.volume };
@@ -11221,14 +11282,29 @@ export default function App() {
               });
             }
 
-            // Sync details of other specific hardware endpoint fader items
+            // Sync details of specific active faders including default wrappers
             setAudioVolumes((prevVolumes) => {
               let changed = false;
               const next = { ...prevVolumes };
+
+              if (defPlayback) {
+                if (prevVolumes["out-default"] === undefined || Math.abs(defPlayback.volume - prevVolumes["out-default"]) > 0.03) {
+                  next["out-default"] = defPlayback.volume;
+                  changed = true;
+                }
+              }
+
+              if (defRecord) {
+                if (prevVolumes["in-default"] === undefined || Math.abs(defRecord.volume - prevVolumes["in-default"]) > 0.03) {
+                  next["in-default"] = defRecord.volume;
+                  changed = true;
+                }
+              }
+
               winDevices.forEach((dev: any) => {
                 const faderId = dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
                 const currentVol = prevVolumes[faderId];
-                if (currentVol !== undefined && Math.abs(dev.volume - currentVol) > 0.03) {
+                if (currentVol !== undefined && Math.abs(dev.volume - currentVol) > 0.02) {
                   next[faderId] = dev.volume;
                   changed = true;
                 }
@@ -11727,6 +11803,7 @@ export default function App() {
           isProgramOff: outputOffStates[activeOutputId] || false,
           programVolume,
           masterVolume,
+          mutedFaders,
           transitionType: externalScreenSettings.transitionType,
           transitionDuration: externalScreenSettings.transitionDuration,
           externalScreenSettings,
@@ -11774,6 +11851,7 @@ export default function App() {
     activeOutputId,
     programVolume,
     masterVolume,
+    mutedFaders,
     externalScreenSettings.transitionType,
     externalScreenSettings.transitionDuration,
     layers,
@@ -13668,6 +13746,7 @@ export default function App() {
                     onChange={(e) => setSelectedAudioOutput(e.target.value)}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
                   >
+                    <option value="none">Ninguno (Sin Audio)</option>
                     {audioOutputDevices.map((dev) => (
                       <option
                         key={dev.deviceId || dev.label}
@@ -13690,6 +13769,7 @@ export default function App() {
                     onChange={(e) => setSelectedAudioInput(e.target.value)}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
                   >
+                    <option value="none">Ninguno (Sin Audio)</option>
                     {audioInputDevices.map((dev) => (
                       <option
                         key={dev.deviceId || dev.label}
@@ -13699,143 +13779,6 @@ export default function App() {
                       </option>
                     ))}
                   </select>
-                </div>
-
-                {/* Mostrar Canales o Faders */}
-                <div className="space-y-2 border-t border-obs-border pt-4">
-                  <div className="flex flex-col gap-0.5">
-                    <label className="text-[9px] font-black uppercase text-obs-muted tracking-wide flex items-center gap-1">
-                      <Sliders size={11} className="text-obs-accent" />
-                      Controladores de Faders Activos
-                    </label>
-                    <p className="text-[8px] text-obs-muted italic">
-                      Selecciona los faders de mezcla que deseas visualizar en
-                      la pestaña lateral "Gestión de Audio".
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-2 mt-1">
-                    {(() => {
-                      const outputs = [
-                        {
-                          id: "Programa",
-                          name: "Reproductor de Programa",
-                          type: "system",
-                        },
-                        {
-                          id: "USB",
-                          name: "Tarjeta USB (Master Out)",
-                          type: "system",
-                        },
-                        ...audioOutputDevices.map((dev) => ({
-                          id: dev.deviceId.startsWith("out-")
-                            ? dev.deviceId
-                            : `out-${dev.deviceId}`,
-                          name: `SALIDA: ${dev.label}`,
-                          type: "output",
-                        })),
-                      ];
-
-                      const inputs = [
-                        {
-                          id: "IN",
-                          name: "Mic In (Entrada Predeterminada)",
-                          type: "system",
-                        },
-                        ...audioInputDevices.map((dev) => ({
-                          id: dev.deviceId.startsWith("in-")
-                            ? dev.deviceId
-                            : `in-${dev.deviceId}`,
-                          name: `ENTRADA: ${dev.label}`,
-                          type: "input",
-                        })),
-                      ];
-
-                      const renderOption = (option: {
-                        id: string;
-                        name: string;
-                      }) => {
-                        const isMaster = option.id === "Master";
-                        const isChecked =
-                          isMaster || activeFaderIds.includes(option.id);
-                        return (
-                          <label
-                            key={option.id}
-                            className={`flex items-center gap-2 p-2 rounded border transition-all cursor-pointer select-none ${
-                              isChecked
-                                ? "bg-obs-accent/10 border-obs-accent/30 text-white"
-                                : "bg-obs-surface/40 border-obs-border text-obs-muted hover:bg-obs-surface"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              disabled={isMaster}
-                              onChange={() => {
-                                if (isMaster) return;
-                                if (isChecked) {
-                                  setActiveFaderIds((prev) =>
-                                    prev.filter((id) => id !== option.id),
-                                  );
-                                } else {
-                                  setActiveFaderIds((prev) => [
-                                    ...prev,
-                                    option.id,
-                                  ]);
-                                }
-                              }}
-                              className="w-3.5 h-3.5 rounded border-obs-border bg-obs-surface text-obs-accent focus:ring-0 cursor-pointer disabled:opacity-40"
-                            />
-                            <div className="flex flex-col select-none truncate">
-                              <span className="text-[8px] font-bold uppercase font-sans truncate leading-normal text-white">
-                                {option.name}
-                              </span>
-                              <span className="text-[6.5px] text-obs-muted font-mono tracking-tight leading-none truncate">
-                                {option.id}
-                              </span>
-                            </div>
-                          </label>
-                        );
-                      };
-
-                      return (
-                        <div className="w-full space-y-4">
-                          {/* MASTER */}
-                          <div className="space-y-1">
-                            <span className="text-[7.5px] font-black uppercase tracking-wider text-obs-accent">
-                              Mezcla General (Estático)
-                            </span>
-                            <div className="grid grid-cols-1 gap-2">
-                              {renderOption({
-                                id: "Master",
-                                name: "MASTER MIX (Suma de señales activas)",
-                              })}
-                            </div>
-                          </div>
-
-                          {/* SALIDAS */}
-                          <div className="space-y-1.5 border-t border-obs-border/50 pt-2.5">
-                            <span className="text-[7.5px] font-black uppercase tracking-wider text-green-500">
-                              DISPOSITIVOS DE SALIDA (AUDIO OUT)
-                            </span>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                              {outputs.map(renderOption)}
-                            </div>
-                          </div>
-
-                          {/* ENTRADAS */}
-                          <div className="space-y-1.5 border-t border-obs-border/50 pt-2.5">
-                            <span className="text-[7.5px] font-black uppercase tracking-wider text-orange-500">
-                              DISPOSITIVOS DE ENTRADA (AUDIO IN / MIC)
-                            </span>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                              {inputs.map(renderOption)}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
                 </div>
               </div>
 
@@ -13847,7 +13790,7 @@ export default function App() {
                   onClick={() => setIsAudioConfigModalOpen(false)}
                   className="px-5 py-1.5 bg-obs-accent hover:opacity-90 text-white rounded text-[10px] font-bold uppercase transition-all"
                 >
-                  Aplicar Cambios
+                  Confirmar
                 </button>
               </div>
             </motion.div>
@@ -14205,22 +14148,32 @@ export default function App() {
                           </div>
 
                           <div className="grid grid-cols-1 gap-2.5">
-                            {activeFaderIds.map((sourceName) => {
+                            {activeFaders.map((sourceName) => {
                               const volume =
                                 sourceName === "Master"
                                   ? masterVolume
-                                  : sourceName === "Programa"
-                                    ? programVolume
-                                    : sourceName === "USB"
-                                      ? usbOutVolume
-                                      : sourceName === "IN"
-                                        ? usbInVolume
-                                        : (audioVolumes[sourceName] ?? 0.5);
+                                  : sourceName === "out-default"
+                                    ? (windowsDevicesList.find((d) => d.flow === 0 && d.isDefault)?.volume ?? audioVolumes["out-default"] ?? 0.5)
+                                    : sourceName === "in-default"
+                                      ? (windowsDevicesList.find((d) => d.flow === 1 && d.isDefault)?.volume ?? audioVolumes["in-default"] ?? 0.5)
+                                      : (audioVolumes[sourceName] ?? 0.5);
 
                               const onChange = (val: number) => {
                                 if (sourceName === "Master") {
                                   setMasterVolume(val);
                                   (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
+                                } else if (sourceName === "out-default") {
+                                  const defDev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
+                                  if (defDev) {
+                                    (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, val).catch(() => {});
+                                  } else {
+                                    (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
+                                  }
+                                } else if (sourceName === "in-default") {
+                                  const defDev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+                                  if (defDev) {
+                                    (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, val).catch(() => {});
+                                  }
                                 } else if (sourceName === "Programa") {
                                   setProgramVolume(val);
                                 } else if (sourceName === "USB") {
@@ -14244,30 +14197,28 @@ export default function App() {
                               };
 
                               let faderLabel = sourceName;
-                              if (sourceName === "Master")
-                                faderLabel = "MASTER MIX";
-                              else if (sourceName === "Programa")
-                                faderLabel = "PROG. REPROD.";
-                              else if (sourceName === "USB")
-                                faderLabel = "TARJETA USB";
-                              else if (sourceName === "IN")
-                                faderLabel = "MIC IN (DEF)";
-                              else if (sourceName.startsWith("out-")) {
+                              if (sourceName === "Master") {
+                                faderLabel = "MEZCLA MASTER";
+                              } else if (sourceName === "out-default") {
+                                faderLabel = "SALIDA PRINCIPAL";
+                              } else if (sourceName === "in-default") {
+                                faderLabel = "ENTRADA MICRÓFONO";
+                              } else if (sourceName.startsWith("out-")) {
                                 const cleanId = sourceName.replace("out-", "");
                                 const matched = audioOutputDevices.find(
                                   (d) => d.deviceId === cleanId,
                                 );
                                 faderLabel = matched
-                                  ? `OUT: ${matched.label}`
-                                  : `OUT: ${cleanId}`;
+                                  ? `SALIDA: ${matched.label}`
+                                  : `SALIDA: ${cleanId}`;
                               } else if (sourceName.startsWith("in-")) {
                                 const cleanId = sourceName.replace("in-", "");
                                 const matched = audioInputDevices.find(
                                   (d) => d.deviceId === cleanId,
                                 );
                                 faderLabel = matched
-                                  ? `IN: ${matched.label}`
-                                  : `IN: ${cleanId}`;
+                                  ? `ENTRADA: ${matched.label}`
+                                  : `ENTRADA: ${cleanId}`;
                               }
 
                               return (
@@ -14316,10 +14267,9 @@ export default function App() {
                                 </div>
                               );
                             })}
-                            {activeFaderIds.length === 0 && (
+                            {activeFaders.length === 0 && (
                               <div className="p-4 text-center text-obs-muted text-[8.5px] italic">
-                                Ningún fader visible. Haga clic en "Ajustes"
-                                para activarlos.
+                                Ningún fader visible o configurado.
                               </div>
                             )}
                           </div>
@@ -14793,7 +14743,7 @@ export default function App() {
                       allScreenSettings[activeOutputId] ||
                       DEFAULT_SCREEN_SETTINGS
                     }
-                    masterVolume={masterVolume}
+                    masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
                     onEnded={handleProgramNext}
                     onLayerEnded={handleLayerEnded}
                     onLevelChange={setProgramLevel}
@@ -14813,7 +14763,7 @@ export default function App() {
                     }}
                     onUpdateClip={updateClip}
                     isPlaylist={!!programPlaylistState}
-                    volume={programVolume}
+                    volume={mutedFaders["Programa"] ? 0 : programVolume}
                     brightness={allScreenSettings[activeOutputId]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
                     contrast={allScreenSettings[activeOutputId]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
                     saturation={allScreenSettings[activeOutputId]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
