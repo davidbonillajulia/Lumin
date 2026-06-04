@@ -1001,8 +1001,14 @@ const useAudioLevel = (
             sum += dataArrayRef.current[i];
           }
           const average = sum / dataArrayRef.current.length;
-          // Level should reflect raw signal level normalized - increased sensitivity
-          setLevel(Math.min(1, average / 45));
+          
+          // Noise-gate threshold to ensure silent frames show exactly zero on meters
+          if (average < 3) {
+            setLevel(0);
+          } else {
+            // Smoothly scale levels starting from above the noise gate threshold
+            setLevel(Math.min(1, (average - 3) / 42));
+          }
 
           animationFrameRef.current = requestAnimationFrame(updateLevel);
         };
@@ -1095,7 +1101,8 @@ const ScaleToFit = ({
     allowClockAuthority = false,
     onProgressUpdate = undefined,
     outputId,
-    isVisuallyActive = true
+    isVisuallyActive = true,
+    onLevelChange,
   }: { 
     layer: Layer; 
     clips: Clip[]; 
@@ -1112,6 +1119,7 @@ const ScaleToFit = ({
     onProgressUpdate?: (current: number, total: number) => void;
     outputId?: string;
     isVisuallyActive?: boolean;
+    onLevelChange?: (level: number) => void;
   }) => {
     const activeClip = layer.activeClipId ? clips?.find((c) => c.id === layer.activeClipId) : null;
     const initialKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
@@ -1147,6 +1155,25 @@ const ScaleToFit = ({
         setBusB(prev => (prev && prev.clip.id === activeClip.id && prev.clip !== activeClip) ? { ...prev, clip: activeClip } : prev);
       }
     }, [activeClip, activeKey, isBusAReady, layer.sequenceCounter]);
+
+    const [busALevel, setBusALevel] = useState(0);
+    const [busBLevel, setBusBLevel] = useState(0);
+
+    useEffect(() => {
+      if (!busA) setBusALevel(0);
+    }, [busA]);
+
+    useEffect(() => {
+      if (!busB) setBusBLevel(0);
+    }, [busB]);
+
+    useEffect(() => {
+      if (layer.muted) {
+        onLevelChange?.(0);
+      } else {
+        onLevelChange?.(Math.max(busALevel, busBLevel));
+      }
+    }, [busALevel, busBLevel, layer.muted, onLevelChange]);
 
     // Handle transition swap
     useEffect(() => {
@@ -1225,6 +1252,13 @@ const ScaleToFit = ({
               layerId={layer.id}
               outputId={outputId}
               isVisuallyActive={isVisuallyActive}
+              onLevelChange={(lvl) => {
+                if (bus.isBusA) {
+                  setBusALevel(lvl);
+                } else {
+                  setBusBLevel(lvl);
+                }
+              }}
             />
           ))}
         </AnimatePresence>
@@ -1354,9 +1388,25 @@ const Monitor = React.memo(
       isProgram,
     );
 
+    // Track active levels for multi-layer audio
+    const layerLevelsRef = useRef<Record<string, number>>({});
+
+    const updateLevel = useCallback(() => {
+      const activeLayerIds = new Set((layers || []).map(l => l.id));
+      // clean up inactive layers
+      Object.keys(layerLevelsRef.current).forEach(id => {
+        if (!activeLayerIds.has(id)) {
+          delete layerLevelsRef.current[id];
+        }
+      });
+      const maxLayerLevel = Object.values(layerLevelsRef.current).reduce((max, val) => Math.max(max, val), 0);
+      const combined = Math.max(audioLevel, maxLayerLevel);
+      onLevelChange?.(combined);
+    }, [audioLevel, layers, onLevelChange]);
+
     useEffect(() => {
-      onLevelChange?.(audioLevel);
-    }, [audioLevel, onLevelChange]);
+      updateLevel();
+    }, [audioLevel, updateLevel]);
 
     useEffect(() => {
       const video = videoRef.current;
@@ -1715,6 +1765,14 @@ const Monitor = React.memo(
                                     }
                                     outputId={resolvedOutputId}
                                     isVisuallyActive={isVisuallyActive}
+                                    onLevelChange={(lvl) => {
+                                      if (isVisuallyActive) {
+                                        layerLevelsRef.current[l.id] = lvl;
+                                      } else {
+                                        layerLevelsRef.current[l.id] = 0;
+                                      }
+                                      updateLevel();
+                                    }}
                                   />
                               </div>
                             </div>
@@ -8077,6 +8135,16 @@ const Library = React.memo(
       setLibraryFiles((prev) => [...prev, ...newFiles]);
     };
 
+    const handleDeleteFile = (url: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setLibraryFiles((prev) => prev.filter((f) => f.url !== url));
+      setSelectedLibraryUrls((prev) => {
+        const next = new Set(prev);
+        next.delete(url);
+        return next;
+      });
+    };
+
     const filteredFiles = libraryFiles.filter((f) => {
       const matchesSearch = f.name
         .toLowerCase()
@@ -8217,6 +8285,15 @@ const Library = React.memo(
                         </div>
                       </div>
                     )}
+                    {viewMode === "grid" && (
+                      <button
+                        onClick={(e) => handleDeleteFile(file.url, e)}
+                        className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-red-500 rounded text-stone-300 hover:text-white opacity-0 group-hover:opacity-100 transition-all z-20"
+                        title="Eliminar archivo"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    )}
                   </div>
                   {viewMode === "list" ? (
                     <div className="flex-1 min-w-0 px-2 flex items-center justify-between">
@@ -8228,10 +8305,19 @@ const Library = React.memo(
                           {file.type.split("/")[1]}
                         </div>
                       </div>
-                      <Plus
-                        size={10}
-                        className="opacity-0 group-hover:opacity-100 text-obs-accent transition-opacity"
-                      />
+                      <div className="flex items-center gap-1.5 shrink-0 select-none">
+                        <button
+                          onClick={(e) => handleDeleteFile(file.url, e)}
+                          className="opacity-0 group-hover:opacity-100 text-obs-muted hover:text-red-500 transition-all p-1"
+                          title="Eliminar de biblioteca"
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                        <Plus
+                          size={10}
+                          className="opacity-0 group-hover:opacity-100 text-obs-accent transition-opacity"
+                        />
+                      </div>
                     </div>
                   ) : (
                     <div className="p-1">
@@ -10124,6 +10210,7 @@ export default function App() {
   );
   const [audioInputDevices, setAudioInputDevices] = useState<any[]>([]);
   const [audioOutputDevices, setAudioOutputDevices] = useState<any[]>([]);
+  const [windowsDevicesList, setWindowsDevicesList] = useState<any[]>([]);
   const [selectedAudioInput, setSelectedAudioInput] =
     useState<string>("default");
   const [selectedAudioOutput, setSelectedAudioOutput] =
@@ -10174,9 +10261,24 @@ export default function App() {
 
     if (vol <= 0.001) return 0;
 
+    // Windows native WASAPI real-time peak signal integration
+    if (typeof window !== "undefined" && (window as any).electron && windowsDevicesList.length > 0) {
+      if (sourceName === "Master") {
+        const dev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
+        if (dev) return Math.max(0, Math.min(1, dev.peak));
+      } else if (sourceName === "IN") {
+        const dev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+        if (dev) return Math.max(0, Math.min(1, dev.peak));
+      } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
+        const cleanId = sourceName.replace("out-", "").replace("in-", "");
+        const dev = windowsDevicesList.find((d) => d.id === cleanId);
+        if (dev) return Math.max(0, Math.min(1, dev.peak));
+      }
+    }
+
     let baseSignal = 0;
     
-    // Logic for individual faders
+    // Logic for individual faders (cross-platform fallback)
     if (sourceName === "Programa") {
       baseSignal = programLevel;
     } else if (sourceName === "IN" || sourceName.startsWith("in-") || sourceName === selectedAudioInput) {
@@ -10208,7 +10310,8 @@ export default function App() {
     usbInVolume,
     audioVolumes,
     programLevel,
-    selectedAudioInput
+    selectedAudioInput,
+    windowsDevicesList
   ]);
 
   const DEFAULT_SCREEN_SETTINGS: ExternalScreenSettings = {
@@ -11017,7 +11120,7 @@ export default function App() {
     if (
       typeof window !== "undefined" &&
       window.electron &&
-      (window.electron as any).getWindowsVolume
+      (window.electron as any).getWindowsDevices
     ) {
       let active = true;
 
@@ -11025,19 +11128,66 @@ export default function App() {
         if (!active) return;
         try {
           // @ts-ignore
-          const sysVolume = await (window.electron as any).getWindowsVolume();
-          // Adjust with a small epsilon window to prevent noise loops
-          if (
-            sysVolume >= 0 &&
-            Math.abs(sysVolume - lastVolumeRef.current) > 0.05
-          ) {
-            lastVolumeRef.current = sysVolume;
-            setMasterVolume(sysVolume);
+          const winDevices = await (window.electron as any).getWindowsDevices();
+          if (Array.isArray(winDevices) && winDevices.length > 0) {
+            setWindowsDevicesList(winDevices);
+
+            // Determine active default inputs/outputs
+            const inputs = winDevices.filter((d: any) => d.flow === 1).map((d: any) => ({ deviceId: d.id, label: d.name }));
+            const outputs = winDevices.filter((d: any) => d.flow === 0).map((d: any) => ({ deviceId: d.id, label: d.name }));
+
+            if (inputs.length > 0) {
+              setAudioInputDevices((prev) => {
+                if (JSON.stringify(prev) !== JSON.stringify(inputs)) return inputs;
+                return prev;
+              });
+            }
+            if (outputs.length > 0) {
+              setAudioOutputDevices((prev) => {
+                if (JSON.stringify(prev) !== JSON.stringify(outputs)) return outputs;
+                return prev;
+              });
+            }
+
+            // Sync master fader with Windows default output endpoint
+            const defPlayback = winDevices.find((d: any) => d.flow === 0 && d.isDefault);
+            if (defPlayback) {
+              if (Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03) {
+                lastVolumeRef.current = defPlayback.volume;
+                setMasterVolume(defPlayback.volume);
+              }
+            }
+
+            // Update default IN fader with volume of default audio record input device if active
+            const defRecord = winDevices.find((d: any) => d.flow === 1 && d.isDefault);
+            if (defRecord) {
+              setAudioVolumes((prev) => {
+                if (prev["IN"] !== undefined && Math.abs(defRecord.volume - prev["IN"]) > 0.03) {
+                  return { ...prev, IN: defRecord.volume };
+                }
+                return prev;
+              });
+            }
+
+            // Sync details of other specific hardware endpoint fader items
+            setAudioVolumes((prevVolumes) => {
+              let changed = false;
+              const next = { ...prevVolumes };
+              winDevices.forEach((dev: any) => {
+                const faderId = dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
+                const currentVol = prevVolumes[faderId];
+                if (currentVol !== undefined && Math.abs(dev.volume - currentVol) > 0.03) {
+                  next[faderId] = dev.volume;
+                  changed = true;
+                }
+              });
+              return changed ? next : prevVolumes;
+            });
           }
         } catch (e) {}
       };
 
-      const syncInterval = setInterval(syncFromWindows, 250);
+      const syncInterval = setInterval(syncFromWindows, 200);
       return () => {
         active = false;
         clearInterval(syncInterval);
@@ -11059,6 +11209,21 @@ export default function App() {
       }
     }
   }, [masterVolume]);
+
+  // Dynamically route AudioContext output to selected playback output device of Windows
+  useEffect(() => {
+    if (audioContext && typeof (audioContext as any).setSinkId === "function") {
+      const targetSink = selectedAudioOutput === "default" ? "" : selectedAudioOutput;
+      (audioContext as any)
+        .setSinkId(targetSink)
+        .then(() => {
+          console.log(`Audio output routed successfully to target sink: ${selectedAudioOutput}`);
+        })
+        .catch((e: any) => {
+          console.warn("Failed to dynamically set audioContext target sinkId:", e);
+        });
+    }
+  }, [selectedAudioOutput]);
 
   const [floatingTimerPos, setFloatingTimerPos] = useState<
     Record<string, { x: number; y: number }>
@@ -14003,14 +14168,22 @@ export default function App() {
                               const onChange = (val: number) => {
                                 if (sourceName === "Master") {
                                   setMasterVolume(val);
-                                  (window.electron as any)?.setWindowsVolume(val).catch(() => {});
-                                } else if (sourceName === "Programa")
+                                  (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
+                                } else if (sourceName === "Programa") {
                                   setProgramVolume(val);
-                                else if (sourceName === "USB") {
+                                } else if (sourceName === "USB") {
                                   setUsbOutVolume(val);
-                                  (window.electron as any)?.setWindowsVolume(val).catch(() => {});
-                                } else if (sourceName === "IN")
+                                  (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
+                                } else if (sourceName === "IN") {
                                   setUsbInVolume(val);
+                                  const defIn = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+                                  if (defIn) {
+                                    (window.electron as any)?.setWindowsDeviceVolume?.(defIn.id, val).catch(() => {});
+                                  }
+                                } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
+                                  const cleanId = sourceName.replace("out-", "").replace("in-", "");
+                                  (window.electron as any)?.setWindowsDeviceVolume?.(cleanId, val).catch(() => {});
+                                }
 
                                 setAudioVolumes((prev) => ({
                                   ...prev,
@@ -14410,6 +14583,7 @@ export default function App() {
                       isDarkMode={isDarkMode}
                       isTransmitting={isTransmitting}
                       volume={0.5}
+                      onLevelChange={setPreviewLevel}
                       clips={clips}
                       previewClipId={preview.clipId}
                       hideOverlays={preview.hideOverlays}

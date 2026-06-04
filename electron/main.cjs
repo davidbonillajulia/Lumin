@@ -238,6 +238,301 @@ if (!gotTheLock) {
     app.exit(0);
   });
 
+  ipcMain.handle('get-windows-devices', async () => {
+    return new Promise((resolve) => {
+      if (process.platform !== 'win32') {
+        resolve([]);
+        return;
+      }
+      const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        $code = @'
+        using System;
+        using System.Runtime.InteropServices;
+        using System.Text;
+
+        public class AudioSync {
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal class MMDeviceEnumerator { }
+
+            [Guid(\\"A95664D2-9614-4F35-A746-DE8DB63617E6\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceEnumerator {
+                int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+                int GetDefaultAudioEndpoint(int dataFlow, int role, out IntPtr ppDevice);
+            }
+
+            [Guid(\\"0BD7A1CE-141A-4089-82EA-0485437B70EC\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceCollection {
+                int GetCount(out int pcDevices);
+                int Item(int nIndex, out IntPtr ppDevice);
+            }
+
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDevice {
+                int Activate(ref Guid iid, int dwClsContext, IntPtr pActivationParams, out IntPtr ppInterface);
+                int OpenPropertyStore(int stgmAccess, out IntPtr ppProperties);
+                int GetId(out IntPtr ppstrId);
+            }
+
+            [Guid(\\"886D8Eeb-8CF2-4446-8D02-CDA11FC9F75E\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IPropertyStore {
+                int GetCount(out int cProps);
+                int GetAt(int iProp, out byte[] pkey);
+                int GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct PROPERTYKEY {
+                public Guid fmtid;
+                public uint pid;
+            }
+
+            [StructLayout(LayoutKind.Explicit)]
+            internal struct PROPVARIANT {
+                [FieldOffset(0)] public ushort vt;
+                [FieldOffset(8)] public IntPtr pointerVal;
+            }
+
+            [Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IAudioEndpointVolume {
+                int RegisterControlChangeNotifyCallback(IntPtr pNotify);
+                int UnregisterControlChangeNotifyCallback(IntPtr pNotify);
+                int GetChannelCount(out int pnChannelCount);
+                int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+                int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+                int GetMasterVolumeLevel(out float pfLevelDB);
+                int GetMasterVolumeLevelScalar(out float pfLevel);
+            }
+
+            [Guid(\\"C02216C6-8C67-4B5B-9D00-D008E73E0064\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IAudioMeterInformation {
+                int GetPeakValue(out float pfPeak);
+            }
+
+            public static string GetDevices() {
+                var sb = new StringBuilder();
+                sb.Append(\\"[\\");
+                try {
+                    var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+                    
+                    string defaultOutId = \\"\\";
+                    try {
+                        IntPtr defOutPtr = IntPtr.Zero;
+                        enumerator.GetDefaultAudioEndpoint(0, 1, out defOutPtr);
+                        if (defOutPtr != IntPtr.Zero) {
+                            var dev = (IMMDevice)Marshal.GetObjectForIUnknown(defOutPtr);
+                            IntPtr idPtr = IntPtr.Zero;
+                            dev.GetId(out idPtr);
+                            defaultOutId = Marshal.PtrToStringUni(idPtr);
+                            Marshal.Release(defOutPtr);
+                        }
+                    } catch {}
+
+                    string defaultInId = \\"\\";
+                    try {
+                        IntPtr defInPtr = IntPtr.Zero;
+                        enumerator.GetDefaultAudioEndpoint(1, 1, out defInPtr);
+                        if (defInPtr != IntPtr.Zero) {
+                            var dev = (IMMDevice)Marshal.GetObjectForIUnknown(defInPtr);
+                            IntPtr idPtr = IntPtr.Zero;
+                            dev.GetId(out idPtr);
+                            defaultInId = Marshal.PtrToStringUni(idPtr);
+                            Marshal.Release(defInPtr);
+                        }
+                    } catch {}
+
+                    for (int flow = 0; flow <= 1; flow++) {
+                        IntPtr collectionPtr = IntPtr.Zero;
+                        enumerator.EnumAudioEndpoints(flow, 1, out collectionPtr);
+                        if (collectionPtr == IntPtr.Zero) continue;
+                        
+                        var collection = (IMMDeviceCollection)Marshal.GetObjectForIUnknown(collectionPtr);
+                        int count = 0;
+                        collection.GetCount(out count);
+                        
+                        for (int i = 0; i < count; i++) {
+                            IntPtr devPtr = IntPtr.Zero;
+                            collection.Item(i, out devPtr);
+                            if (devPtr == IntPtr.Zero) continue;
+                            
+                            var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
+                            
+                            IntPtr idPtr = IntPtr.Zero;
+                            dev.GetId(out idPtr);
+                            string id = Marshal.PtrToStringUni(idPtr);
+                            
+                            float volumeVal = 0.5f;
+                            try {
+                                IntPtr volPtr = IntPtr.Zero;
+                                var volIid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
+                                dev.Activate(ref volIid, 23, IntPtr.Zero, out volPtr);
+                                if (volPtr != IntPtr.Zero) {
+                                    var vol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(volPtr);
+                                    vol.GetMasterVolumeLevelScalar(out volumeVal);
+                                    Marshal.Release(volPtr);
+                                }
+                            } catch {}
+                            
+                            float peakVal = 0.0f;
+                            try {
+                                IntPtr meterPtr = IntPtr.Zero;
+                                var meterIid = new Guid(\\"C02216C6-8C67-4B5B-9D00-D008E73E0064\\");
+                                dev.Activate(ref meterIid, 23, IntPtr.Zero, out meterPtr);
+                                if (meterPtr != IntPtr.Zero) {
+                                    var meter = (IAudioMeterInformation)Marshal.GetObjectForIUnknown(meterPtr);
+                                    meter.GetPeakValue(out peakVal);
+                                    Marshal.Release(meterPtr);
+                                }
+                            } catch {}
+                            
+                            string name = \\"Unknown Device\\";
+                            try {
+                                IntPtr propPtr = IntPtr.Zero;
+                                dev.OpenPropertyStore(0, out propPtr);
+                                if (propPtr != IntPtr.Zero) {
+                                    var props = (IPropertyStore)Marshal.GetObjectForIUnknown(propPtr);
+                                    var key = new PROPERTYKEY();
+                                    key.fmtid = new Guid(\\"a45c254e-df1c-4efd-8020-67d146a850e0\\");
+                                    key.pid = 14;
+                                    PROPVARIANT propVal;
+                                    props.GetValue(ref key, out propVal);
+                                    if (propVal.vt == 31 && propVal.pointerVal != IntPtr.Zero) {
+                                        name = Marshal.PtrToStringUni(propVal.pointerVal);
+                                    }
+                                    Marshal.Release(propPtr);
+                                }
+                            } catch {}
+                            
+                            bool isDefault = (flow == 0 && id == defaultOutId) || (flow == 1 && id == defaultInId);
+                            
+                            if (sb.Length > 1) sb.Append(\\",\\");
+                            sb.Append(\\"{\\");
+                            sb.AppendFormat(\\\"\\\\\\\"id\\\\\\\":\\\\\\\"{0}\\\\\\\",\\\", id.Replace(\\"\\\\\\\\\\", \\"\\\\\\\\\\\\\\\\\\").Replace(\\"\\\\\\"\\", \\"\\\\\\\\\\\\\\"\\"));
+                            sb.AppendFormat(\\\"\\\\\\\"name\\\\\\\":\\\\\\\"{0}\\\\\\\",\\\", name.Replace(\\"\\\\\\\\\\", \\"\\\\\\\\\\\\\\\\\\").Replace(\\"\\\\\\"\\", \\"\\\\\\\\\\\\\\"\\"));
+                            sb.AppendFormat(\\\"\\\\\\\"flow\\\\\\\":{0},\\\", flow);
+                            sb.AppendFormat(\\\"\\\\\\\"volume\\\\\\\":{0:F4},\\\", volumeVal);
+                            sb.AppendFormat(\\\"\\\\\\\"peak\\\\\\\":{0:F4},\\\", peakVal);
+                            sb.AppendFormat(\\\"\\\\\\\"isDefault\\\\\\\":{0}\\\", isDefault ? \\"true\\" : \\"false\\");
+                            sb.Append(\\"}\\");
+                            
+                            Marshal.Release(devPtr);
+                        }
+                        Marshal.Release(collectionPtr);
+                    }
+                } catch {}
+                sb.Append(\\"]\\");
+                return sb.ToString();
+            }
+        }
+'@
+        try {
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+        } catch {}
+        [AudioSync]::GetDevices()
+      "`;
+      exec(psCommand, (err, stdout) => {
+        if (err || !stdout) {
+          resolve([]);
+        } else {
+          try {
+            const devices = JSON.parse(stdout.trim());
+            resolve(devices);
+          } catch(e) {
+            resolve([]);
+          }
+        }
+      });
+    });
+  });
+
+  ipcMain.handle('set-windows-device-volume', async (event, { id, val }) => {
+    return new Promise((resolve) => {
+      if (process.platform !== 'win32') {
+        resolve(true);
+        return;
+      }
+      const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        $code = @'
+        using System;
+        using System.Runtime.InteropServices;
+
+        public class AudioSync {
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal class MMDeviceEnumerator { }
+
+            [Guid(\\"A95664D2-9614-4F35-A746-DE8DB63617E6\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceEnumerator {
+                int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+            }
+
+            [Guid(\\"0BD7A1CE-141A-4089-82EA-0485437B70EC\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceCollection {
+                int GetCount(out int pcDevices);
+                int Item(int nIndex, out IntPtr ppDevice);
+            }
+
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDevice {
+                int Activate(ref Guid iid, int dwClsContext, IntPtr pActivationParams, out IntPtr ppInterface);
+                int GetId(out IntPtr ppstrId);
+            }
+
+            [Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IAudioEndpointVolume {
+                int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+            }
+
+            public static void SetDeviceVolume(string id, float val) {
+                try {
+                    var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+                    for (int flow = 0; flow <= 1; flow++) {
+                        IntPtr collectionPtr = IntPtr.Zero;
+                        enumerator.EnumAudioEndpoints(flow, 1, out collectionPtr);
+                        if (collectionPtr == IntPtr.Zero) continue;
+                        
+                        var collection = (IMMDeviceCollection)Marshal.GetObjectForIUnknown(collectionPtr);
+                        int count = 0;
+                        collection.GetCount(out count);
+                        
+                        for (int i = 0; i < count; i++) {
+                            IntPtr devPtr = IntPtr.Zero;
+                            collection.Item(i, out devPtr);
+                            if (devPtr == IntPtr.Zero) continue;
+                            
+                            var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
+                            IntPtr idPtr = IntPtr.Zero;
+                            dev.GetId(out idPtr);
+                            string devId = Marshal.PtrToStringUni(idPtr);
+                            
+                            if (devId == id) {
+                                IntPtr volPtr = IntPtr.Zero;
+                                var volIid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
+                                dev.Activate(ref volIid, 23, IntPtr.Zero, out volPtr);
+                                if (volPtr != IntPtr.Zero) {
+                                    var vol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(volPtr);
+                                    Guid guid = Guid.Empty;
+                                    vol.SetMasterVolumeLevelScalar(val, ref guid);
+                                    Marshal.Release(volPtr);
+                                }
+                            }
+                            Marshal.Release(devPtr);
+                        }
+                        Marshal.Release(collectionPtr);
+                    }
+                } catch {}
+            }
+        }
+'@
+        try {
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+        } catch {}
+        [AudioSync]::SetDeviceVolume('${id.replace(/'/g, "''")}', ${val})
+      "`;
+      exec(psCommand, () => {
+        resolve(true);
+      });
+    });
+  });
+
   ipcMain.handle('get-windows-volume', async () => {
     return new Promise((resolve) => {
       const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
@@ -377,12 +672,18 @@ try {
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
+    # Make PowerPoint visible safely so it can paint slides and convert correctly on Windows
+    try {
+        $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
+    } catch {}
+
+    # Keep a small pause or minimize if requested, but visible = msoTrue is required for PDF conversion
+    try {
+        $ppt.WindowState = 2 # ppWindowMinimized
+    } catch {}
+
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
     $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
-    
-    # Optional: Minimize the window immediately if wanted, but WithWindow=True often fixes hang/failure issues
-    # $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
-    # $ppt.WindowState = 2 # ppWindowMinimized
     
     # Save deck as a multi-page PDF document
     # 32 is the PowerPoint constant for ppSaveAsPDF
@@ -493,10 +794,6 @@ try {
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
     
-    # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
-    # WithWindow matches [Microsoft.Office.Core.MsoTriState]::msoTrue (provides graphics context for slide exports)
-    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
-    
     # Make PowerPoint visible safely so it can paint slides correctly on Windows
     try {
         $ppt.Visible = [Microsoft.Office.Core.MsoTriState]::msoTrue
@@ -506,6 +803,10 @@ try {
     try {
         $ppt.WindowState = 2 # ppWindowMinimized
     } catch {}
+
+    # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
+    # WithWindow matches [Microsoft.Office.Core.MsoTriState]::msoTrue (provides graphics context for slide exports)
+    $pres = $ppt.Presentations.Open("${normalizedFilePath}", [Microsoft.Office.Core.MsoTriState]::msoTrue, [Microsoft.Office.Core.MsoTriState]::msoFalse, [Microsoft.Office.Core.MsoTriState]::msoTrue)
     
     # Save entire deck as individual PNG slide frames in the target directory
     # 18 is the PowerPoint constant for ppSaveAsPNG

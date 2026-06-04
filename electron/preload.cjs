@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('electron', {
   readLuminFile: (filePath) => ipcRenderer.invoke('read-lumin-file', filePath),
   getWindowsVolume: () => ipcRenderer.invoke('get-windows-volume'),
   setWindowsVolume: (val) => ipcRenderer.invoke('set-windows-volume', val),
+  getWindowsDevices: () => ipcRenderer.invoke('get-windows-devices'),
+  setWindowsDeviceVolume: (id, val) => ipcRenderer.invoke('set-windows-device-volume', { id, val }),
   exitApp: () => ipcRenderer.send('exit-app'),
   isElectron: true
 });
