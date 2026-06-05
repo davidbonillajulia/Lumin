@@ -1305,6 +1305,7 @@ const Monitor = React.memo(
     perfSettings,
     programPlayIndex = 0,
     isSlave = false,
+    isCasting = false,
   }: {
     title: string;
     isActive?: boolean;
@@ -1359,6 +1360,7 @@ const Monitor = React.memo(
     perfSettings?: any;
     programPlayIndex?: number;
     isSlave?: boolean;
+    isCasting?: boolean;
   }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const lastSrc = useRef<string>("");
@@ -1558,7 +1560,7 @@ const Monitor = React.memo(
         className={`group flex flex-col h-full bg-obs-dark-m1 items-center justify-center p-0`}
       >
         <div
-          className={`relative aspect-video w-full max-h-full bg-black rounded-sm border-2 ${isActive ? "border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : "border-[#333]"} overflow-hidden cursor-pointer`}
+          className={`relative aspect-video w-full max-h-full bg-black rounded-sm border-2 ${isCasting ? "border-red-500 shadow-[0_0_12px_rgba(239,68,68,0.7)] ring-1 ring-red-500" : "border-[#114e6d] shadow-[0_0_12px_rgba(17,78,109,0.7)] ring-1 ring-[#114e6d]"} overflow-hidden cursor-pointer`}
           onDragOver={(e) => e.preventDefault()}
           onDrop={onDrop}
           onClick={onClick}
@@ -1946,12 +1948,7 @@ const Monitor = React.memo(
           {!hideOverlays && (
             <div className="absolute bottom-1.5 right-1.5 z-20 pointer-events-none">
               <div
-                className={`px-1.5 py-0.5 rounded-sm bg-obs-dark-1 backdrop-blur-md border ${isActive ? "border-red-500/50 text-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]" : "border-obs-text/10 text-obs-muted"} text-[7px] font-black uppercase tracking-widest`}
-                style={
-                  !isActive && accentColor
-                    ? { color: accentColor, borderColor: `${accentColor}33` }
-                    : {}
-                }
+                className={`px-1.5 py-0.5 rounded-sm bg-obs-dark-1 backdrop-blur-md border ${isCasting ? "border-red-500/50 text-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]" : "border-[#114e6d]/50 text-[#114e6d] shadow-[0_0_8px_rgba(17,78,109,0.4)]"} text-[7px] font-black uppercase tracking-widest`}
               >
                 {isActive ? "LIVE" : "STANDBY"}
               </div>
@@ -10191,9 +10188,9 @@ export default function App() {
   const [audioOutputDevices, setAudioOutputDevices] = useState<any[]>([]);
   const [windowsDevicesList, setWindowsDevicesList] = useState<any[]>([]);
   const [selectedAudioInput, setSelectedAudioInput] =
-    useState<string>("default");
+    useState<string>("none");
   const [selectedAudioOutput, setSelectedAudioOutput] =
-    useState<string>("default");
+    useState<string>("none");
   const activeFaders = useMemo(() => {
     const list: string[] = [];
     if (selectedAudioOutput && selectedAudioOutput !== "none") {
@@ -10218,38 +10215,29 @@ export default function App() {
   const toggleMute = useCallback((sourceName: string) => {
     setMutedFaders((prev) => {
       const isMuted = !prev[sourceName];
+      lastFaderUserInteractionRef.current[sourceName] = Date.now();
       
       // Enforce physical muting if Windows electron API available
       if (sourceName === "Master") {
-        if (isMuted) {
-          (window.electron as any)?.setWindowsVolume?.(0).catch(() => {});
-        } else {
-          (window.electron as any)?.setWindowsVolume?.(masterVolume).catch(() => {});
-        }
+        (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
       } else if (sourceName === "out-default") {
         const defDev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
-        const currentVol = audioVolumes["out-default"] ?? 0.5;
         if (defDev) {
-          (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, isMuted ? 0 : currentVol).catch(() => {});
+          (window.electron as any)?.setWindowsDeviceMute?.(defDev.id, isMuted).catch(() => {});
         } else {
-          (window.electron as any)?.setWindowsVolume?.(isMuted ? 0 : currentVol).catch(() => {});
+          (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
         }
       } else if (sourceName === "in-default") {
         const defDev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
-        const currentVol = audioVolumes["in-default"] ?? 0.5;
         if (defDev) {
-          (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, isMuted ? 0 : currentVol).catch(() => {});
+          (window.electron as any)?.setWindowsDeviceMute?.(defDev.id, isMuted).catch(() => {});
         }
       } else if (sourceName === "USB") {
-        if (isMuted) {
-          (window.electron as any)?.setWindowsVolume?.(0).catch(() => {});
-        } else {
-          (window.electron as any)?.setWindowsVolume?.(usbOutVolume).catch(() => {});
-        }
+        (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
       } else if (sourceName === "IN") {
         const defIn = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
         if (defIn) {
-          (window.electron as any)?.setWindowsDeviceVolume?.(defIn.id, isMuted ? 0 : usbInVolume).catch(() => {});
+          (window.electron as any)?.setWindowsDeviceMute?.(defIn.id, isMuted).catch(() => {});
         }
       } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
         const flow = sourceName.startsWith("out-") ? 0 : 1;
@@ -10271,10 +10259,7 @@ export default function App() {
         }
         
         if (winDevToMute) winDevId = winDevToMute.id;
-
-        const dev = windowsDevicesList.find((d: any) => d.id === winDevId);
-        const currentVol = dev?.volume ?? audioVolumes[sourceName] ?? 0.5;
-        (window.electron as any)?.setWindowsDeviceVolume?.(winDevId, isMuted ? 0 : currentVol).catch(() => {});
+        (window.electron as any)?.setWindowsDeviceMute?.(winDevId, isMuted).catch(() => {});
       }
 
       return {
@@ -10282,13 +10267,15 @@ export default function App() {
         [sourceName]: isMuted
       };
     });
-  }, [masterVolume, usbOutVolume, usbInVolume, audioVolumes, windowsDevicesList]);
+  }, [windowsDevicesList, audioOutputDevices, audioInputDevices]);
 
   // Audio signals
   const [programLevel, setProgramLevel] = useState(0);
   const micVolumeRef = useRef<number>(0);
 
   const [activeOutputId, setActiveOutputId] = useState<string>("1");
+  const [leftPreviewSelection, setLeftPreviewSelection] = useState<string>("preview");
+  const [rightPreviewSelection, setRightPreviewSelection] = useState<string>("1");
   const [libraryFiles, setLibraryFiles] = useState<
     {
       id?: string;
@@ -10961,9 +10948,9 @@ export default function App() {
       if (parsedData.programVolume !== undefined)
         setProgramVolume(parsedData.programVolume);
       if (parsedData.selectedAudioInput !== undefined)
-        setSelectedAudioInput(parsedData.selectedAudioInput);
+        setSelectedAudioInput("none");
       if (parsedData.selectedAudioOutput !== undefined)
-        setSelectedAudioOutput(parsedData.selectedAudioOutput);
+        setSelectedAudioOutput("none");
       if (parsedData.audioVolumes !== undefined)
         setAudioVolumes(parsedData.audioVolumes);
       if (parsedData.mutedFaders !== undefined)
@@ -11327,29 +11314,24 @@ export default function App() {
 
             // Enforce default system audio devices if saved specific ones are disconnected/not found
             if (
-              selectedAudioOutputRef.current !== "default" &&
               selectedAudioOutputRef.current !== "none" &&
               selectedAudioOutputRef.current &&
               !winDevices.some((d: any) => d.flow === 0 && d.id === selectedAudioOutputRef.current)
             ) {
-              setSelectedAudioOutput("default");
+              setSelectedAudioOutput("none");
             }
 
             if (
-              selectedAudioInputRef.current !== "default" &&
               selectedAudioInputRef.current !== "none" &&
               selectedAudioInputRef.current &&
               !winDevices.some((d: any) => d.flow === 1 && d.id === selectedAudioInputRef.current)
             ) {
-              setSelectedAudioInput("default");
+              setSelectedAudioInput("none");
             }
 
             // Sync master fader with Windows default output endpoint
             const defPlayback = winDevices.find((d: any) => d.flow === 0 && d.isDefault);
             if (defPlayback) {
-              if (selectedAudioOutputRef.current === "default") {
-                setSelectedAudioOutput(defPlayback.id);
-              }
               const lastInMaster = lastFaderUserInteractionRef.current["Master"] || 0;
               if (Date.now() - lastInMaster >= 1500) {
                 if (Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03) {
@@ -11362,9 +11344,6 @@ export default function App() {
             // Update default IN fader with volume of default audio record input device if active
             const defRecord = winDevices.find((d: any) => d.flow === 1 && d.isDefault);
             if (defRecord) {
-              if (selectedAudioInputRef.current === "default") {
-                setSelectedAudioInput(defRecord.id);
-              }
               const lastInDefaultIn = lastFaderUserInteractionRef.current["IN"] || lastFaderUserInteractionRef.current["in-default"] || 0;
               if (Date.now() - lastInDefaultIn >= 1500) {
                 setAudioVolumes((prev) => {
@@ -11375,6 +11354,24 @@ export default function App() {
                 });
               }
             }
+
+            // Sync physical mute states from Windows to React
+            setMutedFaders((prevMuted) => {
+              let changed = false;
+              const nextMuted = { ...prevMuted };
+              winDevices.forEach((dev: any) => {
+                const faderId = dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
+                const lastIn = lastFaderUserInteractionRef.current[faderId] || 0;
+                if (Date.now() - lastIn >= 1500) {
+                  const isMutedInWin = !!dev.mute;
+                  if (prevMuted[faderId] !== isMutedInWin) {
+                    nextMuted[faderId] = isMutedInWin;
+                    changed = true;
+                  }
+                }
+              });
+              return changed ? nextMuted : prevMuted;
+            });
 
             // Sync details of specific active faders including default wrappers
             setAudioVolumes((prevVolumes) => {
@@ -11576,6 +11573,29 @@ export default function App() {
   const [isTransmitting, setIsTransmitting] = useState(true);
   const [externalScreens, setExternalScreens] = useState<Screen[]>([]);
   const [hasDetailedScreens, setHasDetailedScreens] = useState(false);
+  const isVideoCurrentlyCastingOnOutput = useCallback((outputId: string): boolean => {
+    const activeProgramId = outputPrograms[outputId];
+    if (activeProgramId) {
+      const clip = clips.find((c) => c.id === activeProgramId);
+      if (clip && (clip.type === "video" || clip.type === "videoinput" || clip.name?.toLowerCase().endsWith(".mp4") || clip.name?.toLowerCase().endsWith(".mov") || clip.name?.toLowerCase().endsWith(".mkv"))) {
+        return true;
+      }
+    }
+    const activeLayers = layers.filter((l) => {
+      const route = layerOutputs[l.id] || "all";
+      return route === "all" || route === outputId;
+    });
+    for (const layer of activeLayers) {
+      if (layer.activeClipId) {
+        const clip = clips.find((c) => c.id === layer.activeClipId);
+        if (clip && (clip.type === "video" || clip.type === "videoinput" || clip.name?.toLowerCase().endsWith(".mp4") || clip.name?.toLowerCase().endsWith(".mov") || clip.name?.toLowerCase().endsWith(".mkv"))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }, [outputPrograms, clips, layers, layerOutputs]);
+  const isProgCasting = isVideoCurrentlyCastingOnOutput(activeOutputId);
   const [isIframe, setIsIframe] = useState(false);
   const [permissionStatus, setPermissionStatus] =
     useState<PermissionState | null>(null);
@@ -13846,10 +13866,15 @@ export default function App() {
                   </div>
                   <select
                     value={selectedAudioOutput}
-                    onChange={(e) => setSelectedAudioOutput(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedAudioOutput(val);
+                      if (val !== "none" && val !== "default") {
+                        (window.electron as any)?.setWindowsDefaultDevice?.(val).catch(() => {});
+                      }
+                    }}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
                   >
-                    <option value="default">Altavoces Predeterminados de Windows</option>
                     <option value="none">Ninguno (Sin Audio)</option>
                     {audioOutputDevices.map((dev) => (
                       <option
@@ -13870,10 +13895,15 @@ export default function App() {
                   </label>
                   <select
                     value={selectedAudioInput}
-                    onChange={(e) => setSelectedAudioInput(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedAudioInput(val);
+                      if (val !== "none" && val !== "default") {
+                        (window.electron as any)?.setWindowsDefaultDevice?.(val).catch(() => {});
+                      }
+                    }}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
                   >
-                    <option value="default">Micrófono Predeterminado de Windows</option>
                     <option value="none">Ninguno (Sin Audio)</option>
                     {audioInputDevices.map((dev) => (
                       <option
@@ -14696,130 +14726,308 @@ export default function App() {
             style={{ maxHeight: "60vh" }}
           >
             <div className="flex-none flex flex-wrap gap-4 auto-rows-max shrink-0">
-              {previews.map((preview) => (
-                <div
-                  key={`monitor-preview-${preview.id}`}
-                  className="flex flex-col gap-1.5 group/mon relative w-[320px]"
-                >
-                  <div className="flex justify-between items-end px-1">
-                    <span className="text-[9px] text-obs-accent font-black uppercase tracking-[0.2em]">
-                      {preview.name}
-                    </span>
-                    {preview.selectedOutputs.length > 0 && (
-                      <div className="flex gap-0.5 items-center">
-                        <span className="text-[7px] text-obs-muted font-bold mr-1">
-                          TGT:
-                        </span>
-                        {preview.selectedOutputs.map((outId) => (
-                          <span
-                            key={outId}
-                            className="w-3 h-3 flex items-center justify-center bg-obs-accent text-white text-[7px] font-black rounded-sm shadow-sm"
-                          >
-                            {outId}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div
-                    className={`w-full aspect-video shadow-xl relative border rounded overflow-hidden transition-all ${selectedItemType === "preview" && selectedItemId === preview.id ? "ring-2 ring-[#00a3f5] border-transparent" : "border-obs-muted/40 hover:border-obs-muted/70"}`}
-                    onDrop={(e) => onDropOnMultiPreview(preview.id, e)}
-                  >
-                    <Monitor
-                      title={preview.name}
-                      activeClip={
-                        preview.clipId
-                          ? clips.find((c) => c.id === preview.clipId) || null
-                          : null
-                      }
-                      isDarkMode={isDarkMode}
-                      isTransmitting={isTransmitting}
-                      volume={0.5}
-                      onLevelChange={setPreviewLevel}
-                      clips={clips}
-                      previewClipId={preview.clipId}
-                      hideOverlays={preview.hideOverlays}
-                      onUpdateClip={updateClip}
-                      accentColor={preview.accentColor}
-                      pipLayers={pipLayers}
-                      activeOutputId={preview.selectedOutputs[0] || "1"}
-                      perfSettings={perfSettings}
-                      onEnded={() => {
-                        if (preview.clipId) {
-                          const clip = clips.find(
-                            (c) => c.id === preview.clipId,
-                          );
-                          const playlist = playlists.find(
-                            (p) =>
-                              p.id === clip?.playlistId ||
-                              p.clips.some((c) => c.id === clip?.id),
-                          );
-                          if (playlist && playlist.clips.length > 0) {
-                            const currentIndex = playlist.clips.findIndex(
-                              (c) => c.id === preview.clipId,
-                            );
-                            const nextIndex =
-                              (currentIndex + 1) % playlist.clips.length;
-                            const nextClip = playlist.clips[nextIndex];
-                            setPreviews((prevs) =>
-                              prevs.map((p) =>
-                                p.id === preview.id
-                                  ? { ...p, clipId: nextClip.id }
-                                  : p,
-                              ),
-                            );
-                          }
-                        }
-                      }}
-                    />
+              {/* Left Preview Monitor */}
+              {(() => {
+                const activeLeftPreview = leftPreviewSelection === "preview"
+                  ? "preview"
+                  : (outputs.some((o) => o.id === leftPreviewSelection) ? leftPreviewSelection : "preview");
 
-                    {/* Delete button (hidden by default) */}
-                    {previews.length > 1 && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Clear outputs that were assigned to this preview
-                          const deletedPreview = previews.find(
-                            (p) => p.id === preview.id,
-                          );
-                          if (deletedPreview?.selectedOutputs?.length > 0) {
-                            setOutputPrograms((prev) => {
-                              const next = { ...prev };
-                              deletedPreview.selectedOutputs.forEach(
-                                (outId: string) => {
-                                  next[outId] = null;
-                                },
-                              );
-                              return next;
-                            });
-                          }
-                          setPreviews((prevs) =>
-                            prevs.filter((p) => p.id !== preview.id),
-                          );
-                          if (selectedItemId === preview.id)
-                            setSelectedItemId(null);
-                        }}
-                        className="absolute top-2 left-2 bg-obs-dark-1 hover:bg-red-600 text-white rounded p-1.5 opacity-0 group-hover/mon:opacity-100 transition-opacity z-30"
-                        title="Eliminar Preview"
+                const isLeftCasting = activeLeftPreview === "preview"
+                  ? (previewClipId ? (clips.find(c => c.id === previewClipId)?.type === "video" || clips.find(c => c.id === previewClipId)?.type === "videoinput" || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mp4") || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mov") || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mkv")) : false)
+                  : isVideoCurrentlyCastingOnOutput(activeLeftPreview);
+
+                return (
+                  <div className="flex flex-col gap-1.5 group/mon relative w-[320px]">
+                    <div className="flex justify-between items-end px-1">
+                      <span className="text-[9px] text-[#114e6d] font-black uppercase tracking-[0.2em]">
+                        {activeLeftPreview === "preview" ? "VISTA PREVIA" : `SALIDA ${activeLeftPreview}`}
+                      </span>
+                    </div>
+                    <div className="w-full aspect-video shadow-xl relative border rounded overflow-hidden border-obs-muted/40 hover:border-obs-muted/70 bg-black">
+                      {activeLeftPreview === "preview" ? (
+                        <Monitor
+                          title="VISTA PREVIA"
+                          activeClip={previewClip}
+                          isDarkMode={isDarkMode}
+                          isTransmitting={isTransmitting}
+                          volume={0.5}
+                          onLevelChange={setPreviewLevel}
+                          clips={clips}
+                          previewClipId={previewClipId}
+                          hideOverlays={false}
+                          onUpdateClip={updateClip}
+                          accentColor="#114e6d"
+                          pipLayers={pipLayers}
+                          activeOutputId="1"
+                          perfSettings={perfSettings}
+                          isCasting={isLeftCasting}
+                        />
+                      ) : (
+                        <Monitor
+                          title={`VISTA SALIDA ${activeLeftPreview}`}
+                          isActive={isLive}
+                          activeClip={clips.find((c) => c.id === outputPrograms[activeLeftPreview]) || null}
+                          isDarkMode={isDarkMode}
+                          clips={clips}
+                          programClipId={outputPrograms[activeLeftPreview] || null}
+                          previewClipId={previewClipId}
+                          programPlayIndex={programPlayIndex}
+                          targetClipId={outputTransitionTargets[activeLeftPreview]}
+                          hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
+                          crossfaderValue={crossfaderValue}
+                          isProgram={true}
+                          layers={layers}
+                          layerOutputs={layerOutputs}
+                          isTransmitting={isTransmitting}
+                          isProgramOff={outputOffStates[activeLeftPreview] || false}
+                          settings={allScreenSettings[activeLeftPreview] || DEFAULT_SCREEN_SETTINGS}
+                          masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
+                          onEnded={handleProgramNext}
+                          onLayerEnded={handleLayerEnded}
+                          onLevelChange={setProgramLevel}
+                          onTogglePlay={handleTogglePlay}
+                          onToggleLoop={handleToggleLoop}
+                          onRewind={handleRewind}
+                          onSkip={handleSkip}
+                          onProgressUpdate={(cur, tot) => setProgramProgress({ current: cur, total: tot })}
+                          onUpdateClip={updateClip}
+                          isPlaylist={!!programPlaylistState}
+                          volume={mutedFaders["Programa"] ? 0 : programVolume}
+                          brightness={allScreenSettings[activeLeftPreview]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
+                          contrast={allScreenSettings[activeLeftPreview]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
+                          saturation={allScreenSettings[activeLeftPreview]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
+                          opacity={allScreenSettings[activeLeftPreview]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
+                          x={allScreenSettings[activeLeftPreview]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
+                          y={allScreenSettings[activeLeftPreview]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
+                          rotation={allScreenSettings[activeLeftPreview]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
+                          scalingW={allScreenSettings[activeLeftPreview]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
+                          scalingH={allScreenSettings[activeLeftPreview]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
+                          transitionType={allScreenSettings[activeLeftPreview]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
+                          colorBalance={allScreenSettings[activeLeftPreview]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
+                          pipLayers={pipLayers}
+                          activeOutputId={activeLeftPreview}
+                          perfSettings={perfSettings}
+                          isSlave={true}
+                          isCasting={isLeftCasting}
+                        />
+                      )}
+                    </div>
+                    {/* Control Bar containing Time / Slides on left, Select Dropdown on right */}
+                    <div className="flex justify-between items-center px-2 py-1 bg-obs-dark-1/25 rounded border border-obs-border/30 mt-1">
+                      {/* Timer Display */}
+                      {(() => {
+                        const clipId = activeLeftPreview === "preview" 
+                          ? previewClipId 
+                          : outputPrograms[activeLeftPreview];
+                        const clip = clips.find((c) => c.id === clipId);
+
+                        const isVideo = clip && (clip.type === "video" || clip.type === "videoinput");
+                        const isPdf =
+                          !isVideo &&
+                          clip &&
+                          (clip.type === "document" ||
+                            clip.type === "ppt" ||
+                            clip.name?.toLowerCase().endsWith(".pdf"));
+
+                        return (
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-mono font-normal text-white leading-none tracking-tight">
+                                {isPdf ? (
+                                  `${clip.currentPage || 1} / ${clip.totalPages || 1}`
+                                ) : clip?.type === "videoinput" ||
+                                  clipId?.startsWith("videoinput") ? (
+                                  "00:00:00"
+                                ) : (
+                                  <FluidTimeDisplay
+                                    eventId={activeLeftPreview === "preview" ? "video-progress-preview" : `video-progress-output-${activeLeftPreview}`}
+                                    isRemaining={timerMode === "remaining"}
+                                    clipId={clipId}
+                                    outputId={activeLeftPreview}
+                                    clips={clips}
+                                  />
+                                )}
+                              </span>
+                              {!isPdf && (
+                                <button
+                                  onClick={() =>
+                                    setTimerMode((prev) =>
+                                      prev === "elapsed" ? "remaining" : "elapsed",
+                                    )
+                                  }
+                                  className="p-0.5 h-4 w-4 bg-obs-dark-1 hover:bg-obs-text/10 rounded transition-colors border border-obs-text/5 flex items-center justify-center cursor-pointer"
+                                  title="Cambiar formato"
+                                >
+                                  <RefreshCw size={8} className="text-obs-muted max-h-full max-w-full" />
+                                </button>
+                              )}
+                            </div>
+                            <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest leading-none mt-0.5">
+                              {isPdf ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
+                            </span>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Dropdown Select */}
+                      <select
+                        value={activeLeftPreview}
+                        onChange={(e) => setLeftPreviewSelection(e.target.value)}
+                        className="bg-obs-surface text-white text-[10px] font-bold p-1 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-24 uppercase"
                       >
-                        <Minus size={12} />
-                      </button>
-                    )}
-
-                    {preview.isLive && (
-                      <div className="absolute top-1.5 right-1.5 bg-red-600/90 text-white text-[7px] font-black px-1.5 py-0.5 rounded-sm shadow-lg animate-pulse uppercase tracking-wider z-20 backdrop-blur-sm">
-                        Live
-                      </div>
-                    )}
+                        <option value="preview">PREVIEW</option>
+                        {outputs.map((out) => (
+                          <option key={`left-preview-opt-${out.id}`} value={out.id}>
+                            {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })()}
+
+              {/* Right Preview Monitor */}
+              {(() => {
+                const activeRightPreview = outputs.some((o) => o.id === rightPreviewSelection)
+                  ? rightPreviewSelection
+                  : (outputs[0]?.id || "1");
+
+                const isRightCasting = isVideoCurrentlyCastingOnOutput(activeRightPreview);
+
+                return (
+                  <div className="flex flex-col gap-1.5 group/mon relative w-[320px]">
+                    <div className="flex justify-between items-end px-1">
+                      <span className="text-[9px] text-[#00a3f5] font-black uppercase tracking-[0.2em]">
+                        {`SALIDA ${activeRightPreview}`}
+                      </span>
+                    </div>
+                    <div className="w-full aspect-video shadow-xl relative border rounded overflow-hidden border-obs-muted/40 hover:border-obs-muted/70 bg-black">
+                      <Monitor
+                        title={`VISTA SALIDA ${activeRightPreview}`}
+                        isActive={isLive}
+                        activeClip={clips.find((c) => c.id === outputPrograms[activeRightPreview]) || null}
+                        isDarkMode={isDarkMode}
+                        clips={clips}
+                        programClipId={outputPrograms[activeRightPreview] || null}
+                        previewClipId={previewClipId}
+                        programPlayIndex={programPlayIndex}
+                        targetClipId={outputTransitionTargets[activeRightPreview]}
+                        hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
+                        crossfaderValue={crossfaderValue}
+                        isProgram={true}
+                        layers={layers}
+                        layerOutputs={layerOutputs}
+                        isTransmitting={isTransmitting}
+                        isProgramOff={outputOffStates[activeRightPreview] || false}
+                        settings={allScreenSettings[activeRightPreview] || DEFAULT_SCREEN_SETTINGS}
+                        masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
+                        onEnded={handleProgramNext}
+                        onLayerEnded={handleLayerEnded}
+                        onLevelChange={setProgramLevel}
+                        onTogglePlay={handleTogglePlay}
+                        onToggleLoop={handleToggleLoop}
+                        onRewind={handleRewind}
+                        onSkip={handleSkip}
+                        onProgressUpdate={(cur, tot) => setProgramProgress({ current: cur, total: tot })}
+                        onUpdateClip={updateClip}
+                        isPlaylist={!!programPlaylistState}
+                        volume={mutedFaders["Programa"] ? 0 : programVolume}
+                        brightness={allScreenSettings[activeRightPreview]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
+                        contrast={allScreenSettings[activeRightPreview]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
+                        saturation={allScreenSettings[activeRightPreview]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
+                        opacity={allScreenSettings[activeRightPreview]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
+                        x={allScreenSettings[activeRightPreview]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
+                        y={allScreenSettings[activeRightPreview]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
+                        rotation={allScreenSettings[activeRightPreview]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
+                        scalingW={allScreenSettings[activeRightPreview]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
+                        scalingH={allScreenSettings[activeRightPreview]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
+                        transitionType={allScreenSettings[activeRightPreview]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
+                        colorBalance={allScreenSettings[activeRightPreview]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
+                        pipLayers={pipLayers}
+                        activeOutputId={activeRightPreview}
+                        perfSettings={perfSettings}
+                        isSlave={true}
+                        isCasting={isRightCasting}
+                      />
+                    </div>
+                    {/* Control Bar containing Time / Slides on left, Select Dropdown on right */}
+                    <div className="flex justify-between items-center px-2 py-1 bg-obs-dark-1/25 rounded border border-obs-border/30 mt-1">
+                      {/* Timer Display */}
+                      {(() => {
+                        const clipId = outputPrograms[activeRightPreview];
+                        const clip = clips.find((c) => c.id === clipId);
+
+                        const isVideo = clip && (clip.type === "video" || clip.type === "videoinput");
+                        const isPdf =
+                          !isVideo &&
+                          clip &&
+                          (clip.type === "document" ||
+                            clip.type === "ppt" ||
+                            clip.name?.toLowerCase().endsWith(".pdf"));
+
+                        return (
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-mono font-normal text-white leading-none tracking-tight">
+                                {isPdf ? (
+                                  `${clip.currentPage || 1} / ${clip.totalPages || 1}`
+                                ) : clip?.type === "videoinput" ||
+                                  clipId?.startsWith("videoinput") ? (
+                                  "00:00:00"
+                                ) : (
+                                  <FluidTimeDisplay
+                                    eventId={`video-progress-output-${activeRightPreview}`}
+                                    isRemaining={timerMode === "remaining"}
+                                    clipId={clipId}
+                                    outputId={activeRightPreview}
+                                    clips={clips}
+                                  />
+                                )}
+                              </span>
+                              {!isPdf && (
+                                <button
+                                  onClick={() =>
+                                    setTimerMode((prev) =>
+                                      prev === "elapsed" ? "remaining" : "elapsed",
+                                    )
+                                  }
+                                  className="p-0.5 h-4 w-4 bg-obs-dark-1 hover:bg-obs-text/10 rounded transition-colors border border-obs-text/5 flex items-center justify-center cursor-pointer"
+                                  title="Cambiar formato"
+                                >
+                                  <RefreshCw size={8} className="text-obs-muted max-h-full max-w-full" />
+                                </button>
+                              )}
+                            </div>
+                            <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest leading-none mt-0.5">
+                              {isPdf ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
+                            </span>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Dropdown Select */}
+                      <select
+                        value={activeRightPreview}
+                        onChange={(e) => setRightPreviewSelection(e.target.value)}
+                        className="bg-obs-surface text-white text-[10px] font-bold p-1 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-24 uppercase"
+                      >
+                        {outputs.map((out) => (
+                          <option key={`right-preview-opt-${out.id}`} value={out.id}>
+                            {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Right: Program Monitor & Controls */}
             <div className="w-[480px] flex flex-col flex-none shrink-0 group/prog">
               <div className="flex justify-between items-end px-1 pb-0.5">
-                <span className="text-[9px] text-red-500 font-black uppercase tracking-[0.2em]">
+                <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${isProgCasting ? "text-red-500" : "text-[#00a3f5]"}`}>
                   PROGRAM SALIDA {activeOutputId}
                   {outputs.find((o) => o.id === activeOutputId)
                     ?.physicalScreenId && (
@@ -14836,9 +15044,8 @@ export default function App() {
                   )}
                 </span>
                 {isLive && (
-                  <div className="text-[7px] font-black text-red-500 animate-pulse flex items-center gap-1.5 uppercase tracking-tighter">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500" /> ON
-                    AIR
+                  <div className={`text-[7px] font-black flex items-center gap-1.5 uppercase tracking-tighter ${isProgCasting ? "text-red-500 animate-pulse" : "text-[#00a3f5]"}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${isProgCasting ? "bg-red-500" : "bg-[#00a3f5]"}`} /> ON AIR
                   </div>
                 )}
               </div>
@@ -14910,6 +15117,7 @@ export default function App() {
                     activeOutputId={activeOutputId}
                     perfSettings={perfSettings}
                     isSlave={false}
+                    isCasting={isProgCasting}
                   />
                 </div>
               </div>
@@ -14917,7 +15125,7 @@ export default function App() {
               {/* Program Controls */}
               <div className="flex flex-col gap-3 mt-1 px-1">
                 <div className="flex justify-between items-start">
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-col gap-1.5 flex-1 mr-4">
                     {/* PIP Toggles Row */}
                     <div className="flex gap-1">
                       <div className="flex items-center justify-center px-4 py-1 bg-obs-dark-1 rounded border border-obs-border text-white font-black text-[9px] uppercase tracking-wider">
@@ -14943,69 +15151,58 @@ export default function App() {
                       ))}
                     </div>
 
-                    <div className="flex gap-1 items-center">
+                    <div className="flex gap-1.5 items-center">
                       <button
                         onClick={() => setIsOutputModalOpen(true)}
-                        className="w-10 py-1 flex items-center justify-center bg-obs-dark-1 hover:bg-obs-text/10 hover:text-white rounded text-obs-accent transition-colors border border-obs-text/10"
+                        className="w-[30px] h-[26px] flex items-center justify-center bg-obs-dark-1 hover:bg-obs-text/10 hover:text-white rounded text-obs-accent transition-colors border border-obs-text/10"
                         title="Configurar Salidas"
                       >
-                        <Settings size={14} />
+                        <Settings size={13} />
                       </button>
                       <button
                         onClick={() => setSelectedItemType("pipManager")}
-                        className="w-10 py-1 flex items-center justify-center bg-obs-dark-1 hover:bg-obs-text/10 hover:text-white rounded text-obs-accent transition-colors border border-obs-text/10"
+                        className="w-[30px] h-[26px] flex items-center justify-center bg-obs-dark-1 hover:bg-obs-text/10 hover:text-white rounded text-obs-accent transition-colors border border-obs-text/10"
                         title="Gestor de PiPs"
                       >
-                        <PictureInPicture2 size={14} />
+                        <PictureInPicture2 size={13} />
                       </button>
-                      {outputs.map((out) => (
-                        <button
-                          key={`output-btn-${out.id}`}
-                          onClick={() => {
-                            setActiveOutputId(out.id);
-                            setProgramClipId(outputPrograms[out.id] || null);
-                            setSelectedScreenId(out.physicalScreenId || null);
-                            setSelectedItemType("program");
-                          }}
-                          className={`w-10 py-1 rounded font-black text-xs flex items-center justify-center transition-all border ${activeOutputId === out.id ? "bg-obs-accent text-black border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.4)]" : "bg-obs-dark-1 text-obs-muted border-obs-text/10 hover:text-white"}`}
-                        >
-                          {out.id}
-                        </button>
-                      ))}
+                      <select
+                        value={activeOutputId}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setActiveOutputId(val);
+                          const chosenOut = outputs.find((o) => o.id === val);
+                          setProgramClipId(outputPrograms[val] || null);
+                          setSelectedScreenId(chosenOut?.physicalScreenId || null);
+                          setSelectedItemType("program");
+                        }}
+                        className="bg-obs-surface text-white text-[11px] font-bold h-[26px] px-2 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-36 uppercase"
+                      >
+                        {outputs.map((out) => (
+                          <option key={`output-select-opt-${out.id}`} value={out.id}>
+                            {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
                   {/* Take / Live Actions */}
-                  <div className="flex gap-1 pt-1">
-                    <button
-                      onClick={handleProgramOff}
-                      className={`w-12 py-3 rounded text-[7px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-obs-text/10 ${outputOffStates[activeOutputId] ? "bg-red-600 animate-pulse" : "bg-obs-dark-1 hover:bg-obs-text/10"}`}
-                    >
-                      <Square
-                        size={10}
-                        className={
-                          outputOffStates[activeOutputId]
-                            ? ""
-                            : "text-obs-muted"
-                        }
-                      />
-                      OFF
-                    </button>
-                    <button
-                      onClick={() => handleTake()}
-                      className="w-14 py-3 bg-obs-dark-1 hover:bg-obs-text/10 rounded text-[7px] uppercase font-bold text-white transition-colors flex flex-col items-center justify-center gap-1 border border-obs-text/10"
-                    >
-                      <Scissors size={10} className="text-obs-accent" />
-                      TAKE
-                    </button>
+                  <div className="flex gap-1 pt-1 justify-end">
                     <button
                       onClick={() => setIsTransmitting(!isTransmitting)}
-                      className={`w-16 py-3 rounded text-[8px] uppercase font-black text-white transition-colors flex flex-col items-center justify-center gap-1 ${isTransmitting ? "bg-red-600 border border-red-500 shadow-[0_0_10px_rgba(220,38,38,0.4)]" : "bg-[#e50000] border-transparent hover:bg-red-500"}`}
+                      className={`w-28 h-9 rounded text-[10px] uppercase font-black text-white transition-all flex flex-row items-center justify-center gap-1.5 shadow-lg border ${
+                        isTransmitting
+                          ? isProgCasting
+                            ? "bg-red-600 border-red-500 shadow-[0_0_10px_rgba(220,38,38,0.4)]"
+                            : "bg-[#00a3f5] border-[#00a3f5] shadow-[0_0_10px_rgba(0,163,245,0.4)] hover:bg-[#008fdb]"
+                          : "bg-obs-dark-1 border-obs-text/10 hover:bg-obs-text/10"
+                      }`}
                     >
                       <div
-                        className={`w-1.5 h-1.5 rounded-full bg-white ${isTransmitting ? "animate-pulse" : ""}`}
+                        className={`w-2 h-2 rounded-full bg-white ${isTransmitting ? "animate-pulse" : ""}`}
                       />
-                      LIVE
+                      LIVE OUT
                     </button>
                   </div>
                 </div>
@@ -15072,10 +15269,10 @@ export default function App() {
                                   prev === "elapsed" ? "remaining" : "elapsed",
                                 )
                               }
-                              className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5"
-                              title="Cambiar modo de tiempo"
+                              className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5 flex items-center justify-center cursor-pointer"
+                              title="Cambiar formato"
                             >
-                              <RefreshCw size={12} className="text-obs-muted" />
+                              <RefreshCw size={12} className="text-obs-muted max-h-full max-w-full" />
                             </button>
                           )}
                         </div>

@@ -357,6 +357,8 @@ if (!gotTheLock) {
                 int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
                 int GetMasterVolumeLevel(out float pfLevelDB);
                 int GetMasterVolumeLevelScalar(out float pfLevel);
+                int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+                int GetMute(out bool pbMute);
             }
 
             [Guid(\\"C02216C6-8C67-4B5B-9D00-D008E73E0064\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -417,6 +419,7 @@ if (!gotTheLock) {
                             string id = Marshal.PtrToStringUni(idPtr);
                             
                             float volumeVal = 0.5f;
+                            bool muteVal = false;
                             try {
                                 IntPtr volPtr = IntPtr.Zero;
                                 var volIid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
@@ -424,6 +427,7 @@ if (!gotTheLock) {
                                 if (volPtr != IntPtr.Zero) {
                                     var vol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(volPtr);
                                     vol.GetMasterVolumeLevelScalar(out volumeVal);
+                                    vol.GetMute(out muteVal);
                                     Marshal.Release(volPtr);
                                 }
                             } catch {}
@@ -466,6 +470,7 @@ if (!gotTheLock) {
                             sb.AppendFormat(\\\"\\\\\\\"name\\\\\\\":\\\\\\\"{0}\\\\\\\",\\\", name.Replace(\\"\\\\\\\\\\", \\"\\\\\\\\\\\\\\\\\\").Replace(\\"\\\\\\"\\", \\"\\\\\\\\\\\\\\"\\"));
                             sb.AppendFormat(\\\"\\\\\\\"flow\\\\\\\":{0},\\\", flow);
                             sb.AppendFormat(\\\"\\\\\\\"volume\\\\\\\":{0:F4},\\\", volumeVal);
+                            sb.AppendFormat(\\\"\\\\\\\"mute\\\\\\\":{0},\\\", muteVal ? \\"true\\" : \\"false\\");
                             sb.AppendFormat(\\\"\\\\\\\"peak\\\\\\\":{0:F4},\\\", peakVal);
                             sb.AppendFormat(\\\"\\\\\\\"isDefault\\\\\\\":{0}\\\", isDefault ? \\"true\\" : \\"false\\");
                             sb.Append(\\"}\\");
@@ -534,7 +539,15 @@ if (!gotTheLock) {
 
             [Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
             internal interface IAudioEndpointVolume {
+                int RegisterControlChangeNotifyCallback(IntPtr pNotify);
+                int UnregisterControlChangeNotifyCallback(IntPtr pNotify);
+                int GetChannelCount(out int pnChannelCount);
+                int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
                 int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+                int GetMasterVolumeLevel(out float pfLevelDB);
+                int GetMasterVolumeLevelScalar(out float pfLevel);
+                int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+                int GetMute(out bool pbMute);
             }
 
             public static void SetDeviceVolume(string id, float val) {
@@ -615,6 +628,8 @@ if (!gotTheLock) {
                 int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
                 int GetMasterVolumeLevel(out float pfLevelDB);
                 int GetMasterVolumeLevelScalar(out float pfLevel);
+                int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+                int GetMute(out bool pbMute);
             }
             public static float GetVolume() {
                 try {
@@ -677,6 +692,8 @@ if (!gotTheLock) {
                 int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
                 int GetMasterVolumeLevel(out float pfLevelDB);
                 int GetMasterVolumeLevelScalar(out float pfLevel);
+                int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+                int GetMute(out bool pbMute);
             }
             public static void SetVolume(float val) {
                 try {
@@ -700,6 +717,229 @@ if (!gotTheLock) {
           Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
         } catch {}
         [Audio]::SetVolume(${val})
+      "`;
+      exec(psCommand, () => {
+        resolve(true);
+      });
+    });
+  });
+
+  ipcMain.handle('set-windows-device-mute', async (event, { id, mute }) => {
+    return new Promise((resolve) => {
+      if (process.platform !== 'win32') {
+        resolve(true);
+        return;
+      }
+      const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        $code = @'
+        using System;
+        using System.Runtime.InteropServices;
+
+        public class AudioSync {
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal class MMDeviceEnumerator { }
+
+            [Guid(\\"A95664D2-9614-4F35-A746-DE8DB63617E6\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceEnumerator {
+                int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+            }
+
+            [Guid(\\"0BD7A1CE-141A-4089-82EA-0485437B70EC\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceCollection {
+                int GetCount(out int pcDevices);
+                int Item(int nIndex, out IntPtr ppDevice);
+            }
+
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDevice {
+                int Activate(ref Guid iid, int dwClsContext, IntPtr pActivationParams, out IntPtr ppInterface);
+                int GetId(out IntPtr ppstrId);
+            }
+
+            [Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IAudioEndpointVolume {
+                int RegisterControlChangeNotifyCallback(IntPtr pNotify);
+                int UnregisterControlChangeNotifyCallback(IntPtr pNotify);
+                int GetChannelCount(out int pnChannelCount);
+                int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+                int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+                int GetMasterVolumeLevel(out float pfLevelDB);
+                int GetMasterVolumeLevelScalar(out float pfLevel);
+                int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+                int GetMute(out bool pbMute);
+            }
+
+            public static void SetDeviceMute(string id, bool muteVal) {
+                try {
+                    var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+                    for (int flow = 0; flow <= 1; flow++) {
+                        IntPtr collectionPtr = IntPtr.Zero;
+                        enumerator.EnumAudioEndpoints(flow, 1, out collectionPtr);
+                        if (collectionPtr == IntPtr.Zero) continue;
+                        
+                        var collection = (IMMDeviceCollection)Marshal.GetObjectForIUnknown(collectionPtr);
+                        int count = 0;
+                        collection.GetCount(out count);
+                        
+                        for (int i = 0; i < count; i++) {
+                            IntPtr devPtr = IntPtr.Zero;
+                            collection.Item(i, out devPtr);
+                            if (devPtr == IntPtr.Zero) continue;
+                            
+                            var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
+                            IntPtr idPtr = IntPtr.Zero;
+                            dev.GetId(out idPtr);
+                            string devId = Marshal.PtrToStringUni(idPtr);
+                            
+                            if (devId == id) {
+                                IntPtr volPtr = IntPtr.Zero;
+                                var volIid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
+                                dev.Activate(ref volIid, 23, IntPtr.Zero, out volPtr);
+                                if (volPtr != IntPtr.Zero) {
+                                    var vol = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(volPtr);
+                                    Guid guid = Guid.Empty;
+                                    vol.SetMute(muteVal, ref guid);
+                                    Marshal.Release(volPtr);
+                                }
+                            }
+                            Marshal.Release(devPtr);
+                        }
+                        Marshal.Release(collectionPtr);
+                    }
+                } catch {}
+            }
+        }
+'@
+        try {
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+        } catch {}
+        [AudioSync]::SetDeviceMute('${id.replace(/'/g, "''")}', $mute)
+      "`;
+      const pY = mute ? "$true" : "$false";
+      exec(psCommand.replace('$mute', pY), () => {
+        resolve(true);
+      });
+    });
+  });
+
+  ipcMain.handle('set-windows-mute', async (event, mute) => {
+    return new Promise((resolve) => {
+      if (process.platform !== 'win32') {
+        resolve(true);
+        return;
+      }
+      const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        $code = @'
+        using System;
+        using System.Runtime.InteropServices;
+        public class Audio {
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal class MMDeviceEnumerator { }
+            [Guid(\\"A95664D2-9614-4F35-A746-DE8DB63617E6\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IMMDeviceEnumerator {
+                int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+            }
+            [Guid(\\"D66606E7-27D5-4E6B-97F4-B52F22F44031\\")]
+            internal interface IMMDevice {
+                int Activate(ref Guid iid, int dwClsContext, IntPtr pActivationParams, out IntPtr ppInterface);
+            }
+            [Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IAudioEndpointVolume {
+                int RegisterControlChangeNotifyCallback(IntPtr pNotify);
+                int UnregisterControlChangeNotifyCallback(IntPtr pNotify);
+                int GetChannelCount(out int pnChannelCount);
+                int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+                int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+                int GetMasterVolumeLevel(out float pfLevelDB);
+                int GetMasterVolumeLevelScalar(out float pfLevel);
+                int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+                int GetMute(out bool pbMute);
+            }
+            public static void SetMute(bool muteVal) {
+                try {
+                    var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+                    IntPtr devPtr = IntPtr.Zero;
+                    enumerator.GetDefaultAudioEndpoint(0, 1, out devPtr);
+                    if (devPtr == IntPtr.Zero) return;
+                    var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
+                    IntPtr objPtr = IntPtr.Zero;
+                    var iid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
+                    dev.Activate(ref iid, 23, IntPtr.Zero, out objPtr);
+                    if (objPtr == IntPtr.Zero) return;
+                    var volume = (IAudioEndpointVolume)Marshal.GetObjectForIUnknown(objPtr);
+                    Guid guid = Guid.Empty;
+                    volume.SetMute(muteVal, ref guid);
+                } catch {}
+            }
+        }
+'@
+        try {
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+        } catch {}
+        [Audio]::SetMute($mute)
+      "`;
+      const pY = mute ? "$true" : "$false";
+      exec(psCommand.replace('$mute', pY), () => {
+        resolve(true);
+      });
+    });
+  });
+
+  ipcMain.handle('set-windows-default-device', async (event, id) => {
+    return new Promise((resolve) => {
+      if (process.platform !== 'win32') {
+        resolve(true);
+        return;
+      }
+      const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        $code = @'
+        using System;
+        using System.Runtime.InteropServices;
+
+        public class AudioDefaultSetter {
+            [ComImport, Guid(\\"870AF99F-134D-4ECE-8A0D-20074BACAF7C\\")]
+            internal class PolicyConfigClient { }
+
+            [Guid(\\"f8679f50-850a-41cf-9c72-430f1902d9c6\\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+            internal interface IPolicyConfig {
+                int GetMixFormat(string pszDeviceName, out IntPtr ppFormat);
+                int GetDeviceFormat(string pszDeviceName, int bDefault, out IntPtr ppFormat);
+                int ResetDeviceFormat(string pszDeviceName);
+                int SetDeviceFormat(string pszDeviceName, IntPtr pFormat, IntPtr pEndpointFormat);
+                int GetShareMode(string pszDeviceName, out IntPtr pShareMode);
+                int SetShareMode(string pszDeviceName, IntPtr shareMode);
+                int GetPropertyValue(string pszDeviceName, ref MyPROPERTYKEY key, out MyPROPVARIANT pv);
+                int SetPropertyValue(string pszDeviceName, ref MyPROPERTYKEY key, ref MyPROPVARIANT pv);
+                int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, int role);
+                int SetEndpointVisibility(string pszDeviceName, int bVisible);
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct MyPROPERTYKEY {
+                public Guid fmtid;
+                public uint pid;
+            }
+
+            [StructLayout(LayoutKind.Explicit)]
+            internal struct MyPROPVARIANT {
+                [FieldOffset(0)] public ushort vt;
+                [FieldOffset(8)] public IntPtr pointerVal;
+            }
+
+            public static void SetDefaultDevice(string deviceId) {
+                try {
+                    var client = (IPolicyConfig)new PolicyConfigClient();
+                    client.SetDefaultEndpoint(deviceId, 0); // Console
+                    client.SetDefaultEndpoint(deviceId, 1); // Multimedia
+                    client.SetDefaultEndpoint(deviceId, 2); // Communications
+                } catch {}
+            }
+        }
+'@
+        try {
+          Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+        } catch {}
+        [AudioDefaultSetter]::SetDefaultDevice('${id.replace(/'/g, "''")}')
       "`;
       exec(psCommand, () => {
         resolve(true);
