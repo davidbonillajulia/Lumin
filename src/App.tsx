@@ -325,22 +325,7 @@ const getFileUrl = (file: File) => {
   try {
     // Normalizar barras de Windows a barras de URL
     const normalized = filePath.replace(/\\/g, "/");
-    const parts = normalized.split("/");
-
-    // Codificar correctamente cada segmento del path guardando la letra de unidad intacta
-    const encodedParts = parts.map((part: string, index: number) => {
-      if (index === 0 && part.endsWith(":")) {
-        return part;
-      }
-      return encodeURIComponent(part);
-    });
-
-    let joined = encodedParts.join("/");
-    if (!joined.startsWith("/")) {
-      joined = "/" + joined;
-    }
-
-    return `file://${joined}`;
+    return `file:///${normalized}`;
   } catch (err) {
     console.error(
       "Error formatting native file path, using ObjectURL fallback:",
@@ -10605,27 +10590,17 @@ export default function App() {
             changed = true;
           }
           // Repair broken object URLs if they are from a previous session
-          if (updated.url?.startsWith("blob:") && !updated.file) {
-            // If we have a path in Electron, restore the URL
-            if ((window as any).electron && updated.path) {
-              const urlFromPath = (path: string) => {
-                try {
-                  const normalized = path.replace(/\\/g, "/");
-                  const parts = normalized.split("/");
-                  const encodedParts = parts.map((part: string, index: number) => {
-                    if (index === 0 && part.endsWith(":")) return part;
-                    return encodeURIComponent(part);
-                  });
-                  let joined = encodedParts.join("/");
-                  if (!joined.startsWith("/")) joined = "/" + joined;
-                  return `file://${joined}`;
-                } catch (e) { return null; }
-              };
-              const nativeUrl = urlFromPath(updated.path);
-              if (nativeUrl) {
-                updated.url = nativeUrl;
-                changed = true;
-              }
+          if ((updated.url?.startsWith("blob:") || !updated.url) && (window as any).electron && updated.path) {
+            const urlFromPath = (p: string) => {
+              try {
+                const normalized = p.replace(/\\/g, "/");
+                return `file:///${normalized}`;
+              } catch (e) { return null; }
+            };
+            const nativeUrl = urlFromPath(updated.path);
+            if (nativeUrl) {
+              updated.url = nativeUrl;
+              changed = true;
             }
           }
 
@@ -10841,14 +10816,7 @@ export default function App() {
       const getUrlFromPath = (path: string) => {
         try {
           const normalized = path.replace(/\\/g, "/");
-          const parts = normalized.split("/");
-          const encodedParts = parts.map((part: string, index: number) => {
-            if (index === 0 && part.endsWith(":")) return part;
-            return encodeURIComponent(part);
-          });
-          let joined = encodedParts.join("/");
-          if (!joined.startsWith("/")) joined = "/" + joined;
-          return `file://${joined}`;
+          return `file:///${normalized}`;
         } catch (e) {
           return null;
         }
@@ -11314,6 +11282,7 @@ export default function App() {
     };
   }, [selectedAudioInput]);
 
+  const lastFaderUserInteractionRef = useRef<Record<string, number>>({});
   const lastVolumeRef = useRef(masterVolume);
 
   const selectedAudioOutputRef = useRef(selectedAudioOutput);
@@ -11356,15 +11325,37 @@ export default function App() {
               });
             }
 
+            // Enforce default system audio devices if saved specific ones are disconnected/not found
+            if (
+              selectedAudioOutputRef.current !== "default" &&
+              selectedAudioOutputRef.current !== "none" &&
+              selectedAudioOutputRef.current &&
+              !winDevices.some((d: any) => d.flow === 0 && d.id === selectedAudioOutputRef.current)
+            ) {
+              setSelectedAudioOutput("default");
+            }
+
+            if (
+              selectedAudioInputRef.current !== "default" &&
+              selectedAudioInputRef.current !== "none" &&
+              selectedAudioInputRef.current &&
+              !winDevices.some((d: any) => d.flow === 1 && d.id === selectedAudioInputRef.current)
+            ) {
+              setSelectedAudioInput("default");
+            }
+
             // Sync master fader with Windows default output endpoint
             const defPlayback = winDevices.find((d: any) => d.flow === 0 && d.isDefault);
             if (defPlayback) {
               if (selectedAudioOutputRef.current === "default") {
                 setSelectedAudioOutput(defPlayback.id);
               }
-              if (Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03) {
-                lastVolumeRef.current = defPlayback.volume;
-                setMasterVolume(defPlayback.volume);
+              const lastInMaster = lastFaderUserInteractionRef.current["Master"] || 0;
+              if (Date.now() - lastInMaster >= 1500) {
+                if (Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03) {
+                  lastVolumeRef.current = defPlayback.volume;
+                  setMasterVolume(defPlayback.volume);
+                }
               }
             }
 
@@ -11374,12 +11365,15 @@ export default function App() {
               if (selectedAudioInputRef.current === "default") {
                 setSelectedAudioInput(defRecord.id);
               }
-              setAudioVolumes((prev) => {
-                if (prev["IN"] !== undefined && Math.abs(defRecord.volume - prev["IN"]) > 0.03) {
-                  return { ...prev, IN: defRecord.volume };
-                }
-                return prev;
-              });
+              const lastInDefaultIn = lastFaderUserInteractionRef.current["IN"] || lastFaderUserInteractionRef.current["in-default"] || 0;
+              if (Date.now() - lastInDefaultIn >= 1500) {
+                setAudioVolumes((prev) => {
+                  if (prev["IN"] !== undefined && Math.abs(defRecord.volume - prev["IN"]) > 0.03) {
+                    return { ...prev, IN: defRecord.volume };
+                  }
+                  return prev;
+                });
+              }
             }
 
             // Sync details of specific active faders including default wrappers
@@ -11388,25 +11382,34 @@ export default function App() {
               const next = { ...prevVolumes };
 
               if (defPlayback) {
-                if (prevVolumes["out-default"] === undefined || Math.abs(defPlayback.volume - prevVolumes["out-default"]) > 0.03) {
-                  next["out-default"] = defPlayback.volume;
-                  changed = true;
+                const lastInOutDef = lastFaderUserInteractionRef.current["out-default"] || 0;
+                if (Date.now() - lastInOutDef >= 1500) {
+                  if (prevVolumes["out-default"] === undefined || Math.abs(defPlayback.volume - prevVolumes["out-default"]) > 0.03) {
+                    next["out-default"] = defPlayback.volume;
+                    changed = true;
+                  }
                 }
               }
 
               if (defRecord) {
-                if (prevVolumes["in-default"] === undefined || Math.abs(defRecord.volume - prevVolumes["in-default"]) > 0.03) {
-                  next["in-default"] = defRecord.volume;
-                  changed = true;
+                const lastInInDef = lastFaderUserInteractionRef.current["in-default"] || 0;
+                if (Date.now() - lastInInDef >= 1500) {
+                  if (prevVolumes["in-default"] === undefined || Math.abs(defRecord.volume - prevVolumes["in-default"]) > 0.03) {
+                    next["in-default"] = defRecord.volume;
+                    changed = true;
+                  }
                 }
               }
 
               winDevices.forEach((dev: any) => {
                 const faderId = dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
-                const currentVol = prevVolumes[faderId];
-                if (currentVol === undefined || Math.abs(dev.volume - currentVol) > 0.03) {
-                  next[faderId] = dev.volume;
-                  changed = true;
+                const lastIn = lastFaderUserInteractionRef.current[faderId] || 0;
+                if (Date.now() - lastIn >= 1500) {
+                  const currentVol = prevVolumes[faderId];
+                  if (currentVol === undefined || Math.abs(dev.volume - currentVol) > 0.03) {
+                    next[faderId] = dev.volume;
+                    changed = true;
+                  }
                 }
               });
               return changed ? next : prevVolumes;
@@ -14261,6 +14264,7 @@ export default function App() {
                                       : (audioVolumes[sourceName] ?? 0.5);
 
                               const onChange = (val: number) => {
+                                lastFaderUserInteractionRef.current[sourceName] = Date.now();
                                 if (sourceName === "Master") {
                                   setMasterVolume(val);
                                   (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
