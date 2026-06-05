@@ -712,17 +712,20 @@ if (!gotTheLock) {
       const presentationId = `LUMIN_PPT_PDF_${Date.now()}`;
       const tempPdfDirectory = app.getPath('temp');
       const pdfPath = path.join(tempPdfDirectory, `${presentationId}.pdf`);
+      const jsonPath = path.join(tempPdfDirectory, `${presentationId}.json`);
 
       const env = { 
         ...process.env, 
         _LUMIN_PPT_INPUT: filePath, 
-        _LUMIN_PPT_OUTPUT: pdfPath 
+        _LUMIN_PPT_OUTPUT: pdfPath,
+        _LUMIN_PPT_JSON: jsonPath
       };
 
       const psScript = `
 $ErrorActionPreference = 'Stop'
 $ppt = $null
 $pres = $null
+$jsonPath = $Env:_LUMIN_PPT_JSON
 
 try {
     $inputPath = $Env:_LUMIN_PPT_INPUT
@@ -769,9 +772,8 @@ try {
         pdfPath = $outputPath
     }
     
-    $jsonPath = $outputPath -replace "\.pdf$", ".json"
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
-    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($jsonPath, $json)
 } catch {
     try { 
         $pres.Close() 
@@ -792,9 +794,8 @@ try {
         error = $_.Exception.Message
     }
     
-    $jsonPath = $outputPath -replace "\.pdf$", ".json"
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
-    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($jsonPath, $json)
 }
 `;
 
@@ -824,23 +825,24 @@ try {
         }
 
         try {
-          const jsonPath = pdfPath.replace(/\.pdf$/, ".json");
-          let psResult = { success: false, error: "JSON no encontrado." };
+          let psResult = { success: false, error: "JSON result file not generated." };
           
           if (fs.existsSync(jsonPath)) {
-            const rawJson = fs.readFileSync(jsonPath, "utf8");
-            psResult = JSON.parse(rawJson);
+            const rawJson = fs.readFileSync(jsonPath, "utf8").replace(/^\uFEFF/, "");
+            if (rawJson.trim()) {
+              psResult = JSON.parse(rawJson);
+            }
             fs.unlinkSync(jsonPath); // Clean up
           } else if (stdout.trim()) {
-            psResult = JSON.parse(stdout.trim());
+            psResult = JSON.parse(stdout.trim().replace(/^\uFEFF/, ""));
           }
           
           resolve(psResult);
         } catch (jsonErr) {
-          console.error("Failed parsing PowerShell PDF output JSON:", jsonErr, stdout);
+          console.error("Failed parsing PowerShell PDF output JSON:", jsonErr, stdout, stderr);
           resolve({ 
             success: false, 
-            error: "No se pudo interpretar la respuesta del automatizador de PowerPoint. Asegúrate de tener instalado Microsoft PowerPoint en Windows." 
+            error: "La automatización de PowerPoint falló. STDOUT: " + stdout.substring(0, 100) + " STDERR: " + stderr.substring(0, 100) 
           });
         }
       });
@@ -866,7 +868,8 @@ try {
       const env = {
         ...process.env,
         _LUMIN_PPT_INPUT: filePath,
-        _LUMIN_PPT_OUTPUT_DIR: tempDir
+        _LUMIN_PPT_OUTPUT_DIR: tempDir,
+        _LUMIN_PPT_JSON: path.join(tempDir, "result.json")
       };
 
       // Compile discrete powershell script to execute
@@ -874,6 +877,7 @@ try {
 $ErrorActionPreference = 'Stop'
 $ppt = $null
 $pres = $null
+$jsonPath = $Env:_LUMIN_PPT_JSON
 
 try {
     $inputPath = $Env:_LUMIN_PPT_INPUT
@@ -967,9 +971,8 @@ try {
     }
     
     # Write JSON to a file to prevent stdout pollution
-    $jsonPath = Join-Path -Path $outputDir -ChildPath "result.json"
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
-    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($jsonPath, $json)
 
 } catch {
     try { 
@@ -991,9 +994,8 @@ try {
         error = $_.Exception.Message
     }
     
-    $jsonPath = Join-Path -Path $outputDir -ChildPath "result.json"
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
-    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($jsonPath, $json)
 }
 `;
 
@@ -1029,11 +1031,13 @@ try {
           const resultJsonPath = path.join(tempDir, "result.json");
           let psResult = { success: false, error: "Result JSON not found." };
           if (fs.existsSync(resultJsonPath)) {
-            const rawJson = fs.readFileSync(resultJsonPath, "utf8");
-            psResult = JSON.parse(rawJson);
+            const rawJson = fs.readFileSync(resultJsonPath, "utf8").replace(/^\uFEFF/, "");
+            if (rawJson.trim()) {
+              psResult = JSON.parse(rawJson);
+            }
           } else if (stdout.trim()) {
             // Fallback to parse stdout if someone didn't write the file
-            psResult = JSON.parse(stdout.trim());
+            psResult = JSON.parse(stdout.trim().replace(/^\uFEFF/, ""));
           }
 
           if (!psResult.success) {
@@ -1098,10 +1102,10 @@ try {
           });
 
         } catch (jsonErr) {
-          console.error("Failed parsing PowerShell result JSON:", jsonErr, stdout);
+          console.error("Failed parsing PowerShell result JSON:", jsonErr, stdout, stderr);
           resolve({ 
             success: false, 
-            error: "No se pudo interpretar la respuesta del automatizador nativo de PowerPoint. Asegúrate de tener instalado Microsoft Office PowerPoint nativo en Windows." 
+            error: "La automatización nativa de PowerPoint falló. STDOUT: " + stdout.substring(0, 100) + " STDERR: " + stderr.substring(0, 100) 
           });
         }
       });

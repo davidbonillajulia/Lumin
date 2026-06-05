@@ -10269,14 +10269,21 @@ export default function App() {
         const cleanId = sourceName.replace("out-", "").replace("in-", "");
         
         let winDevId = cleanId;
-        const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
-        const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+        let winDevToMute = windowsDevicesList.find(d => d.id === cleanId && d.flow === flow);
         
-        if (chromeDev && chromeDev.label) {
-          const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
-          const winDev = windowsDevicesList.find(d => d.flow === flow && d.name === rawLabel);
-          if (winDev) winDevId = winDev.id;
+        if (!winDevToMute) {
+          const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
+          const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+          
+          if (chromeDev && chromeDev.label) {
+            const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
+            winDevToMute = windowsDevicesList.find(d => d.flow === flow && 
+              (d.name === rawLabel || rawLabel.includes(d.name) || d.name.includes(rawLabel))
+            );
+          }
         }
+        
+        if (winDevToMute) winDevId = winDevToMute.id;
 
         const dev = windowsDevicesList.find((d: any) => d.id === winDevId);
         const currentVol = dev?.volume ?? audioVolumes[sourceName] ?? 0.5;
@@ -10382,14 +10389,20 @@ export default function App() {
         const cleanId = sourceName.replace("out-", "").replace("in-", "");
         
         let winDevId = cleanId;
-        const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
-        const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+        let winDevToPeak = windowsDevicesList.find(d => d.id === cleanId && d.flow === flow);
         
-        if (chromeDev && chromeDev.label) {
-          const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
-          const winDev = windowsDevicesList.find(d => d.flow === flow && d.name === rawLabel);
-          if (winDev) winDevId = winDev.id;
+        if (!winDevToPeak) {
+          const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
+          const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+          
+          if (chromeDev && chromeDev.label) {
+            const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
+            winDevToPeak = windowsDevicesList.find(d => d.flow === flow && 
+              (d.name === rawLabel || rawLabel.includes(d.name) || d.name.includes(rawLabel))
+            );
+          }
         }
+        if (winDevToPeak) winDevId = winDevToPeak.id;
 
         const dev = windowsDevicesList.find((d) => d.id === winDevId);
         if (dev) {
@@ -12098,50 +12111,22 @@ export default function App() {
       }
 
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const inputs = devices.filter((d) => d.kind === "audioinput");
-      const outputs = devices.filter((d) => d.kind === "audiooutput");
+      const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId !== "default" && d.deviceId !== "communications");
+      const outputs = devices.filter((d) => d.kind === "audiooutput" && d.deviceId !== "default" && d.deviceId !== "communications");
 
       setAudioInputDevices(
         inputs.length > 0
           ? inputs
-          : [
-              {
-                deviceId: "default",
-                label: "Dispositivo del Sistema por Defecto",
-              },
-              {
-                deviceId: "auxin",
-                label: "Línea de Entrada (High Definition Audio)",
-              },
-              { deviceId: "mic", label: "Micrófono Nativo Realtek (Windows)" },
-            ],
+          : []
       );
       setAudioOutputDevices(
         outputs.length > 0
           ? outputs
-          : [
-              {
-                deviceId: "default",
-                label: "Altavoces por Defecto (Windows DirectSound)",
-              },
-              {
-                deviceId: "speakers",
-                label: "Altavoces Realtek High Definition Audio",
-              },
-              {
-                deviceId: "hdmi",
-                label: "HDMI Audio Out (Intel Display Audio)",
-              },
-              {
-                deviceId: "virtual",
-                label: "CABLE Input (VB-Audio Virtual Cable)",
-              },
-            ],
+          : []
       );
     } catch (e) {
       console.error("Error enumerando dispositivos de audio:", e);
       setAudioInputDevices([
-        { deviceId: "default", label: "Dispositivo del Sistema por Defecto" },
         {
           deviceId: "auxin",
           label: "Línea de Entrada (High Definition Audio)",
@@ -12149,10 +12134,6 @@ export default function App() {
         { deviceId: "mic", label: "Micrófono Nativo Realtek (Windows)" },
       ]);
       setAudioOutputDevices([
-        {
-          deviceId: "default",
-          label: "Altavoces por Defecto (Windows DirectSound)",
-        },
         {
           deviceId: "speakers",
           label: "Altavoces Realtek High Definition Audio",
@@ -14280,20 +14261,26 @@ export default function App() {
                                   const cleanId = sourceName.replace("out-", "").replace("in-", "");
                                   
                                   let winDevId = cleanId;
-                                  // Attempt to map from Chrome label to Windows device name
-                                  const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
-                                  const chromeDev = chromeList.find(d => d.deviceId === cleanId);
                                   
-                                  if (chromeDev && chromeDev.label) {
-                                    // Strip things like "Predeterminado - " from Chrome label if present
-                                    const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
-                                    const winDev = windowsDevicesList.find(d => 
-                                      d.flow === flow && 
-                                      d.name === rawLabel
-                                    );
-                                    if (winDev) {
-                                      winDevId = winDev.id;
+                                  // Find the device in the windows device list directly by ID first
+                                  let winDev = windowsDevicesList.find(d => d.id === cleanId);
+                                  
+                                  if (!winDev) {
+                                    // Fallback: try mapping if it's a Chrome ID
+                                    const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
+                                    const chromeDev = chromeList.find(d => d.deviceId === cleanId);
+                                    
+                                    if (chromeDev && chromeDev.label) {
+                                      const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
+                                      winDev = windowsDevicesList.find(d => 
+                                        d.flow === flow && 
+                                        (d.name === rawLabel || rawLabel.includes(d.name) || d.name.includes(rawLabel))
+                                      );
                                     }
+                                  }
+
+                                  if (winDev) {
+                                    winDevId = winDev.id;
                                   }
 
                                   (window.electron as any)?.setWindowsDeviceVolume?.(winDevId, val).catch(() => {});
