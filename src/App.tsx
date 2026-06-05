@@ -354,7 +354,9 @@ const extractVideoThumbnail = (videoUrl: string): Promise<string> => {
   return new Promise((resolve) => {
     const video = document.createElement("video");
     video.src = videoUrl;
-    video.crossOrigin = "anonymous";
+    if (videoUrl.startsWith("http://") || videoUrl.startsWith("https://")) {
+      video.crossOrigin = "anonymous";
+    }
     video.muted = true;
     video.playsInline = true;
 
@@ -3526,7 +3528,7 @@ const VideoLayer = ({
                   : true
               }
               playsInline
-              crossOrigin="anonymous"
+              crossOrigin={clip.url?.startsWith("http") ? "anonymous" : undefined}
               preload={
                 isProgram ||
                 activeIsPlaying ||
@@ -10675,6 +10677,7 @@ export default function App() {
     return JSON.stringify(
       {
         libraryFiles: libraryFiles.map((f: any) => ({
+          id: f.id,
           name: f.name,
           type: f.type,
           url: f.url,
@@ -10711,6 +10714,10 @@ export default function App() {
         outputOffStates,
         masterVolume,
         programVolume,
+        selectedAudioInput,
+        selectedAudioOutput,
+        audioVolumes,
+        mutedFaders,
         layerOutputs,
         crossfaderValue,
         previewClipId,
@@ -10856,11 +10863,20 @@ export default function App() {
           const nativeUrl = getUrlFromPath(filePath);
           if (nativeUrl) newUrl = nativeUrl;
         }
+        
+        let newThumbnail = f.thumbnail;
+        if (newThumbnail?.startsWith("blob:")) {
+          newThumbnail = undefined;
+        }
+
         return {
+          id: f.id || `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           name: f.name,
           type: f.type,
           url: newUrl,
           file: filePath ? { path: filePath, name: f.name } : null,
+          path: filePath || undefined,
+          thumbnail: newThumbnail,
         };
       });
 
@@ -10976,6 +10992,14 @@ export default function App() {
         setMasterVolume(parsedData.masterVolume);
       if (parsedData.programVolume !== undefined)
         setProgramVolume(parsedData.programVolume);
+      if (parsedData.selectedAudioInput !== undefined)
+        setSelectedAudioInput(parsedData.selectedAudioInput);
+      if (parsedData.selectedAudioOutput !== undefined)
+        setSelectedAudioOutput(parsedData.selectedAudioOutput);
+      if (parsedData.audioVolumes !== undefined)
+        setAudioVolumes(parsedData.audioVolumes);
+      if (parsedData.mutedFaders !== undefined)
+        setMutedFaders(parsedData.mutedFaders);
       if (parsedData.crossfaderValue !== undefined)
         setCrossfaderValue(parsedData.crossfaderValue);
       if (parsedData.previewClipId !== undefined)
