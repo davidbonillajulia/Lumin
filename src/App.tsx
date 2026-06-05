@@ -10210,7 +10210,7 @@ export default function App() {
   const [selectedAudioOutput, setSelectedAudioOutput] =
     useState<string>("default");
   const activeFaders = useMemo(() => {
-    const list = ["Master"];
+    const list: string[] = [];
     if (selectedAudioOutput && selectedAudioOutput !== "none") {
       list.push(
         selectedAudioOutput.startsWith("out-")
@@ -11316,6 +11316,11 @@ export default function App() {
 
   const lastVolumeRef = useRef(masterVolume);
 
+  const selectedAudioOutputRef = useRef(selectedAudioOutput);
+  selectedAudioOutputRef.current = selectedAudioOutput;
+  const selectedAudioInputRef = useRef(selectedAudioInput);
+  selectedAudioInputRef.current = selectedAudioInput;
+
   // Bidirectional fader synchronization loop with Windows core audio session
   useEffect(() => {
     // @ts-ignore
@@ -11354,7 +11359,7 @@ export default function App() {
             // Sync master fader with Windows default output endpoint
             const defPlayback = winDevices.find((d: any) => d.flow === 0 && d.isDefault);
             if (defPlayback) {
-              if (selectedAudioOutput === "default") {
+              if (selectedAudioOutputRef.current === "default") {
                 setSelectedAudioOutput(defPlayback.id);
               }
               if (Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03) {
@@ -11366,7 +11371,7 @@ export default function App() {
             // Update default IN fader with volume of default audio record input device if active
             const defRecord = winDevices.find((d: any) => d.flow === 1 && d.isDefault);
             if (defRecord) {
-              if (selectedAudioInput === "default") {
+              if (selectedAudioInputRef.current === "default") {
                 setSelectedAudioInput(defRecord.id);
               }
               setAudioVolumes((prev) => {
@@ -11399,7 +11404,7 @@ export default function App() {
               winDevices.forEach((dev: any) => {
                 const faderId = dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
                 const currentVol = prevVolumes[faderId];
-                if (currentVol !== undefined && Math.abs(dev.volume - currentVol) > 0.02) {
+                if (currentVol === undefined || Math.abs(dev.volume - currentVol) > 0.03) {
                   next[faderId] = dev.volume;
                   changed = true;
                 }
@@ -13841,6 +13846,7 @@ export default function App() {
                     onChange={(e) => setSelectedAudioOutput(e.target.value)}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
                   >
+                    <option value="default">Altavoces Predeterminados de Windows</option>
                     <option value="none">Ninguno (Sin Audio)</option>
                     {audioOutputDevices.map((dev) => (
                       <option
@@ -13864,6 +13870,7 @@ export default function App() {
                     onChange={(e) => setSelectedAudioInput(e.target.value)}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
                   >
+                    <option value="default">Micrófono Predeterminado de Windows</option>
                     <option value="none">Ninguno (Sin Audio)</option>
                     {audioInputDevices.map((dev) => (
                       <option
