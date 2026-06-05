@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
 const { autoUpdater } = require('electron-updater');
+const os = require('os');
 
 // Native check if running in development
 const isDev = !app.isPackaged;
@@ -236,6 +237,61 @@ if (!gotTheLock) {
 
   ipcMain.on('exit-app', () => {
     app.exit(0);
+  });
+
+  let previousCpus = os.cpus();
+  ipcMain.handle('get-system-stats', async () => {
+    const cpus = os.cpus();
+    let user = 0;
+    let nice = 0;
+    let sys = 0;
+    let idle = 0;
+    let irq = 0;
+    let total = 0;
+
+    for (const cpu of cpus) {
+      user += cpu.times.user;
+      nice += cpu.times.nice;
+      sys += cpu.times.sys;
+      idle += cpu.times.idle;
+      irq += cpu.times.irq;
+    }
+
+    let prevUser = 0;
+    let prevNice = 0;
+    let prevSys = 0;
+    let prevIdle = 0;
+    let prevIrq = 0;
+
+    if (previousCpus) {
+      for (const cpu of previousCpus) {
+        prevUser += cpu.times.user;
+        prevNice += cpu.times.nice;
+        prevSys += cpu.times.sys;
+        prevIdle += cpu.times.idle;
+        prevIrq += cpu.times.irq;
+      }
+    }
+
+    const totalDiff = (user - prevUser) + (nice - prevNice) + (sys - prevSys) + (idle - prevIdle) + (irq - prevIrq);
+    const idleDiff = idle - prevIdle;
+    
+    // CPU usage percentage
+    let cpuUsage = 0;
+    if (totalDiff > 0) {
+      cpuUsage = 100 - (100 * idleDiff / totalDiff);
+    }
+    previousCpus = cpus;
+
+    const totalMemBytes = os.totalmem();
+    const freeMemBytes = os.freemem();
+    const usedMemBytes = totalMemBytes - freeMemBytes;
+
+    return {
+      cpuUsage,
+      usedMemBytes,
+      totalMemBytes
+    };
   });
 
   ipcMain.handle('get-windows-devices', async () => {
@@ -706,14 +762,16 @@ try {
     try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null } catch {}
     try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null } catch {}
     [System.GC]::Collect()
-    [System.GC]::WaitForPendingBuffers()
+    [System.GC]::WaitForPendingFinalizers()
 
     $res = @{
         success = $true
         pdfPath = $outputPath
     }
     
-    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+    $jsonPath = $outputPath -replace "\.pdf$", ".json"
+    $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
+    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
 } catch {
     try { 
         $pres.Close() 
@@ -733,7 +791,10 @@ try {
         success = $false
         error = $_.Exception.Message
     }
-    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+    
+    $jsonPath = $outputPath -replace "\.pdf$", ".json"
+    $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
+    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
 }
 `;
 
@@ -763,7 +824,17 @@ try {
         }
 
         try {
-          const psResult = JSON.parse(stdout.trim());
+          const jsonPath = pdfPath.replace(/\.pdf$/, ".json");
+          let psResult = { success: false, error: "JSON no encontrado." };
+          
+          if (fs.existsSync(jsonPath)) {
+            const rawJson = fs.readFileSync(jsonPath, "utf8");
+            psResult = JSON.parse(rawJson);
+            fs.unlinkSync(jsonPath); // Clean up
+          } else if (stdout.trim()) {
+            psResult = JSON.parse(stdout.trim());
+          }
+          
           resolve(psResult);
         } catch (jsonErr) {
           console.error("Failed parsing PowerShell PDF output JSON:", jsonErr, stdout);
@@ -888,15 +959,18 @@ try {
     try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null } catch {}
     try { [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null } catch {}
     [System.GC]::Collect()
-    [System.GC]::WaitForPendingBuffers()
+    [System.GC]::WaitForPendingFinalizers()
 
     $res = @{
         success = $true
         slides = $slideData
     }
     
-    # Output outcome in clean JSON format
-    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+    # Write JSON to a file to prevent stdout pollution
+    $jsonPath = Join-Path -Path $outputDir -ChildPath "result.json"
+    $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
+    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
+
 } catch {
     try { 
         $pres.Close() 
@@ -916,7 +990,10 @@ try {
         success = $false
         error = $_.Exception.Message
     }
-    Write-Output (ConvertTo-Json -InputObject $res -Depth 5)
+    
+    $jsonPath = Join-Path -Path $outputDir -ChildPath "result.json"
+    $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
+    [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.Encoding]::UTF8)
 }
 `;
 
@@ -948,8 +1025,17 @@ try {
         }
 
         try {
-          // Parse stdout resulting JSON structure
-          const psResult = JSON.parse(stdout.trim());
+          // Parse resulting JSON structure from file
+          const resultJsonPath = path.join(tempDir, "result.json");
+          let psResult = { success: false, error: "Result JSON not found." };
+          if (fs.existsSync(resultJsonPath)) {
+            const rawJson = fs.readFileSync(resultJsonPath, "utf8");
+            psResult = JSON.parse(rawJson);
+          } else if (stdout.trim()) {
+            // Fallback to parse stdout if someone didn't write the file
+            psResult = JSON.parse(stdout.trim());
+          }
+
           if (!psResult.success) {
             resolve({ success: false, error: psResult.error || "Microsoft PowerPoint lanzó un error durante el procesado." });
             return;

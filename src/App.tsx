@@ -191,6 +191,7 @@ declare global {
       readLuminFile?: (
         filePath: string,
       ) => Promise<{ success: boolean; data?: string; error?: string }>;
+      getSystemStats?: () => Promise<{ cpuUsage: number; usedMemBytes: number; totalMemBytes: number; }>;
       exitApp?: () => void;
       isElectron: boolean;
     };
@@ -3731,16 +3732,16 @@ const OutputCountdown = ({
 }: {
   settings: ExternalScreenSettings;
 }) => {
-  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [remaining, setRemaining] = useState(0);
 
   useEffect(() => {
     const updateTime = () => {
       if (settings.timerRunning && settings.timerTargetTimestamp) {
         const diffMs = settings.timerTargetTimestamp - Date.now();
         const secs = Math.max(0, Math.ceil(diffMs / 1000));
-        setSecondsLeft(secs);
+        setRemaining(secs);
       } else {
-        setSecondsLeft(settings.timerRemainingSeconds ?? 0);
+        setRemaining(settings.timerRemainingSeconds ?? 0);
       }
     };
 
@@ -3811,10 +3812,10 @@ const OutputCountdown = ({
   const amberThreshold = settings.timerAmberSeconds ?? 30;
   const redThreshold = settings.timerRedSeconds ?? 10;
 
-  const isEnded = secondsLeft === 0;
-  const isRed = secondsLeft <= redThreshold || isEnded;
+  const isEnded = remaining === 0;
+  const isRed = remaining <= redThreshold || isEnded;
   const isAmber =
-    secondsLeft <= amberThreshold && secondsLeft > redThreshold && !isEnded;
+    remaining <= amberThreshold && remaining > redThreshold && !isEnded;
 
   const textColor = isRed
     ? (settings.timerRedColor ?? "#ef4444")
@@ -3859,8 +3860,8 @@ const OutputCountdown = ({
         lineHeight: 1,
       }}
     >
-      <span className={fontStyle} style={{ animation: animationStyle }}>
-        {formatTime(secondsLeft)}
+      <span className={fontStyle} style={{ animation: animationStyle, color: "inherit" }}>
+        {formatTime(remaining)}
       </span>
     </div>
   );
@@ -3907,30 +3908,34 @@ const PresenterTimerDisplay = ({
   const isAmber =
     remaining > (settings.timerRedSeconds ?? 10) &&
     remaining <= (settings.timerAmberSeconds ?? 30);
-  const isRed = remaining <= (settings.timerRedSeconds ?? 10);
+  const isRed = remaining <= (settings.timerRedSeconds ?? 10) && remaining > 0;
+  const isEnded = remaining === 0;
 
-  let colorClass = "text-white";
+  let textColor = settings.timerColor ?? "#ffffff";
   let bgClass = "bg-obs-dark-2";
   let animationStyle = "none";
+  let extraClass = "font-black";
 
-  if (remaining === 0) {
-    colorClass = "text-red-500 font-black";
+  if (isEnded) {
+    textColor = settings.timerRedColor ?? "#ef4444";
     if (settings.timerBlinkRedEnabled !== false) {
       animationStyle = `blink-timer ${settings.timerBlinkSpeedRed ?? 0.5}s infinite`;
     }
     bgClass = "bg-red-950/20 border border-red-500/20";
   } else if (isRed) {
-    colorClass = "text-red-500 font-extrabold";
+    textColor = settings.timerRedColor ?? "#ef4444";
     if (settings.timerBlinkRedEnabled !== false) {
       animationStyle = `blink-timer ${settings.timerBlinkSpeedRed ?? 0.5}s infinite`;
     }
     bgClass = "bg-red-900/10 border border-red-500/20";
+    extraClass = "font-extrabold";
   } else if (isAmber) {
-    colorClass = "text-amber-500 font-semibold";
+    textColor = settings.timerAmberColor ?? "#f59e0b";
     if (settings.timerBlinkAmberEnabled !== false) {
       animationStyle = `blink-timer ${settings.timerBlinkSpeedAmber ?? 0.5}s infinite`;
     }
     bgClass = "bg-amber-900/10 border border-amber-500/20";
+    extraClass = "font-semibold";
   }
 
   return (
@@ -3945,8 +3950,8 @@ const PresenterTimerDisplay = ({
             tiempo restante
           </span>
           <div
-            className={`text-5xl font-mono tracking-tighter font-black select-none transition-none ${colorClass}`}
-            style={{ animation: animationStyle }}
+            className={`text-5xl font-mono tracking-tighter select-none transition-none ${extraClass}`}
+            style={{ animation: animationStyle, color: textColor }}
           >
             {formatTime(remaining)}
           </div>
@@ -6921,10 +6926,9 @@ const Inspector = React.memo(
                           Color y Alertas de Tiempo
                         </span>
                         <div className="grid grid-cols-2 gap-2">
-                          {/* Tiempo de aviso (Tiempo Ámbar) */}
                           <div className="space-y-1 bg-obs-dark-1/25 p-1.5 rounded border border-obs-border/30">
                             <label className="text-[7.5px] text-obs-muted uppercase font-bold block">
-                              Tiempo de aviso (Tiempo ámbar)
+                              Tiempo de aviso
                             </label>
                             <div className="flex gap-1.5 items-center">
                               <div className="flex items-center bg-obs-bg rounded p-1 border border-obs-border shrink-0">
@@ -6966,10 +6970,9 @@ const Inspector = React.memo(
                             </div>
                           </div>
 
-                          {/* Tiempo Límite (Tiempo Rojo) */}
                           <div className="space-y-1 bg-obs-dark-1/25 p-1.5 rounded border border-obs-border/30 font-sans">
                             <label className="text-[7.5px] text-obs-muted uppercase font-bold block">
-                              Tiempo Límite (tiempo rojo)
+                              Tiempo Límite
                             </label>
                             <div className="flex gap-1.5 items-center font-sans">
                               <div className="flex items-center bg-obs-bg rounded p-1 border border-obs-border shrink-0">
@@ -9778,12 +9781,14 @@ const OutputManagerModal = ({
   activeOutputId,
   onClose,
   onApply,
+  showCustomAlert,
 }: {
   outputs: any[];
   externalScreens: any[];
   activeOutputId: string;
   onClose: () => void;
   onApply: (newOutputs: any[]) => void;
+  showCustomAlert: (title: string, message: string, type?: "info" | "error" | "success") => void;
 }) => {
   const [localOutputs, setLocalOutputs] = useState([...outputs]);
 
@@ -9808,8 +9813,10 @@ const OutputManagerModal = ({
                 externalScreens.length > 0 &&
                 localOutputs.length >= externalScreens.length
               ) {
-                alert(
-                  `No puedes crear más salidas que pantallas físicas detectadas (${externalScreens.length}).`,
+                showCustomAlert(
+                  "Límite de Salidas Alcanzado", 
+                  `No puedes crear más salidas que pantallas físicas detectadas (${externalScreens.length}).`, 
+                  "error"
                 );
                 return;
               }
@@ -10258,11 +10265,22 @@ export default function App() {
           (window.electron as any)?.setWindowsDeviceVolume?.(defIn.id, isMuted ? 0 : usbInVolume).catch(() => {});
         }
       } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
-        const cleanId = sourceName.replace("out-", "").replace("in-", "");
         const flow = sourceName.startsWith("out-") ? 0 : 1;
-        const dev = windowsDevicesList.find((d: any) => d.flow === flow && d.id === cleanId);
+        const cleanId = sourceName.replace("out-", "").replace("in-", "");
+        
+        let winDevId = cleanId;
+        const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
+        const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+        
+        if (chromeDev && chromeDev.label) {
+          const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
+          const winDev = windowsDevicesList.find(d => d.flow === flow && d.name === rawLabel);
+          if (winDev) winDevId = winDev.id;
+        }
+
+        const dev = windowsDevicesList.find((d: any) => d.id === winDevId);
         const currentVol = dev?.volume ?? audioVolumes[sourceName] ?? 0.5;
-        (window.electron as any)?.setWindowsDeviceVolume?.(cleanId, isMuted ? 0 : currentVol).catch(() => {});
+        (window.electron as any)?.setWindowsDeviceVolume?.(winDevId, isMuted ? 0 : currentVol).catch(() => {});
       }
 
       return {
@@ -10359,21 +10377,28 @@ export default function App() {
           if (peak < 0.005) peak = 0; // noise gate
           return Math.max(0, Math.min(1, peak * vol * 1.15));
         }
-      } else if (sourceName.startsWith("out-")) {
-        const cleanId = sourceName.replace("out-", "");
-        const dev = windowsDevicesList.find((d) => d.id === cleanId);
-        if (dev) {
-          const ourAppLevel = programLevel * vol;
-          if (ourAppLevel <= 0.005) return 0; // Gated
-          let peak = dev.peak;
-          if (peak < 0.005) peak = 0; // noise gate
-          return Math.max(0, Math.min(1, peak * vol * 1.15));
+      } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
+        const flow = sourceName.startsWith("out-") ? 0 : 1;
+        const cleanId = sourceName.replace("out-", "").replace("in-", "");
+        
+        let winDevId = cleanId;
+        const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
+        const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+        
+        if (chromeDev && chromeDev.label) {
+          const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
+          const winDev = windowsDevicesList.find(d => d.flow === flow && d.name === rawLabel);
+          if (winDev) winDevId = winDev.id;
         }
-      } else if (sourceName.startsWith("in-")) {
-        const cleanId = sourceName.replace("in-", "");
-        const dev = windowsDevicesList.find((d) => d.id === cleanId);
+
+        const dev = windowsDevicesList.find((d) => d.id === winDevId);
         if (dev) {
-          if (selectedAudioInput !== cleanId || micVolumeRef.current <= 0.005) return 0; // Gated
+          if (flow === 0) {
+            const ourAppLevel = programLevel * vol;
+            if (ourAppLevel <= 0.005) return 0; // Gated
+          } else {
+            if (selectedAudioInput !== cleanId || micVolumeRef.current <= 0.005) return 0; // Gated
+          }
           let peak = dev.peak;
           if (peak < 0.005) peak = 0; // noise gate
           return Math.max(0, Math.min(1, peak * vol * 1.15));
@@ -10541,6 +10566,17 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [showContentPanel, setShowContentPanel] = useState(true);
 
+  const [customAlertOptions, setCustomAlertOptions] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: "info" | "error" | "success";
+  }>({ isOpen: false, title: "", message: "", type: "info" });
+
+  const showCustomAlert = (title: string, message: string, type: "info" | "error" | "success" = "info") => {
+    setCustomAlertOptions({ isOpen: true, title, message, type });
+  };
+
   // HYDRATION: Ensure thumbnails and IDs exist after loading .lumin
   useEffect(() => {
     let active = true;
@@ -10577,6 +10613,13 @@ export default function App() {
               }
             }
           }
+
+          // If thumbnail is a blob from a previous session, we must regenerate it.
+          // Object URLs (blob:...) are only valid in the document that created them.
+          if (updated.thumbnail?.startsWith("blob:")) {
+            updated.thumbnail = undefined;
+          }
+
           // Generate missing thumbnail
           if (
             !updated.thumbnail &&
@@ -10677,8 +10720,10 @@ export default function App() {
       !window.electron.selectSaveLuminFile ||
       !window.electron.writeLuminFile
     ) {
-      alert(
+      showCustomAlert(
+        "Función Nativa Requerida",
         "El guardado de proyectos nativos solo está disponible en Windows.",
+        "info"
       );
       return;
     }
@@ -10691,9 +10736,9 @@ export default function App() {
         dataStr,
       );
       if (res.success) {
-        alert(`Proyecto guardado en: ${currentLuminPath}`);
+        showCustomAlert("Proyecto Guardado", `Proyecto guardado en: ${currentLuminPath}`, "success");
       } else {
-        alert("Error al guardar: " + res.error);
+        showCustomAlert("Error de Guardado", "Error al guardar: " + res.error, "error");
       }
     } else {
       // Si no hay archivo activo, actúa como "Guardar Como"
@@ -10707,8 +10752,10 @@ export default function App() {
       !window.electron.selectSaveLuminFile ||
       !window.electron.writeLuminFile
     ) {
-      alert(
+      showCustomAlert(
+        "Función Nativa Requerida",
         "El guardado de proyectos nativos solo está disponible en Windows.",
+        "info"
       );
       return;
     }
@@ -10728,9 +10775,9 @@ export default function App() {
     const res = await window.electron.writeLuminFile(filePath, dataStr);
     if (res.success) {
       setCurrentLuminPath(filePath);
-      alert(`Proyecto guardado como: ${filePath}`);
+      showCustomAlert("Proyecto Guardado Como", `Proyecto guardado como: ${filePath}`, "success");
     } else {
-      alert("Error al guardar como: " + res.error);
+      showCustomAlert("Error de Guardado", "Error al guardar como: " + res.error, "error");
     }
   };
 
@@ -10740,8 +10787,10 @@ export default function App() {
       !window.electron.selectOpenLuminFile ||
       !window.electron.readLuminFile
     ) {
-      alert(
+      showCustomAlert(
+        "Función Nativa Requerida",
         "La apertura de proyectos nativos solo está disponible en Windows.",
+        "info"
       );
       return;
     }
@@ -10754,7 +10803,7 @@ export default function App() {
     const filePath = dialogResult.filePath;
     const res = await window.electron.readLuminFile(filePath);
     if (!res.success || !res.data) {
-      alert("Error al abrir archivo: " + res.error);
+      showCustomAlert("Error de Apertura", "Error al abrir archivo: " + res.error, "error");
       return;
     }
 
@@ -10816,11 +10865,18 @@ export default function App() {
           const nativeUrl = getUrlFromPath(filePath);
           if (nativeUrl) newUrl = nativeUrl;
         }
+        
+        let newThumbnail = clip.thumbnail;
+        if (newThumbnail?.startsWith("blob:")) {
+          newThumbnail = undefined;
+        }
+
         return {
           ...clip,
           url: newUrl,
           file: filePath ? { path: filePath, name: clip.name } : null,
           path: filePath || undefined,
+          thumbnail: newThumbnail,
         };
       };
 
@@ -10926,16 +10982,18 @@ export default function App() {
         setIsDarkMode(parsedData.isDarkMode);
 
       setCurrentLuminPath(filePath);
-      alert(`Proyecto cargado con éxito: ${filePath}`);
+      showCustomAlert("Proyecto Cargado", `Proyecto cargado con éxito: ${filePath}`, "success");
     } catch (err: any) {
-      alert("Error al procesar el archivo LUMIN: " + err.message);
+      showCustomAlert("Error de Procesamiento", "Error al procesar el archivo LUMIN: " + err.message, "error");
     }
   };
 
   const handleImportPptClick = async () => {
     if (!window.electron || !window.electron.selectPptFile) {
-      alert(
+      showCustomAlert(
+        "Función Nativa Requerida",
         "La importación de PPT nativa solo está disponible en la versión de escritorio para Windows.",
+        "info"
       );
       return;
     }
@@ -11013,7 +11071,7 @@ export default function App() {
       clearInterval(progressInterval);
       setIsPptImporting(false);
       setPptImportProgress(0);
-      alert("Error al importar PowerPoint: " + err.message);
+      showCustomAlert("Error de Importación PPT", "Error al importar PowerPoint: " + err.message, "error");
     }
   };
 
@@ -12245,8 +12303,10 @@ export default function App() {
           });
         }, 1500);
       } else {
-        alert(
+        showCustomAlert(
+          "Aviso de Navegador",
           "El navegador bloqueó la ventana emergente o falló al abrirla. Por favor, permite ventanas emergentes.",
+          "error"
         );
       }
     } catch (err) {
@@ -13631,6 +13691,36 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* MODAL: CUSTOM ALERT */}
+      <AnimatePresence>
+        {customAlertOptions.isOpen && (
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[10000] font-sans">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 10 }}
+              className="bg-obs-dark-1 border border-obs-border p-6 rounded shadow-2xl min-w-[320px] max-w-md w-full"
+            >
+              <h2 className="text-white text-[12px] font-black uppercase tracking-widest mb-3 flex items-center gap-2">
+                {customAlertOptions.type === "error" ? <AlertTriangle size={16} className="text-red-500" /> : null}
+                {customAlertOptions.type === "success" ? <Check size={16} className="text-emerald-500" /> : null}
+                {customAlertOptions.type === "info" ? <AlertTriangle size={16} className="text-blue-500" /> : null}
+                {customAlertOptions.title}
+              </h2>
+              <p className="text-obs-muted mb-6 text-[10px] leading-relaxed break-words">{customAlertOptions.message}</p>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setCustomAlertOptions({ ...customAlertOptions, isOpen: false })}
+                  className="px-5 py-2 bg-obs-accent hover:opacity-90 text-white rounded text-[10px] font-bold uppercase transition-all"
+                >
+                  Aceptar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* MODAL: CONFIRMACIÓN DE SALIDA (A LA WINDOWS) */}
       <AnimatePresence>
         {isExitModalOpen && (
@@ -14186,8 +14276,27 @@ export default function App() {
                                     (window.electron as any)?.setWindowsDeviceVolume?.(defIn.id, val).catch(() => {});
                                   }
                                 } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
+                                  const flow = sourceName.startsWith("out-") ? 0 : 1;
                                   const cleanId = sourceName.replace("out-", "").replace("in-", "");
-                                  (window.electron as any)?.setWindowsDeviceVolume?.(cleanId, val).catch(() => {});
+                                  
+                                  let winDevId = cleanId;
+                                  // Attempt to map from Chrome label to Windows device name
+                                  const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
+                                  const chromeDev = chromeList.find(d => d.deviceId === cleanId);
+                                  
+                                  if (chromeDev && chromeDev.label) {
+                                    // Strip things like "Predeterminado - " from Chrome label if present
+                                    const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
+                                    const winDev = windowsDevicesList.find(d => 
+                                      d.flow === flow && 
+                                      d.name === rawLabel
+                                    );
+                                    if (winDev) {
+                                      winDevId = winDev.id;
+                                    }
+                                  }
+
+                                  (window.electron as any)?.setWindowsDeviceVolume?.(winDevId, val).catch(() => {});
                                 }
 
                                 setAudioVolumes((prev) => ({
@@ -15161,6 +15270,7 @@ export default function App() {
             externalScreens={externalScreens}
             activeOutputId={activeOutputId}
             onClose={() => setIsOutputModalOpen(false)}
+            showCustomAlert={showCustomAlert}
             onApply={(newOutputs) => {
               setOutputs(newOutputs);
 

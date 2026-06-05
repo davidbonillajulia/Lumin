@@ -113,11 +113,26 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
     setLogs(defaultLogs);
 
     // Dynamic telemetry ticker
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
+      // Intentar obtener estadísticas reales de Windows si estamos en Electron
+      if ((window as any).electron && (window as any).electron.getSystemStats) {
+        try {
+          const stats = await (window as any).electron.getSystemStats();
+          if (stats) {
+            setCpu(stats.cpuUsage);
+            setRam(stats.usedMemBytes / (1024 * 1024 * 1024)); // Convert to GB
+          }
+        } catch (err) {
+          // Fallback if fails
+        }
+      } else {
+        // Fallback simulación si no está disponible (modo web)
+        setCpu(prev => Math.min(45.0, Math.max(8.0, prev + (Math.random() - 0.5) * 1.5)));
+        setRam(prev => Math.min(4.8, Math.max(1.9, prev + (Math.random() - 0.5) * 0.05)));
+      }
+
       setFps(prev => Math.min(60.0, Math.max(59.4, prev + (Math.random() - 0.5) * 0.2)));
-      setCpu(prev => Math.min(45.0, Math.max(8.0, prev + (Math.random() - 0.5) * 1.5)));
       setGpu(prev => Math.min(80.0, Math.max(20.0, prev + (Math.random() - 0.5) * 2.2)));
-      setRam(prev => Math.min(4.8, Math.max(1.9, prev + (Math.random() - 0.5) * 0.05)));
 
       // Random logger lines
       const components = ['D3D11', 'VRAM', 'WATCHDOG', 'ENGINE', 'FRAME_PACE', 'WINDOWS', 'DECODER'];

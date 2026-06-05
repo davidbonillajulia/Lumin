@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electron', {
   setWindowsVolume: (val) => ipcRenderer.invoke('set-windows-volume', val),
   getWindowsDevices: () => ipcRenderer.invoke('get-windows-devices'),
   setWindowsDeviceVolume: (id, val) => ipcRenderer.invoke('set-windows-device-volume', { id, val }),
+  getSystemStats: () => ipcRenderer.invoke('get-system-stats'),
   exitApp: () => ipcRenderer.send('exit-app'),
   isElectron: true
 });
