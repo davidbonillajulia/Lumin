@@ -466,12 +466,17 @@ const FluidTimeDisplay = ({
           }
 
           let displayTime = 0;
-          const video = (resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
-                        (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
-                        (resolvedClipId && (window as any).__luminVideos?.[resolvedClipId]) ||
-                        (monitorId && (window as any).__luminVideos?.[monitorId]) ||
-                        (outputId && (window as any).__luminVideos?.[outputId]) ||
-                        (window as any).__luminProgramVideo;
+          const isRealOutputScreen = outputId && outputId !== "preview" && outputId !== "none";
+          const video = isRealOutputScreen
+            ? ((resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
+               (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
+               (outputId && (window as any).__luminVideos?.[outputId]))
+            : ((resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
+               (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
+               (resolvedClipId && (window as any).__luminVideos?.[resolvedClipId]) ||
+               (monitorId && (window as any).__luminVideos?.[monitorId]) ||
+               (outputId && (window as any).__luminVideos?.[outputId]) ||
+               (window as any).__luminProgramVideo);
 
           const clip = clips?.find((c) => c.id === resolvedClipId);
           const activeIsPlaying = clip ? (clip.isPlaying !== false) : false;
@@ -523,7 +528,7 @@ const FluidTimeDisplay = ({
             // Fallback to background Broadcast value
             const actualCurrent = resolvedTrackerId ? ((window as any).__luminVideoTimes?.[resolvedTrackerId] || 0) : 0;
 
-            if (activeIsPlaying && actualCurrent > 0 && actualCurrent < actualTotal) {
+            if (actualCurrent > 0 && actualCurrent < (actualTotal || 999999)) {
               const diff = actualCurrent - smoothedTime;
               if (smoothedTime === 0 || Math.abs(diff) > 0.6) {
                 smoothedTime = actualCurrent;
@@ -1350,6 +1355,7 @@ const Monitor = React.memo(
     activeOutputId = "1",
     layers = [],
     layerOutputs = {},
+    outputs = [],
     onUpdateClip,
     perfSettings,
     programPlayIndex = 0,
@@ -1406,6 +1412,7 @@ const Monitor = React.memo(
     activeOutputId?: string;
     layers?: Layer[];
     layerOutputs?: Record<string, string | null>;
+    outputs?: any[];
     onUpdateClip?: (id: string, updates: Partial<Clip>) => void;
     perfSettings?: any;
     programPlayIndex?: number;
@@ -1738,7 +1745,32 @@ const Monitor = React.memo(
                       {(() => {
                         const hasGlobalSource = !!busAClip || !!activeBusBClip;
                         return layers.map((l, index) => {
-                          const isTargetOutput = layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id] || layerOutputs[l.id] === "all";
+                          const lOut = layerOutputs[l.id];
+                          let isTargetOutput = lOut === activeOutputId || !lOut || lOut === "all";
+                          let virtualStyle: React.CSSProperties = { width: "100%", height: "100%", left: "0%", top: "0%" };
+                          
+                          if (!isTargetOutput && lOut && activeOutputId) {
+                            const targetOutput = outputs?.find((o: any) => o.id === lOut);
+                            if (targetOutput?.isVirtual) {
+                              const cellAssignments = Object.entries(targetOutput.assignments || {});
+                              const cellEntry = cellAssignments.find(([k, outId]) => outId === activeOutputId);
+                              if (cellEntry) {
+                                isTargetOutput = true;
+                                const [colStr, rowStr] = cellEntry[0].split("-");
+                                const col = parseInt(colStr);
+                                const row = parseInt(rowStr);
+                                const cols = targetOutput.grid.cols || 1;
+                                const rows = targetOutput.grid.rows || 1;
+                                virtualStyle = {
+                                  width: `${cols * 100}%`,
+                                  height: `${rows * 100}%`,
+                                  left: `${-col * 100}%`,
+                                  top: `${-row * 100}%`,
+                                };
+                              }
+                            }
+                          }
+                          
                           // Always render the layer to maintain sequencing and playback state (master),
                           // but make it visually hidden if it's not meant for the current active preview.
                           const isVisuallyActive = l.isVisible && isTargetOutput;
@@ -1751,10 +1783,11 @@ const Monitor = React.memo(
                           return (
                             <div
                               key={`${l.id}`}
-                              className="absolute inset-0 pointer-events-none"
+                              className="absolute pointer-events-none"
                               style={{
                                 opacity: isVisuallyActive ? l.opacity : 0,
-                                zIndex: layers.length - index + 10
+                                zIndex: layers.length - index + 10,
+                                ...virtualStyle,
                               }}
                             >
                               <svg width="0" height="0" className="absolute">
@@ -2022,57 +2055,51 @@ const Monitor = React.memo(
 const PixelMapModal = ({
   isOpen,
   onClose,
-  slices,
-  onUpdateSlices,
+  outputs,
+  onUpdateOutputs,
 }: {
   isOpen: boolean;
   onClose: () => void;
-  slices: any[];
-  onUpdateSlices: (slices: any[]) => void;
+  outputs: any[];
+  onUpdateOutputs: (outputs: any[]) => void;
 }) => {
-  const [activeSliceId, setActiveSliceId] = useState<string | null>(
-    slices[0]?.id || null,
-  );
-  const [viewMode, setViewMode] = useState<"input" | "output">("input");
-  const [showTestCard, setShowTestCard] = useState(false);
-  const [snapToGrid, setSnapToGrid] = useState(true);
-
-  const activeSlice = slices.find((s) => s.id === activeSliceId);
-
-  const updateActiveSlice = (updates: any) => {
-    onUpdateSlices(
-      slices.map((s) => (s.id === activeSliceId ? { ...s, ...updates } : s)),
-    );
-  };
-
-  const addSlice = () => {
-    const newSlice = {
-      id: `slice-${Date.now()}`,
-      name: `Slice ${slices.length + 1}`,
-      x: 0,
-      y: 0,
-      width: 1920,
-      height: 1080,
-      outputX: 0,
-      outputY: 0,
-      outputWidth: 1920,
-      outputHeight: 1080,
-    };
-    onUpdateSlices([...slices, newSlice]);
-    setActiveSliceId(newSlice.id);
-  };
-
-  const deleteSlice = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (slices.length <= 1) return;
-    const newSlices = slices.filter((s) => s.id !== id);
-    onUpdateSlices(newSlices);
-    if (activeSliceId === id) {
-      setActiveSliceId(newSlices[0].id);
-    }
-  };
+  const [mosaicName, setMosaicName] = useState("Virtual Mosaic 1");
+  const [cols, setCols] = useState(2);
+  const [rows, setRows] = useState(1);
+  const [gridAssignments, setGridAssignments] = useState<Record<string, string>>({});
 
   if (!isOpen) return null;
+
+  const handleSave = () => {
+    const newVirtualOutput = {
+      id: `virtual-${Date.now()}`,
+      name: mosaicName,
+      isVirtual: true,
+      grid: { cols, rows },
+      assignments: gridAssignments,
+    };
+    onUpdateOutputs([...outputs, newVirtualOutput]);
+    onClose();
+  };
+
+  const handleDragStart = (e: React.DragEvent, outputId: string) => {
+    e.dataTransfer.setData("text/plain", outputId);
+  };
+
+  const handleDrop = (e: React.DragEvent, col: number, row: number) => {
+    e.preventDefault();
+    const outputId = e.dataTransfer.getData("text/plain");
+    const newAssignments = { ...gridAssignments };
+    Object.keys(newAssignments).forEach(key => {
+       if (newAssignments[key] === outputId) delete newAssignments[key];
+    });
+    newAssignments[`${col}-${row}`] = outputId;
+    setGridAssignments(newAssignments);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-obs-bg/90 backdrop-blur-sm p-8">
@@ -2081,34 +2108,12 @@ const PixelMapModal = ({
         animate={{ opacity: 1, scale: 1 }}
         className="w-full h-full max-w-6xl bg-obs-bg border border-obs-border rounded-lg shadow-2xl flex flex-col overflow-hidden"
       >
-        {/* Header */}
         <div className="h-12 border-b border-obs-border flex items-center justify-between px-4 bg-obs-surface">
           <div className="flex items-center gap-3">
             <Layers size={16} className="text-obs-accent" />
             <h2 className="text-sm font-bold uppercase tracking-wider">
-              Advanced Output / Pixel Map
+              Advanced Output / Virtual Mosaic Map
             </h2>
-            <div className="h-4 w-[1px] bg-obs-border mx-2" />
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 cursor-pointer group">
-                <div
-                  className={`w-3 h-3 rounded-sm border transition-colors ${showTestCard ? "bg-obs-accent border-obs-accent" : "border-obs-muted group-hover:border-obs-text"}`}
-                  onClick={() => setShowTestCard(!showTestCard)}
-                />
-                <span className="text-[10px] uppercase font-bold text-obs-muted group-hover:text-obs-text">
-                  Test Card
-                </span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer group">
-                <div
-                  className={`w-3 h-3 rounded-sm border transition-colors ${snapToGrid ? "bg-obs-accent border-obs-accent" : "border-obs-muted group-hover:border-obs-text"}`}
-                  onClick={() => setSnapToGrid(!snapToGrid)}
-                />
-                <span className="text-[10px] uppercase font-bold text-obs-muted group-hover:text-obs-text">
-                  Snap
-                </span>
-              </label>
-            </div>
           </div>
           <button
             onClick={onClose}
@@ -2118,261 +2123,162 @@ const PixelMapModal = ({
           </button>
         </div>
 
-        {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left Panel: Slices List */}
           <div className="w-64 border-r border-obs-border flex flex-col bg-obs-surface/50">
             <div className="p-3 border-b border-obs-border flex justify-between items-center">
               <span className="text-[10px] font-bold uppercase text-obs-muted">
-                Slices
+                Available Outputs
               </span>
-              <button
-                onClick={addSlice}
-                className="p-1 hover:bg-obs-accent hover:text-white rounded transition-colors"
-              >
-                <Plus size={14} />
-              </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              {slices.map((slice) => (
-                <div
-                  key={slice.id}
-                  onClick={() => setActiveSliceId(slice.id)}
-                  role="button"
-                  tabIndex={0}
-                  className={`w-full text-left px-3 py-2 rounded text-[11px] transition-all flex items-center justify-between group cursor-pointer ${
-                    activeSliceId === slice.id
-                      ? "bg-obs-accent text-white"
-                      : "hover:bg-obs-border text-obs-text"
-                  }`}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      setActiveSliceId(slice.id);
-                    }
-                  }}
-                >
-                  <div className="flex items-center gap-2">
-                    <GripVertical size={12} className="opacity-50" />
-                    {slice.name}
-                  </div>
-                  <button
-                    onClick={(e) => deleteSlice(slice.id, e)}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500 rounded transition-all"
-                  >
-                    <Plus size={12} className="rotate-45" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Center Panel: Canvas Editor */}
-          <div className="flex-1 flex flex-col bg-obs-dark-1 relative">
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex bg-obs-surface border border-obs-border rounded-full p-1 shadow-lg">
-              <button
-                onClick={() => setViewMode("input")}
-                className={`px-4 py-1 rounded-full text-[10px] font-bold transition-all ${viewMode === "input" ? "bg-obs-accent text-white" : "text-obs-muted hover:text-obs-text"}`}
-              >
-                Input Selection
-              </button>
-              <button
-                onClick={() => setViewMode("output")}
-                className={`px-4 py-1 rounded-full text-[10px] font-bold transition-all ${viewMode === "output" ? "bg-obs-accent text-white" : "text-obs-muted hover:text-obs-text"}`}
-              >
-                Output Transformation
-              </button>
-            </div>
-
-            <div className="flex-1 flex items-center justify-center p-12">
-              <div className="w-full aspect-video bg-obs-surface/20 border border-obs-text/10 relative shadow-2xl overflow-hidden">
-                {/* Test Card Background */}
-                {showTestCard && (
-                  <div className="absolute inset-0 z-0 opacity-40 pointer-events-none">
-                    <div className="absolute inset-0 grid grid-cols-8 grid-rows-8">
-                      {Array.from({ length: 64 }).map((_, i) => (
-                        <div
-                          key={i}
-                          className={`border border-obs-text/20 ${i % 2 === 0 ? "bg-obs-dark-1" : "bg-transparent"}`}
-                        />
-                      ))}
-                    </div>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-full h-[1px] bg-obs-accent/50" />
-                      <div className="h-full w-[1px] bg-obs-accent/50 absolute" />
-                      <div className="w-64 h-64 border-2 border-obs-accent/50 rounded-full" />
-                    </div>
-                  </div>
-                )}
-
-                {/* Canvas Grid */}
-                <div className="absolute inset-0 grid grid-cols-12 grid-rows-12 pointer-events-none opacity-5">
-                  {Array.from({ length: 144 }).map((_, i) => (
-                    <div key={i} className="border border-white" />
-                  ))}
-                </div>
-
-                {/* Slices on Canvas */}
-                {slices.map((slice) => (
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              <p className="text-[10px] text-obs-muted mb-4">
+                Drag and drop physical outputs into the grid cells.
+              </p>
+              {outputs.filter(o => !o.isVirtual).map((out) => {
+                const isAssigned = Object.values(gridAssignments).includes(out.id);
+                return (
                   <div
-                    key={slice.id}
-                    className={`absolute border-2 transition-all ${
-                      activeSliceId === slice.id
-                        ? "border-obs-accent bg-obs-accent/10 z-20"
-                        : "border-obs-text/20 bg-obs-dark-1 z-10"
+                    key={out.id}
+                    draggable={!isAssigned}
+                    onDragStart={(e) => handleDragStart(e, out.id)}
+                    className={`w-full text-left px-3 py-3 rounded text-[11px] font-bold transition-all flex items-center gap-2 border ${
+                      isAssigned
+                        ? "bg-obs-dark-1 border-obs-border text-obs-muted opacity-50 cursor-not-allowed"
+                        : "bg-obs-surface border-obs-border hover:border-obs-accent cursor-grab active:cursor-grabbing text-obs-text shadow-sm"
                     }`}
-                    style={{
-                      left: `${(viewMode === "input" ? slice.x : slice.outputX) / 19.2}%`,
-                      top: `${(viewMode === "input" ? slice.y : slice.outputY) / 10.8}%`,
-                      width: `${(viewMode === "input" ? slice.width : slice.outputWidth) / 19.2}%`,
-                      height: `${(viewMode === "input" ? slice.height : slice.outputHeight) / 10.8}%`,
-                    }}
                   >
-                    <div className="absolute -top-5 left-0 text-[9px] font-bold text-obs-accent whitespace-nowrap">
-                      {slice.name} (
-                      {viewMode === "input"
-                        ? `${slice.width}x${slice.height}`
-                        : `${slice.outputWidth}x${slice.outputHeight}`}
-                      )
-                    </div>
+                    <MonitorIcon size={14} className={isAssigned ? "opacity-50" : "text-obs-accent"} />
+                    {out.name} {isAssigned && "(Assigned)"}
                   </div>
-                ))}
-              </div>
+                );
+              })}
             </div>
           </div>
 
-          {/* Right Panel: Slice Properties */}
+          <div className="flex-1 flex flex-col bg-obs-dark-1 relative items-center justify-center p-12">
+            <div className="w-full max-w-4xl aspect-video flex items-center justify-center">
+               <div 
+                  className="grid gap-2 p-2 bg-obs-surface/40 border border-obs-border rounded"
+                  style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`, width: "100%", height: "100%" }}
+               >
+                 {Array.from({ length: cols * rows }).map((_, i) => {
+                    const col = i % cols;
+                    const row = Math.floor(i / cols);
+                    const assignedId = gridAssignments[`${col}-${row}`];
+                    const assignedOutput = outputs.find(o => o.id === assignedId);
+
+                    return (
+                      <div 
+                        key={i}
+                        onDrop={(e) => handleDrop(e, col, row)}
+                        onDragOver={handleDragOver}
+                        className={`relative border-2 rounded flex items-center justify-center overflow-hidden transition-all ${
+                          assignedOutput 
+                            ? "border-obs-accent bg-obs-accent/20" 
+                            : "border-dashed border-obs-muted/50 bg-obs-dark-1 hover:border-obs-accent hover:bg-obs-accent/10"
+                        }`}
+                      >
+                         {assignedOutput ? (
+                           <div className="flex flex-col items-center gap-2">
+                             <MonitorIcon size={32} className="text-obs-accent" />
+                             <span className="text-[12px] font-bold bg-obs-accent text-white px-2 py-0.5 rounded shadow">
+                               {assignedOutput.name}
+                             </span>
+                             <button
+                               onClick={(e) => {
+                                  e.stopPropagation();
+                                  const newAssigns = { ...gridAssignments };
+                                  delete newAssigns[`${col}-${row}`];
+                                  setGridAssignments(newAssigns);
+                               }}
+                               className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-1 rounded transition-colors"
+                             >
+                                <X size={12} strokeWidth={3} />
+                             </button>
+                           </div>
+                         ) : (
+                           <span className="text-[10px] uppercase font-bold text-obs-muted pointer-events-none">
+                             Drop output here
+                           </span>
+                         )}
+                         <div className="absolute bottom-2 left-2 text-[9px] font-mono text-obs-muted opacity-50">
+                            Cell {col + 1}x{row + 1}
+                         </div>
+                      </div>
+                    );
+                 })}
+               </div>
+            </div>
+          </div>
+
           <div className="w-72 border-l border-obs-border flex flex-col bg-obs-surface/50">
             <div className="p-3 border-b border-obs-border">
               <span className="text-[10px] font-bold uppercase text-obs-muted">
-                Properties
+                Mosaic Virtual Output
               </span>
             </div>
-            {activeSlice ? (
-              <div className="p-4 space-y-6 overflow-y-auto">
-                <div className="space-y-4">
-                  <div className="text-[10px] font-bold text-obs-accent uppercase">
-                    General
+            <div className="p-4 space-y-6 overflow-y-auto">
+              <div className="space-y-4">
+                <div className="text-[10px] font-bold text-obs-accent uppercase">
+                  Configuration
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] text-obs-muted uppercase font-bold">
+                    Virtual Output Name
+                  </label>
+                  <input
+                    type="text"
+                    value={mosaicName}
+                    onChange={(e) => setMosaicName(e.target.value)}
+                    className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
+                    placeholder="e.g. Mosaic 1"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="text-[10px] font-bold text-obs-accent uppercase">
+                  Grid Layout
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[9px] text-obs-muted uppercase font-bold">
+                      Columns
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={8}
+                      value={cols}
+                      onChange={(e) => setCols(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
+                    />
                   </div>
                   <div className="space-y-1">
                     <label className="text-[9px] text-obs-muted uppercase font-bold">
-                      Name
+                      Rows
                     </label>
                     <input
-                      type="text"
-                      value={activeSlice.name}
-                      onChange={(e) =>
-                        updateActiveSlice({ name: e.target.value })
-                      }
+                      type="number"
+                      min={1}
+                      max={8}
+                      value={rows}
+                      onChange={(e) => setRows(Math.max(1, parseInt(e.target.value) || 1))}
                       className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
                     />
                   </div>
                 </div>
-
-                <div className="space-y-4">
-                  <div className="text-[10px] font-bold text-obs-accent uppercase">
-                    {viewMode === "input"
-                      ? "Input Selection"
-                      : "Output Transformation"}
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[9px] text-obs-muted uppercase font-bold">
-                        X
-                      </label>
-                      <input
-                        type="number"
-                        value={
-                          viewMode === "input"
-                            ? activeSlice.x
-                            : activeSlice.outputX
-                        }
-                        onChange={(e) =>
-                          updateActiveSlice(
-                            viewMode === "input"
-                              ? { x: parseInt(e.target.value) }
-                              : { outputX: parseInt(e.target.value) },
-                          )
-                        }
-                        className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] text-obs-muted uppercase font-bold">
-                        Y
-                      </label>
-                      <input
-                        type="number"
-                        value={
-                          viewMode === "input"
-                            ? activeSlice.y
-                            : activeSlice.outputY
-                        }
-                        onChange={(e) =>
-                          updateActiveSlice(
-                            viewMode === "input"
-                              ? { y: parseInt(e.target.value) }
-                              : { outputY: parseInt(e.target.value) },
-                          )
-                        }
-                        className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] text-obs-muted uppercase font-bold">
-                        Width
-                      </label>
-                      <input
-                        type="number"
-                        value={
-                          viewMode === "input"
-                            ? activeSlice.width
-                            : activeSlice.outputWidth
-                        }
-                        onChange={(e) =>
-                          updateActiveSlice(
-                            viewMode === "input"
-                              ? { width: parseInt(e.target.value) }
-                              : { outputWidth: parseInt(e.target.value) },
-                          )
-                        }
-                        className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] text-obs-muted uppercase font-bold">
-                        Height
-                      </label>
-                      <input
-                        type="number"
-                        value={
-                          viewMode === "input"
-                            ? activeSlice.height
-                            : activeSlice.outputHeight
-                        }
-                        onChange={(e) =>
-                          updateActiveSlice(
-                            viewMode === "input"
-                              ? { height: parseInt(e.target.value) }
-                              : { outputHeight: parseInt(e.target.value) },
-                          )
-                        }
-                        className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
-                      />
-                    </div>
-                  </div>
+                <div className="flex flex-wrap gap-2 pt-2">
+                   <button onClick={() => { setCols(2); setRows(1); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">2x1</button>
+                   <button onClick={() => { setCols(3); setRows(1); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">3x1</button>
+                   <button onClick={() => { setCols(1); setRows(2); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">1x2</button>
+                   <button onClick={() => { setCols(2); setRows(2); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">2x2</button>
                 </div>
               </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center p-8 text-center">
-                <span className="text-[10px] text-obs-muted uppercase font-bold tracking-widest">
-                  Select a slice to edit
-                </span>
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
-        {/* Footer */}
         <div className="h-12 border-t border-obs-border flex items-center justify-end px-4 bg-obs-surface gap-3">
           <button
             onClick={onClose}
@@ -2381,10 +2287,11 @@ const PixelMapModal = ({
             Cancel
           </button>
           <button
-            onClick={onClose}
-            className="px-6 py-1.5 rounded bg-obs-accent text-white text-[11px] font-bold hover:bg-obs-accent/80 transition-colors"
+            onClick={handleSave}
+            disabled={Object.keys(gridAssignments).length === 0}
+            className="px-6 py-1.5 rounded bg-obs-accent text-white text-[11px] font-bold hover:bg-obs-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Save Setup
+            Save Virtual Output
           </button>
         </div>
       </motion.div>
@@ -2989,10 +2896,10 @@ const VideoLayer = ({
   const activePerf = useMemo(
     () =>
       perfSettings || {
-        gpuDecoding: "d3d11",
-        engine: "native_chromium",
+        gpuDecoding: "nvdec",
+        engine: "native_bypass",
         bufferingMode: "aggressive",
-        renderingBackend: "directx11",
+        renderingBackend: "vulkan",
         codecOptimization: true,
         renderCodec: "dxv3",
         loopMode: "native_seamless",
@@ -4790,14 +4697,9 @@ const OutputView = React.memo(() => {
 
                 {/* Layer Rendering - Multi-layer mixing */}
                 {(state.layers || [])
-                  .filter(
-                    (l: any) =>
-                      l.isVisible &&
-                      (state.layerOutputs?.[l.id] === mappedOutput?.id ||
-                        !state.layerOutputs?.[l.id] ||
-                        state.layerOutputs?.[l.id] === "all"),
-                  )
                   .map((l: any, index: number) => {
+                      if (!l.isVisible) return null;
+                      
                       const activeClip = l.activeClipId
                         ? (state.clips || []).find(
                             (c: any) => c.id === l.activeClipId,
@@ -4805,13 +4707,42 @@ const OutputView = React.memo(() => {
                         : null;
                       if (!activeClip) return null;
 
+                      const lOut = state.layerOutputs?.[l.id];
+                      let isTargetOutput = lOut === mappedOutput?.id || !lOut || lOut === "all";
+                      let virtualStyle: React.CSSProperties = { width: "100%", height: "100%", left: "0%", top: "0%" };
+                      
+                      if (!isTargetOutput && lOut && mappedOutput?.id) {
+                        const targetOutput = outputs?.find((o: any) => o.id === lOut);
+                        if (targetOutput?.isVirtual) {
+                          const cellAssignments = Object.entries(targetOutput.assignments || {});
+                          const cellEntry = cellAssignments.find(([k, outId]) => outId === mappedOutput?.id);
+                          if (cellEntry) {
+                            isTargetOutput = true;
+                            const [colStr, rowStr] = cellEntry[0].split("-");
+                            const col = parseInt(colStr);
+                            const row = parseInt(rowStr);
+                            const cols = targetOutput.grid.cols || 1;
+                            const rows = targetOutput.grid.rows || 1;
+                            virtualStyle = {
+                              width: `${cols * 100}%`,
+                              height: `${rows * 100}%`,
+                              left: `${-col * 100}%`,
+                              top: `${-row * 100}%`,
+                            };
+                          }
+                        }
+                      }
+
+                      if (!isTargetOutput) return null;
+
                       return (
                         <div
                           key={l.id}
-                          className="absolute inset-0 pointer-events-none"
+                          className="absolute pointer-events-none"
                           style={{
                             opacity: l.opacity,
                             zIndex: state.layers.length - index + 10,
+                            ...virtualStyle,
                           }}
                         >
                           <svg width="0" height="0" className="absolute">
@@ -5747,8 +5678,8 @@ const Inspector = React.memo(
                           }
                           className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center leading-tight ${layer.outputId === out.id ? "bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.4)]" : "bg-obs-bg text-obs-muted border-obs-text/5 hover:border-obs-text/10"}`}
                         >
-                          <span>OUT {out.id}</span>
-                          {screen && (
+                          <span className="truncate w-10 text-center">{out.isVirtual ? out.name : `OUT ${out.id}`}</span>
+                          {!out.isVirtual && screen && (
                             <span className="text-[6px] opacity-60 font-normal truncate max-w-full">
                               ({screen.name})
                             </span>
@@ -9272,7 +9203,7 @@ const LayersSection = React.memo(
                                   }}
                                   className={`h-5 px-1.5 text-[7px] font-black rounded flex items-center justify-center transition-all min-w-[25px] ${layerOutputs[layer.id] === out.id ? "bg-obs-accent text-white shadow-lg" : "bg-obs-dark-1 text-obs-muted hover:bg-white/5"}`}
                                 >
-                                  OUT {out.id}
+                                  {out.isVirtual ? out.name : `OUT ${out.id}`}
                                 </button>
                               ))}
                             </div>
@@ -10056,7 +9987,7 @@ const PreviewManagerModal = ({
                   clipId: null,
                   volume: 0.5,
                   isLive: false,
-                  assignedOutputs: outputs.map((o) => o.id),
+                  assignedOutputs: outputs.filter(o => !o.isVirtual).map((o) => o.id),
                   selectedOutputs: [],
                   hideOverlay: false,
                   overlayColor: "#00a3f5",
@@ -10111,7 +10042,7 @@ const PreviewManagerModal = ({
                       Salidas Disponibles
                     </span>
                     <div className="flex gap-1.5 flex-wrap">
-                      {outputs.map((out) => (
+                      {outputs.filter(o => !o.isVirtual).map((out) => (
                         <button
                           key={out.id}
                           onClick={() => {
@@ -10676,6 +10607,48 @@ export default function App() {
   const [saveFileName, setSaveFileName] = useState("");
   const [isExitModalOpen, setIsExitModalOpen] = useState(false);
   const [isPreferencesModalOpen, setIsPreferencesModalOpen] = useState(false);
+
+  const [currentFont, setCurrentFont] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem("lumin_font");
+      return saved || "ibm";
+    } catch {
+      return "ibm";
+    }
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    let sansFont = '"IBM Plex Sans", ui-sans-serif, sans-serif';
+    
+    switch (currentFont) {
+      case "inter":
+        sansFont = '"Inter", ui-sans-serif, sans-serif';
+        break;
+      case "barlow":
+        sansFont = '"Barlow Condensed", ui-sans-serif, sans-serif';
+        break;
+      case "space":
+        sansFont = '"Space Grotesk", ui-sans-serif, sans-serif';
+        break;
+      case "cinzel":
+        sansFont = '"Cinzel", serif';
+        break;
+      case "mono":
+        sansFont = '"JetBrains Mono", monospace';
+        break;
+      case "ibm":
+      default:
+        sansFont = '"IBM Plex Sans", ui-sans-serif, sans-serif';
+        break;
+    }
+    
+    root.style.setProperty("--custom-sans", sansFont);
+    try {
+      localStorage.setItem("lumin_font", currentFont);
+    } catch {}
+  }, [currentFont]);
+
   const [isPptImporting, setIsPptImporting] = useState(false);
   const [pptImportProgress, setPptImportProgress] = useState(0);
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -11645,10 +11618,10 @@ export default function App() {
       if (saved) return JSON.parse(saved);
     } catch {}
     return {
-      gpuDecoding: "d3d11", // 'd3d11' | 'dxva2' | 'nvdec' | 'vaapi' | 'software'
-      engine: "native_chromium", // 'ffmpeg' | 'libvlc' | 'native_chromium'
+      gpuDecoding: "nvdec", // 'd3d11' | 'dxva2' | 'nvdec' | 'vaapi' | 'software'
+      engine: "native_bypass", // 'ffmpeg' | 'libvlc' | 'native_chromium' | 'native_bypass'
       bufferingMode: "aggressive", // 'normal' | 'aggressive' | 'ultra_preload'
-      renderingBackend: "directx11", // 'directx12' | 'directx11' | 'opengl' | 'vulkan'
+      renderingBackend: "vulkan", // 'directx12' | 'directx11' | 'opengl' | 'vulkan'
       codecOptimization: true,
       loopMode: "native_seamless", // 'native_seamless' | 'double_buffer' | 'standard'
       highResOptimization: true,
@@ -12487,7 +12460,7 @@ export default function App() {
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(
     null,
   );
-  const [currentDeck, setCurrentDeck] = useState("Videos");
+  const [currentDeck, setCurrentDeck] = useState("TODOS");
 
   const addLayer = () => {
     const newId = `layer-${Date.now()}`;
@@ -13822,8 +13795,8 @@ export default function App() {
       <PixelMapModal
         isOpen={isPixelMapOpen}
         onClose={() => setIsPixelMapOpen(false)}
-        slices={slices}
-        onUpdateSlices={setSlices}
+        outputs={outputs}
+        onUpdateOutputs={setOutputs}
       />
 
       {/* MODAL: REGISTRO DE IMPORTACIÓN PPT A PDF */}
@@ -14104,6 +14077,26 @@ export default function App() {
                     <option>Español (ES)</option>
                     <option>English (US)</option>
                   </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black uppercase text-obs-muted">
+                    Tipografía del Sistema (Global Style)
+                  </label>
+                  <select
+                    value={currentFont}
+                    onChange={(e) => setCurrentFont(e.target.value)}
+                    className="w-full bg-obs-surface text-white text-[10px] font-bold p-2 border border-obs-border rounded focus:outline-none focus:border-obs-accent cursor-pointer"
+                  >
+                    <option value="ibm">IBM Plex Sans (Por Defecto)</option>
+                    <option value="inter">Inter (Moderno Minimalista)</option>
+                    <option value="barlow">Barlow Condensed (Alta Densidad - Resolume Style)</option>
+                    <option value="space">Space Grotesk (Tecnológico / Futurista)</option>
+                    <option value="cinzel">Cinzel (Estilo Galería de Arte / Serif)</option>
+                    <option value="mono">JetBrains Mono (Consola de Programación)</option>
+                  </select>
+                  <p className="text-[7.5px] text-obs-muted mt-0.5">
+                    Ajusta inmediatamente el estilo visual o densidad del texto de toda la interfaz de LUMIN.
+                  </p>
                 </div>
                 <div className="space-y-1">
                   <label className="text-[9px] font-black uppercase text-obs-muted font-sans">
@@ -14886,6 +14879,7 @@ export default function App() {
                     <div className="w-full aspect-video shadow-xl relative border rounded overflow-hidden border-obs-muted/40 hover:border-obs-muted/70 bg-black">
                       {activeLeftPreview === "preview" ? (
                         <Monitor
+                          outputs={outputs}
                           title="VISTA PREVIA"
                           activeClip={previewClip}
                           isDarkMode={isDarkMode}
@@ -14910,6 +14904,7 @@ export default function App() {
                         </div>
                       ) : (
                         <Monitor
+                          outputs={outputs}
                           title={`VISTA SALIDA ${activeLeftPreview}`}
                           isActive={isLive}
                           activeClip={clips.find((c) => c.id === outputPrograms[activeLeftPreview]) || null}
@@ -15047,7 +15042,7 @@ export default function App() {
                       >
                         <option value="preview">PREVIEW</option>
                         <option value="none">NINGUNA</option>
-                        {outputs.map((out) => (
+                        {outputs.filter(o => !o.isVirtual).map((out) => (
                           <option key={`left-preview-opt-${out.id}`} value={out.id}>
                             {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
                           </option>
@@ -15083,6 +15078,7 @@ export default function App() {
                         </div>
                       ) : (
                         <Monitor
+                          outputs={outputs}
                           title={`VISTA SALIDA ${activeRightPreview}`}
                           isActive={isLive}
                           activeClip={clips.find((c) => c.id === outputPrograms[activeRightPreview]) || null}
@@ -15215,7 +15211,7 @@ export default function App() {
                         className="bg-obs-surface text-white text-[10px] font-bold p-1 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-24 uppercase"
                       >
                         <option value="none">NINGUNA</option>
-                        {outputs.map((out) => (
+                        {outputs.filter(o => !o.isVirtual).map((out) => (
                           <option key={`right-preview-opt-${out.id}`} value={out.id}>
                             {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
                           </option>
@@ -15268,6 +15264,7 @@ export default function App() {
                     </div>
                   ) : (
                     <Monitor
+                      outputs={outputs}
                       title=""
                       isActive={isLive}
                       activeClip={programClip}
@@ -15395,7 +15392,7 @@ export default function App() {
                         className="bg-obs-surface text-white text-[11px] font-bold h-[26px] px-2 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-36 uppercase"
                       >
                         <option value="none">NINGUNA</option>
-                        {outputs.map((out) => (
+                        {outputs.filter(o => !o.isVirtual).map((out) => (
                           <option key={`output-select-opt-${out.id}`} value={out.id}>
                             {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
                           </option>

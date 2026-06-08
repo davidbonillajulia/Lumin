@@ -380,18 +380,72 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                   <p className="text-[8.5px] text-obs-muted mt-0.5">Optimizar el almacenamiento y subida de texturas directo a la tarjeta gráfica para evitar micro-cortes.</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Option: Pipeline de renderizado basado en GPU */}
-                  <div className="bg-obs-surface p-3.5 rounded border border-obs-border flex flex-col justify-between">
+                <div className="bg-obs-surface p-4 rounded border border-obs-border space-y-4">
+                  <span className="text-[10px] text-white font-black uppercase tracking-wider flex items-center gap-1.5">
+                    <Settings size={12} className="text-obs-accent" />
+                    CONFIGURACIÓN DEL MOTOR DE VÍDEO Y API GRÁFICA
+                  </span>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    {/* Motor Selector */}
                     <div className="flex flex-col gap-1.5">
-                      <span className="text-[9px] text-white uppercase font-black">Renderizado Híbrido GPU Direct</span>
-                      <p className="text-[8px] text-obs-muted leading-relaxed">Fuerza el pintado mediante hilos directos con aceleración de shaders. Reduce el uso de CPU a menos del 5%.</p>
+                      <span className="text-[8.5px] text-obs-text font-black uppercase">Motor de Video Principal</span>
+                      <select
+                        id="perf-engine-select"
+                        value={localSettings.engine}
+                        onChange={(e) => setLocalSettings(p => ({ ...p, engine: e.target.value }))}
+                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer"
+                      >
+                        <option value="native_bypass">C++ Native Bypass (DirectX 12/Vulkan)</option>
+                        <option value="native_chromium">Chromium Overlay (Legacy Electron)</option>
+                      </select>
+                      <span className="text-[7.5px] text-obs-muted">Bypass de Electron para 0ms latencia</span>
                     </div>
-                    <div className="mt-3.5 flex justify-between items-center bg-obs-bg/40 p-1.5 rounded">
-                      <span className="text-[8px] text-obs-muted font-bold uppercase">Motor Activo</span>
-                      <span className="text-[8px] text-obs-accent font-black uppercase font-mono bg-obs-accent/5 px-2.5 py-0.5 rounded border border-obs-accent/15">Vulkan / D3D11</span>
+
+                    {/* Backend Select */}
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[8.5px] text-obs-text font-black uppercase">Backend Gráfico GPU</span>
+                      <select
+                        id="perf-backend-select"
+                        value={localSettings.renderingBackend}
+                        onChange={(e) => setLocalSettings(p => ({ ...p, renderingBackend: e.target.value }))}
+                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer"
+                      >
+                        <option value="vulkan">Vulkan Native API (Stable Mapping)</option>
+                        <option value="directx12">Direct3D 12 Ultimate (V-Sync Core)</option>
+                        <option value="directx11">Direct3D 11 (Legacy Direct3D)</option>
+                        <option value="opengl">OpenGL Desktop (NVIDIA/AMD Driver)</option>
+                      </select>
+                      <span className="text-[7.5px] text-obs-muted">Aceleración por hardware nativa</span>
+                    </div>
+
+                    {/* Hardware Decoder Select */}
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[8.5px] text-obs-text font-black uppercase">Descompresión HW</span>
+                      <select
+                        id="perf-decoder-select"
+                        value={localSettings.gpuDecoding}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setLocalSettings(p => ({ 
+                            ...p, 
+                            gpuDecoding: val,
+                            nvdecEnabled: val === 'nvdec'
+                          }));
+                        }}
+                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer"
+                      >
+                        <option value="nvdec">FFmpeg + NVDEC (NVIDIA CUDA ASIC)</option>
+                        <option value="d3d11">FFmpeg + D3D11VA (DirectX Standard)</option>
+                        <option value="dxva2">DXVA2 (Windows Legacy Core)</option>
+                        <option value="software">Software (Multi-thread CPU)</option>
+                      </select>
+                      <span className="text-[7.5px] text-obs-muted">Descompresión directa en el chip</span>
                     </div>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
 
                   {/* Option: Texturas persistentes en VRAM */}
                   <div className="bg-obs-surface p-3.5 rounded border border-obs-border flex flex-col justify-between">
