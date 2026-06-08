@@ -400,9 +400,12 @@ const FluidTimeDisplay = ({
   eventId,
   isRemaining,
   className,
-  clipId,
+  clipId: propClipId,
   outputId,
   clips,
+  monitorId,
+  layers,
+  layerOutputs,
 }: {
   eventId: string;
   isRemaining?: boolean;
@@ -410,15 +413,35 @@ const FluidTimeDisplay = ({
   clipId?: string | null;
   outputId?: string;
   clips?: any[];
+  monitorId?: string;
+  layers?: any[];
+  layerOutputs?: any;
 }) => {
   const spanRef = useRef<HTMLSpanElement>(null);
 
-  const trackerId = useMemo(() => {
-    if (outputId && clipId) {
-      return `output_${outputId}_${clipId}`;
+  const { resolvedClipId, resolvedTrackerId } = useMemo(() => {
+    // 1. Check if there are active layer video clips mapped on this outputId
+    if (outputId && outputId !== "none" && layers && layerOutputs) {
+      for (const l of layers) {
+        const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === outputId;
+        if (l.activeClipId && l.isVisible !== false && isTargetOutput) {
+          const clip = clips?.find((c) => c.id === l.activeClipId);
+          if (clip && (clip.type === "video" || clip.type === "videoinput")) {
+            return {
+              resolvedClipId: l.activeClipId,
+              resolvedTrackerId: `layer_${outputId}_${l.id}_${l.activeClipId}`,
+            };
+          }
+        }
+      }
     }
-    return null;
-  }, [outputId, clipId]);
+
+    // 2. Fallback to the explicit/background clipId
+    return {
+      resolvedClipId: propClipId,
+      resolvedTrackerId: outputId && propClipId ? `output_${outputId}_${propClipId}` : null,
+    };
+  }, [propClipId, outputId, clips, layers, layerOutputs]);
 
   useEffect(() => {
     let animId: number;
@@ -432,22 +455,48 @@ const FluidTimeDisplay = ({
         lastSysTime = now;
 
         if (spanRef.current) {
-          let displayTime = 0;
-          const video = (window as any).__luminProgramVideo;
+          if (!resolvedClipId || outputId === "none" || monitorId === "none") {
+            const defaultText = (isRemaining ? "-" : "") + "00:00:00";
+            if (spanRef.current.innerText !== defaultText) {
+              spanRef.current.innerText = defaultText;
+            }
+            lastSysTime = now;
+            animId = requestAnimationFrame(loop);
+            return;
+          }
 
-          const clip = clips?.find((c) => c.id === clipId);
+          let displayTime = 0;
+          const video = (resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
+                        (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
+                        (resolvedClipId && (window as any).__luminVideos?.[resolvedClipId]) ||
+                        (monitorId && (window as any).__luminVideos?.[monitorId]) ||
+                        (outputId && (window as any).__luminVideos?.[outputId]) ||
+                        (window as any).__luminProgramVideo;
+
+          const clip = clips?.find((c) => c.id === resolvedClipId);
           const activeIsPlaying = clip ? (clip.isPlaying !== false) : false;
           const actualTotal = clip?.duration || 0;
 
           if (video) {
-            const actualCurrent = video.currentTime || 0;
+            const broadcastCurrent = resolvedTrackerId ? ((window as any).__luminVideoTimes?.[resolvedTrackerId] || 0) : 0;
+            let actualCurrent = video.currentTime || 0;
             const actualTotalVideo = video.duration || 0;
 
-            // If the video global reference changed, reset smoothedTime to prevent garbage jumps
-            if ((window as any).__lastVideoRef !== video) {
-              (window as any).__lastVideoRef = video;
-              if (trackerId) {
-                smoothedTime = (window as any).__luminVideoTimes?.[trackerId] ?? actualCurrent;
+            if (broadcastCurrent > actualCurrent && broadcastCurrent < actualTotalVideo) {
+              actualCurrent = broadcastCurrent;
+              if (Math.abs(video.currentTime - broadcastCurrent) > 0.3) {
+                video.currentTime = broadcastCurrent;
+              }
+            }
+
+            const videoRefKey = outputId || "default";
+            if (!(window as any).__lastVideoRefs) {
+              (window as any).__lastVideoRefs = {};
+            }
+            if ((window as any).__lastVideoRefs[videoRefKey] !== video) {
+              (window as any).__lastVideoRefs[videoRefKey] = video;
+              if (resolvedTrackerId) {
+                smoothedTime = (window as any).__luminVideoTimes?.[resolvedTrackerId] ?? actualCurrent;
               } else {
                 smoothedTime = actualCurrent;
               }
@@ -455,13 +504,10 @@ const FluidTimeDisplay = ({
 
             if (!video.paused && !video.ended && video.readyState >= 2) {
               const diff = actualCurrent - smoothedTime;
-              // If the video time jumped significantly (seeking or starting), snap to it
               if (Math.abs(diff) > 0.3) {
                 smoothedTime = actualCurrent;
               } else {
-                // Extrapolate forward with the clock
                 smoothedTime += dt * video.playbackRate;
-                // Prevent it from drifting too far above real time
                 if (smoothedTime < actualCurrent) smoothedTime = actualCurrent;
                 else if (smoothedTime > actualCurrent + 0.1)
                   smoothedTime = actualCurrent + 0.1;
@@ -475,7 +521,7 @@ const FluidTimeDisplay = ({
               : Math.min(smoothedTime, actualTotalVideo);
           } else {
             // Fallback to background Broadcast value
-            const actualCurrent = trackerId ? ((window as any).__luminVideoTimes?.[trackerId] || 0) : 0;
+            const actualCurrent = resolvedTrackerId ? ((window as any).__luminVideoTimes?.[resolvedTrackerId] || 0) : 0;
 
             if (activeIsPlaying && actualCurrent > 0 && actualCurrent < actualTotal) {
               const diff = actualCurrent - smoothedTime;
@@ -513,7 +559,7 @@ const FluidTimeDisplay = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [eventId, isRemaining, clipId, trackerId, clips]);
+  }, [eventId, isRemaining, resolvedClipId, resolvedTrackerId, clips, outputId, monitorId]);
 
   return (
     <span ref={spanRef} className={className}></span>
@@ -1091,6 +1137,7 @@ const ScaleToFit = ({
     outputId,
     isVisuallyActive = true,
     onLevelChange,
+    monitorId,
   }: { 
     layer: Layer; 
     clips: Clip[]; 
@@ -1108,6 +1155,7 @@ const ScaleToFit = ({
     outputId?: string;
     isVisuallyActive?: boolean;
     onLevelChange?: (level: number) => void;
+    monitorId?: string;
   }) => {
     const activeClip = layer.activeClipId ? clips?.find((c) => c.id === layer.activeClipId) : null;
     const initialKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
@@ -1239,6 +1287,7 @@ const ScaleToFit = ({
               }
               layerId={layer.id}
               outputId={outputId}
+              monitorId={monitorId}
               isVisuallyActive={isVisuallyActive}
               onLevelChange={(lvl) => {
                 if (bus.isBusA) {
@@ -1306,6 +1355,7 @@ const Monitor = React.memo(
     programPlayIndex = 0,
     isSlave = false,
     isCasting = false,
+    monitorId,
   }: {
     title: string;
     isActive?: boolean;
@@ -1361,6 +1411,7 @@ const Monitor = React.memo(
     programPlayIndex?: number;
     isSlave?: boolean;
     isCasting?: boolean;
+    monitorId?: string;
   }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const lastSrc = useRef<string>("");
@@ -1512,7 +1563,7 @@ const Monitor = React.memo(
       }
     }, [busAClip?.id]);
 
-    const isContentActive = isActive && isTransmitting;
+    const isContentActive = isActive;
 
     // Decide if we should show ANY content in Program (including transition buffer)
     const hasActiveContent =
@@ -1595,8 +1646,7 @@ const Monitor = React.memo(
                     opacity: settings?.opacity ?? 1,
                     backgroundColor:
                       settings?.showBackground &&
-                      settings?.backgroundImage &&
-                      !hasActiveContent
+                      settings?.backgroundImage
                         ? "transparent"
                         : "#000",
                     transform: `scale(${settings?.scalingW ?? 1}, ${settings?.scalingH ?? 1}) translate(${settings?.x ?? 0}px, ${settings?.y ?? 0}px) rotate(${settings?.rotation ?? 0}deg)`,
@@ -1615,7 +1665,7 @@ const Monitor = React.memo(
                     </filter>
                   </svg>
 
-                  {isActive && isTransmitting ? (
+                  {isActive ? (
                     <motion.div
                       initial={{ opacity: 1 }}
                       animate={{ opacity: isProgramOff ? 0 : 1 }}
@@ -1651,6 +1701,7 @@ const Monitor = React.memo(
                               isSlave={isSlave}
                               isClockSource={crossfaderValue === 0}
                               outputId={activeOutputId || "1"}
+                              monitorId={monitorId}
                             />
                           )}
                         {activeBusBClip && (
@@ -1678,6 +1729,7 @@ const Monitor = React.memo(
                             onReady={() => setIsBusAReady(true)}
                             isSlave={isSlave}
                             outputId={activeOutputId || "1"}
+                            monitorId={monitorId}
                           />
                         )}
                       </AnimatePresence>
@@ -1754,6 +1806,7 @@ const Monitor = React.memo(
                                       !hasGlobalSource && index === 0
                                     }
                                     outputId={resolvedOutputId}
+                                    monitorId={monitorId}
                                     isVisuallyActive={isVisuallyActive}
                                     onLevelChange={(lvl) => {
                                       if (isVisuallyActive) {
@@ -1855,6 +1908,11 @@ const Monitor = React.memo(
                       )}
                     </div>
                   )}
+                  {isProgram &&
+                    settings &&
+                    (settings.timerEnabled || settings.timerPreview) && (
+                      <OutputCountdown settings={settings} />
+                    )}
                 </div>
               </ScaleToFit>
             </div>
@@ -1881,6 +1939,7 @@ const Monitor = React.memo(
                     }
                     perfSettings={perfSettings}
                     outputId={activeOutputId}
+                    monitorId={monitorId}
                   />
                 ) : (
                   <motion.div
@@ -1954,13 +2013,6 @@ const Monitor = React.memo(
               </div>
             </div>
           )}
-
-          {/* Real-time Countdown timer preview overlay */}
-          {isProgram &&
-            settings &&
-            (settings.timerEnabled || settings.timerPreview) && (
-              <OutputCountdown settings={settings} />
-            )}
         </div>
       </div>
     );
@@ -2878,6 +2930,7 @@ const VideoLayer = ({
   layerId,
   outputId,
   isVisuallyActive = true,
+  monitorId,
 }: {
   clip: any;
   isPlaying?: boolean;
@@ -2907,6 +2960,7 @@ const VideoLayer = ({
   layerId?: string;
   outputId?: string;
   isVisuallyActive?: boolean;
+  monitorId?: string;
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>("");
@@ -3009,20 +3063,58 @@ const VideoLayer = ({
     onEndedRef.current = onEnded;
   }, [onEnded]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video && isClockSource && !isSlave) {
-      (window as any).__luminProgramVideo = video;
-      if (typeof window !== "undefined") {
-        (window as any).__lastProgramVideo = video;
+  const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    if (el) {
+      if (monitorId) {
+        (window as any).__luminVideos = (window as any).__luminVideos || {};
+        (window as any).__luminVideos[monitorId] = el;
       }
-      return () => {
-        if ((window as any).__luminProgramVideo === video) {
+      if (outputId) {
+        (window as any).__luminVideos = (window as any).__luminVideos || {};
+        (window as any).__luminVideos[outputId] = el;
+        if (clip.id) {
+          (window as any).__luminVideos[`${outputId}_${clip.id}`] = el;
+        }
+      }
+      if (trackerId) {
+        (window as any).__luminVideos = (window as any).__luminVideos || {};
+        (window as any).__luminVideos[trackerId] = el;
+      }
+      if (clip.id) {
+        (window as any).__luminVideos = (window as any).__luminVideos || {};
+        (window as any).__luminVideos[clip.id] = el;
+      }
+      if (isClockSource && !isSlave) {
+        (window as any).__luminProgramVideo = el;
+        if (typeof window !== "undefined") {
+          (window as any).__lastProgramVideo = el;
+        }
+      }
+    } else {
+      const video = videoRef.current;
+      if (video) {
+        if (monitorId && (window as any).__luminVideos?.[monitorId] === video) {
+          delete (window as any).__luminVideos[monitorId];
+        }
+        if (outputId && (window as any).__luminVideos?.[outputId] === video) {
+          delete (window as any).__luminVideos[outputId];
+        }
+        if (outputId && clip.id && (window as any).__luminVideos?.[`${outputId}_${clip.id}`] === video) {
+          delete (window as any).__luminVideos[`${outputId}_${clip.id}`];
+        }
+        if (trackerId && (window as any).__luminVideos?.[trackerId] === video) {
+          delete (window as any).__luminVideos[trackerId];
+        }
+        if (clip.id && (window as any).__luminVideos?.[clip.id] === video) {
+          delete (window as any).__luminVideos[clip.id];
+        }
+        if (isClockSource && (window as any).__luminProgramVideo === video) {
           (window as any).__luminProgramVideo = null;
         }
-      };
+      }
     }
-  }, [isClockSource, clip.id, isSlave]);
+  }, [isClockSource, clip.id, isSlave, outputId, monitorId, trackerId]);
 
   const filterId = useMemo(
     () => `filter-${clip.id}-${Math.random().toString(36).substr(2, 9)}`,
@@ -3266,21 +3358,34 @@ const VideoLayer = ({
   }, [clip.id, clip.url, clip.type]);
 
   // Audio handling
-  useEffect(() => {
+  const updateVideoVolume = useCallback(() => {
     const video = videoRef.current;
     if (video && clip.type === "video") {
       const clipBaseVolume = clip.volume !== undefined ? clip.volume : 1;
       const targetAudioOpacity =
         faderOpacity !== undefined ? faderOpacity : opacity || 1;
 
-      // combinedVolume = ProgramFader * MasterFader * TransitionFader * ClipTrim
-      const finalVolume = Math.max(
-        0,
-        Math.min(
-          1,
-          volume * masterVolume * targetAudioOpacity * clipBaseVolume,
-        ),
-      );
+      // Base calculated volume from fader, master, opacity, clip
+      let baseFinalVolume = volume * masterVolume * targetAudioOpacity * clipBaseVolume;
+
+      // Overlay selected audio output volume & mute if applicable from active system faders
+      const audioState = (window as any).__luminAudioState;
+      if (audioState) {
+        const { selectedAudioOutput, audioVolumes, mutedFaders } = audioState;
+        if (selectedAudioOutput && selectedAudioOutput !== "none") {
+          const faderKey = selectedAudioOutput.startsWith("out-") ? selectedAudioOutput : `out-${selectedAudioOutput}`;
+          const devVolume = audioVolumes[faderKey] !== undefined ? audioVolumes[faderKey] : 0.5;
+          const devMuted = !!mutedFaders[faderKey];
+          
+          if (devMuted) {
+            baseFinalVolume = 0;
+          } else {
+            baseFinalVolume *= devVolume;
+          }
+        }
+      }
+
+      const finalVolume = Math.max(0, Math.min(1, baseFinalVolume));
 
       video.volume = finalVolume;
       video.muted = isProgram ? !isTransmitting || finalVolume <= 0 : true;
@@ -3296,6 +3401,17 @@ const VideoLayer = ({
     clip.id,
     clip.url,
   ]);
+
+  useEffect(() => {
+    updateVideoVolume();
+  }, [updateVideoVolume]);
+
+  useEffect(() => {
+    window.addEventListener("lumin-volume-change", updateVideoVolume);
+    return () => {
+      window.removeEventListener("lumin-volume-change", updateVideoVolume);
+    };
+  }, [updateVideoVolume]);
 
   // Speed and sync
   useEffect(() => {
@@ -3488,7 +3604,7 @@ const VideoLayer = ({
         {clip.type === "video" || clip.type === "videoinput" ? (
           <>
             <video
-              ref={videoRef}
+              ref={videoRefCallback}
               src={clip.type === "video" ? clip.url : undefined}
               className={`w-full h-full ${!isProgram || clip.fitToScale ? "object-contain" : "object-none"}`}
               style={{
@@ -4555,8 +4671,7 @@ const OutputView = React.memo(() => {
             // If background is showing and we have no content, make container transparent
             backgroundColor:
               settings.showBackground &&
-              settings.backgroundImage &&
-              !hasActiveContent
+              settings.backgroundImage
                 ? "transparent"
                 : "#000",
             transform: `translate3d(${settings.x ?? 0}px, ${settings.y ?? 0}px, 0px) rotate(${settings.rotation ?? 0}deg)`,
@@ -10537,6 +10652,19 @@ export default function App() {
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
   const [currentLuminPath, setCurrentLuminPath] = useState<string | null>(null);
+
+  // Synchronize programClipId automatically with outputPrograms[activeOutputId]
+  useEffect(() => {
+    if (activeOutputId === "none") {
+      setProgramClipId(null);
+    } else {
+      const liveClipId = outputPrograms[activeOutputId] || null;
+      if (programClipId !== liveClipId) {
+        setProgramClipId(liveClipId);
+      }
+    }
+  }, [activeOutputId, outputPrograms, programClipId]);
+
   // Force stability on Windows by setting additional Chromium flags and preventing too many concurrent decoders
   useEffect(() => {
     if ((window as any).electron) {
@@ -11452,6 +11580,16 @@ export default function App() {
         });
     }
   }, [selectedAudioOutput]);
+
+  // Keep window.__luminAudioState synchronized and dispatch volume change events
+  useEffect(() => {
+    (window as any).__luminAudioState = {
+      selectedAudioOutput,
+      audioVolumes,
+      mutedFaders,
+    };
+    window.dispatchEvent(new CustomEvent("lumin-volume-change"));
+  }, [selectedAudioOutput, audioVolumes, mutedFaders]);
 
   const [floatingTimerPos, setFloatingTimerPos] = useState<
     Record<string, { x: number; y: number }>
@@ -14730,17 +14868,19 @@ export default function App() {
               {(() => {
                 const activeLeftPreview = leftPreviewSelection === "preview"
                   ? "preview"
-                  : (outputs.some((o) => o.id === leftPreviewSelection) ? leftPreviewSelection : "preview");
+                  : leftPreviewSelection === "none"
+                    ? "none"
+                    : (outputs.some((o) => o.id === leftPreviewSelection) ? leftPreviewSelection : "preview");
 
                 const isLeftCasting = activeLeftPreview === "preview"
                   ? (previewClipId ? (clips.find(c => c.id === previewClipId)?.type === "video" || clips.find(c => c.id === previewClipId)?.type === "videoinput" || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mp4") || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mov") || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mkv")) : false)
-                  : isVideoCurrentlyCastingOnOutput(activeLeftPreview);
+                  : (activeLeftPreview === "none" ? false : isVideoCurrentlyCastingOnOutput(activeLeftPreview));
 
                 return (
                   <div className="flex flex-col gap-1.5 group/mon relative w-[320px]">
                     <div className="flex justify-between items-end px-1">
                       <span className="text-[9px] text-[#114e6d] font-black uppercase tracking-[0.2em]">
-                        {activeLeftPreview === "preview" ? "VISTA PREVIA" : `SALIDA ${activeLeftPreview}`}
+                        {activeLeftPreview === "preview" ? "VISTA PREVIA" : activeLeftPreview === "none" ? "NINGUNA SALIDA" : `SALIDA ${activeLeftPreview}`}
                       </span>
                     </div>
                     <div className="w-full aspect-video shadow-xl relative border rounded overflow-hidden border-obs-muted/40 hover:border-obs-muted/70 bg-black">
@@ -14758,10 +14898,16 @@ export default function App() {
                           onUpdateClip={updateClip}
                           accentColor="#114e6d"
                           pipLayers={pipLayers}
-                          activeOutputId="1"
+                          activeOutputId="preview"
                           perfSettings={perfSettings}
                           isCasting={isLeftCasting}
+                          monitorId="left"
                         />
+                      ) : activeLeftPreview === "none" ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-m2 text-obs-muted text-[10px] uppercase font-black tracking-widest leading-none border-2 border-obs-border">
+                          <MonitorIcon size={40} strokeWidth={1} className="mb-2 opacity-15" />
+                          Ninguna Salida
+                        </div>
                       ) : (
                         <Monitor
                           title={`VISTA SALIDA ${activeLeftPreview}`}
@@ -14809,6 +14955,7 @@ export default function App() {
                           perfSettings={perfSettings}
                           isSlave={true}
                           isCasting={isLeftCasting}
+                          monitorId="left"
                         />
                       )}
                     </div>
@@ -14822,21 +14969,31 @@ export default function App() {
                         const clip = clips.find((c) => c.id === clipId);
 
                         const isVideo = clip && (clip.type === "video" || clip.type === "videoinput");
-                        const isPdf =
-                          !isVideo &&
-                          clip &&
-                          (clip.type === "document" ||
-                            clip.type === "ppt" ||
-                            clip.name?.toLowerCase().endsWith(".pdf"));
+                        const activeDocOrPptClip = (clip && (
+                          clip.type === "document" ||
+                          clip.type === "ppt" ||
+                          clip.name?.toLowerCase().endsWith(".pdf")
+                        )) ? clip : clips?.find((c) => {
+                          const hasLayer = (layers || []).some((l) => {
+                            const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === activeLeftPreview;
+                            return l.activeClipId === c.id && isTargetOutput;
+                          });
+                          return hasLayer && (
+                            c.type === "document" ||
+                            c.type === "ppt" ||
+                            c.name?.toLowerCase().endsWith(".pdf")
+                          );
+                        });
 
                         return (
                           <div className="flex flex-col">
                             <div className="flex items-center gap-1.5">
                               <span className="text-sm font-mono font-normal text-white leading-none tracking-tight">
-                                {isPdf ? (
-                                  `${clip.currentPage || 1} / ${clip.totalPages || 1}`
+                                {activeDocOrPptClip ? (
+                                  `${activeDocOrPptClip.currentPage || 1} / ${activeDocOrPptClip.totalPages || 1}`
                                 ) : clip?.type === "videoinput" ||
-                                  clipId?.startsWith("videoinput") ? (
+                                  clipId?.startsWith("videoinput") ||
+                                  activeLeftPreview === "none" ? (
                                   "00:00:00"
                                 ) : (
                                   <FluidTimeDisplay
@@ -14845,10 +15002,13 @@ export default function App() {
                                     clipId={clipId}
                                     outputId={activeLeftPreview}
                                     clips={clips}
+                                    monitorId="left"
+                                    layers={layers}
+                                    layerOutputs={layerOutputs}
                                   />
                                 )}
                               </span>
-                              {!isPdf && (
+                              {!activeDocOrPptClip && (
                                 <button
                                   onClick={() =>
                                     setTimerMode((prev) =>
@@ -14861,9 +15021,19 @@ export default function App() {
                                   <RefreshCw size={8} className="text-obs-muted max-h-full max-w-full" />
                                 </button>
                               )}
+                              {activeLeftPreview === "preview" && previewClipId && (
+                                <button
+                                  id="stop-preview-btn"
+                                  onClick={() => setPreviewClipId(null)}
+                                  className="p-0.5 h-4 w-4 bg-red-950 hover:bg-red-900 rounded transition-colors border border-red-800 flex items-center justify-center cursor-pointer"
+                                  title="Parar Preview"
+                                >
+                                  <Square size={8} className="text-red-400 max-h-full max-w-full" />
+                                </button>
+                              )}
                             </div>
                             <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest leading-none mt-0.5">
-                              {isPdf ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
+                              {activeDocOrPptClip ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
                             </span>
                           </div>
                         );
@@ -14876,6 +15046,7 @@ export default function App() {
                         className="bg-obs-surface text-white text-[10px] font-bold p-1 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-24 uppercase"
                       >
                         <option value="preview">PREVIEW</option>
+                        <option value="none">NINGUNA</option>
                         {outputs.map((out) => (
                           <option key={`left-preview-opt-${out.id}`} value={out.id}>
                             {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
@@ -14889,91 +15060,119 @@ export default function App() {
 
               {/* Right Preview Monitor */}
               {(() => {
-                const activeRightPreview = outputs.some((o) => o.id === rightPreviewSelection)
-                  ? rightPreviewSelection
-                  : (outputs[0]?.id || "1");
+                const activeRightPreview = rightPreviewSelection === "none"
+                  ? "none"
+                  : (outputs.some((o) => o.id === rightPreviewSelection)
+                    ? rightPreviewSelection
+                    : (outputs[0]?.id || "1"));
 
-                const isRightCasting = isVideoCurrentlyCastingOnOutput(activeRightPreview);
+                const isRightCasting = activeRightPreview === "none" ? false : isVideoCurrentlyCastingOnOutput(activeRightPreview);
 
                 return (
                   <div className="flex flex-col gap-1.5 group/mon relative w-[320px]">
                     <div className="flex justify-between items-end px-1">
-                      <span className="text-[9px] text-[#00a3f5] font-black uppercase tracking-[0.2em]">
-                        {`SALIDA ${activeRightPreview}`}
+                      <span className="text-[9px] text-[#114e6d] font-black uppercase tracking-[0.2em]">
+                        {activeRightPreview === "none" ? "NINGUNA SALIDA" : `SALIDA ${activeRightPreview}`}
                       </span>
                     </div>
                     <div className="w-full aspect-video shadow-xl relative border rounded overflow-hidden border-obs-muted/40 hover:border-obs-muted/70 bg-black">
-                      <Monitor
-                        title={`VISTA SALIDA ${activeRightPreview}`}
-                        isActive={isLive}
-                        activeClip={clips.find((c) => c.id === outputPrograms[activeRightPreview]) || null}
-                        isDarkMode={isDarkMode}
-                        clips={clips}
-                        programClipId={outputPrograms[activeRightPreview] || null}
-                        previewClipId={previewClipId}
-                        programPlayIndex={programPlayIndex}
-                        targetClipId={outputTransitionTargets[activeRightPreview]}
-                        hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
-                        crossfaderValue={crossfaderValue}
-                        isProgram={true}
-                        layers={layers}
-                        layerOutputs={layerOutputs}
-                        isTransmitting={isTransmitting}
-                        isProgramOff={outputOffStates[activeRightPreview] || false}
-                        settings={allScreenSettings[activeRightPreview] || DEFAULT_SCREEN_SETTINGS}
-                        masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
-                        onEnded={handleProgramNext}
-                        onLayerEnded={handleLayerEnded}
-                        onLevelChange={setProgramLevel}
-                        onTogglePlay={handleTogglePlay}
-                        onToggleLoop={handleToggleLoop}
-                        onRewind={handleRewind}
-                        onSkip={handleSkip}
-                        onProgressUpdate={(cur, tot) => setProgramProgress({ current: cur, total: tot })}
-                        onUpdateClip={updateClip}
-                        isPlaylist={!!programPlaylistState}
-                        volume={mutedFaders["Programa"] ? 0 : programVolume}
-                        brightness={allScreenSettings[activeRightPreview]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
-                        contrast={allScreenSettings[activeRightPreview]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
-                        saturation={allScreenSettings[activeRightPreview]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
-                        opacity={allScreenSettings[activeRightPreview]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
-                        x={allScreenSettings[activeRightPreview]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
-                        y={allScreenSettings[activeRightPreview]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
-                        rotation={allScreenSettings[activeRightPreview]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
-                        scalingW={allScreenSettings[activeRightPreview]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
-                        scalingH={allScreenSettings[activeRightPreview]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
-                        transitionType={allScreenSettings[activeRightPreview]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
-                        colorBalance={allScreenSettings[activeRightPreview]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
-                        pipLayers={pipLayers}
-                        activeOutputId={activeRightPreview}
-                        perfSettings={perfSettings}
-                        isSlave={true}
-                        isCasting={isRightCasting}
-                      />
+                      {activeRightPreview === "none" ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-m2 text-obs-muted text-[10px] uppercase font-black tracking-widest leading-none border-2 border-obs-border">
+                          <MonitorIcon size={40} strokeWidth={1} className="mb-2 opacity-15" />
+                          Ninguna Salida
+                        </div>
+                      ) : (
+                        <Monitor
+                          title={`VISTA SALIDA ${activeRightPreview}`}
+                          isActive={isLive}
+                          activeClip={clips.find((c) => c.id === outputPrograms[activeRightPreview]) || null}
+                          isDarkMode={isDarkMode}
+                          clips={clips}
+                          programClipId={outputPrograms[activeRightPreview] || null}
+                          previewClipId={previewClipId}
+                          programPlayIndex={programPlayIndex}
+                          targetClipId={outputTransitionTargets[activeRightPreview]}
+                          hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
+                          crossfaderValue={crossfaderValue}
+                          isProgram={true}
+                          layers={layers}
+                          layerOutputs={layerOutputs}
+                          isTransmitting={isTransmitting}
+                          isProgramOff={outputOffStates[activeRightPreview] || false}
+                          settings={allScreenSettings[activeRightPreview] || DEFAULT_SCREEN_SETTINGS}
+                          masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
+                          onEnded={handleProgramNext}
+                          onLayerEnded={handleLayerEnded}
+                          onLevelChange={setProgramLevel}
+                          onTogglePlay={handleTogglePlay}
+                          onToggleLoop={handleToggleLoop}
+                          onRewind={handleRewind}
+                          onSkip={handleSkip}
+                          onProgressUpdate={(cur, tot) => setProgramProgress({ current: cur, total: tot })}
+                          onUpdateClip={updateClip}
+                          isPlaylist={!!programPlaylistState}
+                          volume={mutedFaders["Programa"] ? 0 : programVolume}
+                          brightness={allScreenSettings[activeRightPreview]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
+                          contrast={allScreenSettings[activeRightPreview]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
+                          saturation={allScreenSettings[activeRightPreview]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
+                          opacity={allScreenSettings[activeRightPreview]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
+                          x={allScreenSettings[activeRightPreview]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
+                          y={allScreenSettings[activeRightPreview]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
+                          rotation={allScreenSettings[activeRightPreview]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
+                          scalingW={allScreenSettings[activeRightPreview]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
+                          scalingH={allScreenSettings[activeRightPreview]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
+                          transitionType={allScreenSettings[activeRightPreview]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
+                          colorBalance={allScreenSettings[activeRightPreview]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
+                          pipLayers={pipLayers}
+                          activeOutputId={activeRightPreview}
+                          perfSettings={perfSettings}
+                          isSlave={true}
+                          isCasting={isRightCasting}
+                          monitorId="right"
+                        />
+                      )}
                     </div>
                     {/* Control Bar containing Time / Slides on left, Select Dropdown on right */}
                     <div className="flex justify-between items-center px-2 py-1 bg-obs-dark-1/25 rounded border border-obs-border/30 mt-1">
                       {/* Timer Display */}
                       {(() => {
-                        const clipId = outputPrograms[activeRightPreview];
+                        const clipId = activeRightPreview === "none" ? null : outputPrograms[activeRightPreview];
                         const clip = clips.find((c) => c.id === clipId);
 
                         const isVideo = clip && (clip.type === "video" || clip.type === "videoinput");
-                        const isPdf =
+                        const activeDocOrPptClip =
                           !isVideo &&
                           clip &&
                           (clip.type === "document" ||
                             clip.type === "ppt" ||
-                            clip.name?.toLowerCase().endsWith(".pdf"));
+                            clip.name?.toLowerCase().endsWith(".pdf"))
+                            ? clip
+                            : !isVideo
+                              ? clips?.find((c) => {
+                                  const hasLayer = (layers || []).some(
+                                    (l) => {
+                                      const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === activeRightPreview;
+                                      return l.activeClipId === c.id && isTargetOutput;
+                                    }
+                                  );
+                                  return (
+                                    hasLayer &&
+                                    (c.type === "document" ||
+                                      c.type === "ppt" ||
+                                      c.name?.toLowerCase().endsWith(".pdf"))
+                                  );
+                                })
+                              : null;
 
                         return (
                           <div className="flex flex-col">
                             <div className="flex items-center gap-1.5">
                               <span className="text-sm font-mono font-normal text-white leading-none tracking-tight">
-                                {isPdf ? (
-                                  `${clip.currentPage || 1} / ${clip.totalPages || 1}`
+                                {activeDocOrPptClip ? (
+                                  `${activeDocOrPptClip.currentPage || 1} / ${activeDocOrPptClip.totalPages || 1}`
                                 ) : clip?.type === "videoinput" ||
-                                  clipId?.startsWith("videoinput") ? (
+                                  clipId?.startsWith("videoinput") ||
+                                  activeRightPreview === "none" ? (
                                   "00:00:00"
                                 ) : (
                                   <FluidTimeDisplay
@@ -14982,10 +15181,13 @@ export default function App() {
                                     clipId={clipId}
                                     outputId={activeRightPreview}
                                     clips={clips}
+                                    monitorId="right"
+                                    layers={layers}
+                                    layerOutputs={layerOutputs}
                                   />
                                 )}
                               </span>
-                              {!isPdf && (
+                              {!activeDocOrPptClip && (
                                 <button
                                   onClick={() =>
                                     setTimerMode((prev) =>
@@ -15000,7 +15202,7 @@ export default function App() {
                               )}
                             </div>
                             <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest leading-none mt-0.5">
-                              {isPdf ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
+                              {activeDocOrPptClip ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
                             </span>
                           </div>
                         );
@@ -15012,6 +15214,7 @@ export default function App() {
                         onChange={(e) => setRightPreviewSelection(e.target.value)}
                         className="bg-obs-surface text-white text-[10px] font-bold p-1 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-24 uppercase"
                       >
+                        <option value="none">NINGUNA</option>
                         {outputs.map((out) => (
                           <option key={`right-preview-opt-${out.id}`} value={out.id}>
                             {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
@@ -15027,9 +15230,9 @@ export default function App() {
             {/* Right: Program Monitor & Controls */}
             <div className="w-[480px] flex flex-col flex-none shrink-0 group/prog">
               <div className="flex justify-between items-end px-1 pb-0.5">
-                <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${isProgCasting ? "text-red-500" : "text-[#00a3f5]"}`}>
-                  PROGRAM SALIDA {activeOutputId}
-                  {outputs.find((o) => o.id === activeOutputId)
+                <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${isProgCasting ? "text-red-500" : "text-[#114e6d]"}`}>
+                  {activeOutputId === "none" ? "PROGRAM NINGUNA SALIDA" : `PROGRAM SALIDA ${activeOutputId}`}
+                  {activeOutputId !== "none" && outputs.find((o) => o.id === activeOutputId)
                     ?.physicalScreenId && (
                     <span className="text-obs-muted ml-2 font-medium">
                       [
@@ -15044,8 +15247,8 @@ export default function App() {
                   )}
                 </span>
                 {isLive && (
-                  <div className={`text-[7px] font-black flex items-center gap-1.5 uppercase tracking-tighter ${isProgCasting ? "text-red-500 animate-pulse" : "text-[#00a3f5]"}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${isProgCasting ? "bg-red-500" : "bg-[#00a3f5]"}`} /> ON AIR
+                  <div className={`text-[7px] font-black flex items-center gap-1.5 uppercase tracking-tighter ${isProgCasting ? "text-red-500 animate-pulse" : "text-[#114e6d]"}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${isProgCasting ? "bg-red-500" : "bg-[#114e6d]"}`} /> ON AIR
                   </div>
                 )}
               </div>
@@ -15058,67 +15261,75 @@ export default function App() {
                     setSelectedItemId("program-output");
                   }}
                 >
-                  <Monitor
-                    title=""
-                    isActive={isLive}
-                    activeClip={programClip}
-                    isDarkMode={isDarkMode}
-                    clips={clips}
-                    programClipId={programClipId}
-                    previewClipId={previewClipId}
-                    programPlayIndex={programPlayIndex}
-                    targetClipId={outputTransitionTargets[activeOutputId]}
-                    hasTransitionTargets={
-                      Object.keys(outputTransitionTargets).length > 0
-                    }
-                    crossfaderValue={crossfaderValue}
-                    isProgram={true}
-                    layers={layers}
-                    layerOutputs={layerOutputs}
-                    isTransmitting={isTransmitting}
-                    isProgramOff={outputOffStates[activeOutputId] || false}
-                    settings={
-                      allScreenSettings[activeOutputId] ||
-                      DEFAULT_SCREEN_SETTINGS
-                    }
-                    masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
-                    onEnded={handleProgramNext}
-                    onLayerEnded={handleLayerEnded}
-                    onLevelChange={setProgramLevel}
-                    onTogglePlay={handleTogglePlay}
-                    onToggleLoop={handleToggleLoop}
-                    onRewind={handleRewind}
-                    onSkip={handleSkip}
-                    onProgressUpdate={(current, total) => {
-                      setProgramProgress({ current, total });
-                      try {
-                        window.dispatchEvent(
-                          new CustomEvent("video-progress-program", {
-                            detail: { current, total },
-                          }),
-                        );
-                      } catch (e) {}
-                    }}
-                    onUpdateClip={updateClip}
-                    isPlaylist={!!programPlaylistState}
-                    volume={mutedFaders["Programa"] ? 0 : programVolume}
-                    brightness={allScreenSettings[activeOutputId]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
-                    contrast={allScreenSettings[activeOutputId]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
-                    saturation={allScreenSettings[activeOutputId]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
-                    opacity={allScreenSettings[activeOutputId]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
-                    x={allScreenSettings[activeOutputId]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
-                    y={allScreenSettings[activeOutputId]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
-                    rotation={allScreenSettings[activeOutputId]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
-                    scalingW={allScreenSettings[activeOutputId]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
-                    scalingH={allScreenSettings[activeOutputId]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
-                    transitionType={allScreenSettings[activeOutputId]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
-                    colorBalance={allScreenSettings[activeOutputId]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
-                    pipLayers={pipLayers}
-                    activeOutputId={activeOutputId}
-                    perfSettings={perfSettings}
-                    isSlave={false}
-                    isCasting={isProgCasting}
-                  />
+                  {activeOutputId === "none" ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-m2 text-obs-muted text-xs uppercase font-black tracking-widest leading-none border-2 border-obs-border">
+                      <MonitorIcon size={64} strokeWidth={1} className="mb-2 opacity-15" />
+                      Ninguna Salida Programa
+                    </div>
+                  ) : (
+                    <Monitor
+                      title=""
+                      isActive={isLive}
+                      activeClip={programClip}
+                      isDarkMode={isDarkMode}
+                      clips={clips}
+                      programClipId={programClipId}
+                      previewClipId={previewClipId}
+                      programPlayIndex={programPlayIndex}
+                      targetClipId={outputTransitionTargets[activeOutputId]}
+                      hasTransitionTargets={
+                        Object.keys(outputTransitionTargets).length > 0
+                      }
+                      crossfaderValue={crossfaderValue}
+                      isProgram={true}
+                      layers={layers}
+                      layerOutputs={layerOutputs}
+                      isTransmitting={isTransmitting}
+                      isProgramOff={outputOffStates[activeOutputId] || false}
+                      settings={
+                        allScreenSettings[activeOutputId] ||
+                        DEFAULT_SCREEN_SETTINGS
+                      }
+                      masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
+                      onEnded={handleProgramNext}
+                      onLayerEnded={handleLayerEnded}
+                      onLevelChange={setProgramLevel}
+                      onTogglePlay={handleTogglePlay}
+                      onToggleLoop={handleToggleLoop}
+                      onRewind={handleRewind}
+                      onSkip={handleSkip}
+                      onProgressUpdate={(current, total) => {
+                        setProgramProgress({ current, total });
+                        try {
+                          window.dispatchEvent(
+                            new CustomEvent("video-progress-program", {
+                              detail: { current, total },
+                            }),
+                          );
+                        } catch (e) {}
+                      }}
+                      onUpdateClip={updateClip}
+                      isPlaylist={!!programPlaylistState}
+                      volume={mutedFaders["Programa"] ? 0 : programVolume}
+                      brightness={allScreenSettings[activeOutputId]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
+                      contrast={allScreenSettings[activeOutputId]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
+                      saturation={allScreenSettings[activeOutputId]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
+                      opacity={allScreenSettings[activeOutputId]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
+                      x={allScreenSettings[activeOutputId]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
+                      y={allScreenSettings[activeOutputId]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
+                      rotation={allScreenSettings[activeOutputId]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
+                      scalingW={allScreenSettings[activeOutputId]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
+                      scalingH={allScreenSettings[activeOutputId]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
+                      transitionType={allScreenSettings[activeOutputId]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
+                      colorBalance={allScreenSettings[activeOutputId]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
+                      pipLayers={pipLayers}
+                      activeOutputId={activeOutputId}
+                      perfSettings={perfSettings}
+                      isSlave={false}
+                      isCasting={isProgCasting}
+                      monitorId="program"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -15171,13 +15382,19 @@ export default function App() {
                         onChange={(e) => {
                           const val = e.target.value;
                           setActiveOutputId(val);
-                          const chosenOut = outputs.find((o) => o.id === val);
-                          setProgramClipId(outputPrograms[val] || null);
-                          setSelectedScreenId(chosenOut?.physicalScreenId || null);
+                          if (val === "none") {
+                            setProgramClipId(null);
+                            setSelectedScreenId(null);
+                          } else {
+                            const chosenOut = outputs.find((o) => o.id === val);
+                            setProgramClipId(outputPrograms[val] || null);
+                            setSelectedScreenId(chosenOut?.physicalScreenId || null);
+                          }
                           setSelectedItemType("program");
                         }}
                         className="bg-obs-surface text-white text-[11px] font-bold h-[26px] px-2 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-36 uppercase"
                       >
+                        <option value="none">NINGUNA</option>
                         {outputs.map((out) => (
                           <option key={`output-select-opt-${out.id}`} value={out.id}>
                             {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
@@ -15195,7 +15412,7 @@ export default function App() {
                         isTransmitting
                           ? isProgCasting
                             ? "bg-red-600 border-red-500 shadow-[0_0_10px_rgba(220,38,38,0.4)]"
-                            : "bg-[#00a3f5] border-[#00a3f5] shadow-[0_0_10px_rgba(0,163,245,0.4)] hover:bg-[#008fdb]"
+                            : "bg-[#114e6d] border-[#114e6d] shadow-[0_0_10px_rgba(17,78,109,0.4)] hover:bg-[#114e6d]/80"
                           : "bg-obs-dark-1 border-obs-text/10 hover:bg-obs-text/10"
                       }`}
                     >
@@ -15210,7 +15427,7 @@ export default function App() {
                 {/* Work Mode Selectors & Timer */}
                 <div className="flex justify-between items-center mt-2">
                   {(() => {
-                    const activeProgramId = outputPrograms[activeOutputId];
+                    const activeProgramId = activeOutputId === "none" ? null : outputPrograms[activeOutputId];
                     const activeProgramClip = clips.find(
                       (c) => c.id === activeProgramId,
                     );
@@ -15219,26 +15436,21 @@ export default function App() {
                       activeProgramClip &&
                       (activeProgramClip.type === "video" ||
                         activeProgramClip.type === "videoinput");
-                    const activeDocOrPptClip =
-                      !isProgramVideo &&
-                      activeProgramClip &&
-                      (activeProgramClip.type === "document" ||
-                        activeProgramClip.type === "ppt" ||
-                        activeProgramClip.name?.toLowerCase().endsWith(".pdf"))
-                        ? activeProgramClip
-                        : !isProgramVideo
-                          ? clips?.find((c) => {
-                              const hasLayer = layers?.some(
-                                (l) => l.activeClipId === c.id,
-                              );
-                              return (
-                                hasLayer &&
-                                (c.type === "document" ||
-                                  c.type === "ppt" ||
-                                  c.name?.toLowerCase().endsWith(".pdf"))
-                              );
-                            })
-                          : null;
+                    const activeDocOrPptClip = (activeProgramClip && (
+                      activeProgramClip.type === "document" ||
+                      activeProgramClip.type === "ppt" ||
+                      activeProgramClip.name?.toLowerCase().endsWith(".pdf")
+                    )) ? activeProgramClip : clips?.find((c) => {
+                      const hasLayer = layers?.some((l) => {
+                        const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === activeOutputId;
+                        return l.activeClipId === c.id && isTargetOutput;
+                      });
+                      return hasLayer && (
+                        c.type === "document" ||
+                        c.type === "ppt" ||
+                        c.name?.toLowerCase().endsWith(".pdf")
+                      );
+                    });
 
                     return (
                       <div className="flex flex-col">
@@ -15250,7 +15462,8 @@ export default function App() {
                             {activeDocOrPptClip ? (
                               `${activeDocOrPptClip.currentPage || 1} / ${activeDocOrPptClip.totalPages || 1}`
                             ) : activeProgramClip?.type === "videoinput" ||
-                              activeProgramId?.startsWith("videoinput") ? (
+                              activeProgramId?.startsWith("videoinput") ||
+                              activeOutputId === "none" ? (
                               "00:00:00"
                             ) : (
                               <FluidTimeDisplay
@@ -15259,6 +15472,9 @@ export default function App() {
                                 clipId={activeProgramId}
                                 outputId={activeOutputId}
                                 clips={clips}
+                                monitorId="program"
+                                layers={layers}
+                                layerOutputs={layerOutputs}
                               />
                             )}
                           </span>
