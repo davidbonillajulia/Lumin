@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, shell, dialog, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
@@ -33,6 +33,19 @@ try {
 } catch (err) {
   console.error("No se pudo cargar la configuración de rendimiento en Windows:", err);
 }
+
+// Register custom protocol privilege for seamless local file loading and range streaming
+protocol.registerSchemesAsPrivileged([
+  { 
+    scheme: 'lumin-file', 
+    privileges: { 
+      bypassCSP: true, 
+      secure: true, 
+      supportFetchAPI: true, 
+      stream: true 
+    } 
+  }
+]);
 
 // OPTIMIZACIONES DE COMPORTAMIENTO HARDWARE NATIVO (Estilo Resolume / OBS)
 // Estas directivas eliminan retardos por hilos de pintado de HTML, activan búferes directos y fuerzan decodificadores GPU.
@@ -130,7 +143,15 @@ if (!gotTheLock) {
     });
   }
 
-  app.whenReady().then(createMainWindow);
+  app.whenReady().then(() => {
+    // Register custom file protocol handler for seamless local video streaming, range requests, and scrubbing
+    protocol.handle('lumin-file', (request) => {
+      const fileUrl = request.url.replace('lumin-file://', 'file://');
+      return net.fetch(fileUrl);
+    });
+
+    createMainWindow();
+  });
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {

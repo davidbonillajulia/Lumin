@@ -318,6 +318,40 @@ const formatTime = (seconds: number) => {
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}:${cs.toString().padStart(2, "0")}`;
 };
 
+const getRelativePath = (fromPath: string, toPath: string) => {
+  if (!fromPath || !toPath) return undefined;
+  try {
+    const fromParts = fromPath.replace(/\\/g, "/").split("/");
+    const toParts = toPath.replace(/\\/g, "/").split("/");
+    
+    // Remove the file name from the fromPath to get the directory of the project file
+    fromParts.pop();
+    
+    let commonIndex = 0;
+    while (
+      commonIndex < fromParts.length &&
+      commonIndex < toParts.length &&
+      fromParts[commonIndex].toLowerCase() === toParts[commonIndex].toLowerCase()
+    ) {
+      commonIndex++;
+    }
+    
+    const upCount = fromParts.length - commonIndex;
+    const relParts = [];
+    for (let i = 0; i < upCount; i++) {
+      relParts.push("..");
+    }
+    
+    for (let i = commonIndex; i < toParts.length; i++) {
+      relParts.push(toParts[i]);
+    }
+    
+    return relParts.join("/");
+  } catch (e) {
+    return undefined;
+  }
+};
+
 const getFileUrl = (file: File) => {
   const filePath = (file as any).path;
   if (!filePath) return URL.createObjectURL(file);
@@ -325,7 +359,7 @@ const getFileUrl = (file: File) => {
   try {
     // Normalizar barras de Windows a barras de URL
     const normalized = filePath.replace(/\\/g, "/");
-    return `file:///${normalized}`;
+    return `lumin-file:///${normalized}`;
   } catch (err) {
     console.error(
       "Error formatting native file path, using ObjectURL fallback:",
@@ -10682,7 +10716,7 @@ export default function App() {
             const urlFromPath = (p: string) => {
               try {
                 const normalized = p.replace(/\\/g, "/");
-                return `file:///${normalized}`;
+                return `lumin-file:///${normalized}`;
               } catch (e) { return null; }
             };
             const nativeUrl = urlFromPath(updated.path);
@@ -10736,38 +10770,59 @@ export default function App() {
     };
   };
 
-  const getLuminStateData = () => {
+  const getLuminStateData = (projectFilePath?: string | null) => {
+    const getRel = (absPath?: string) => {
+      if (!absPath || !projectFilePath) return undefined;
+      return getRelativePath(projectFilePath, absPath);
+    };
+
+    const sanitizeClip = (clip: any) => {
+      if (!clip) return null;
+      const filePath =
+        clip.path || (clip.file ? (clip.file as any).path : undefined);
+      return {
+        ...clip,
+        file: filePath ? { path: filePath, name: clip.name } : null,
+        path: filePath,
+        relativePath: getRel(filePath),
+      };
+    };
+
     return JSON.stringify(
       {
-        libraryFiles: libraryFiles.map((f: any) => ({
-          id: f.id,
-          name: f.name,
-          type: f.type,
-          url: f.url,
-          path: f.path || (f.file ? (f.file as any).path : undefined),
-          thumbnail: f.thumbnail || undefined,
-          file: f.file
-            ? { path: (f.file as any).path, name: f.file.name }
-            : f.path
-              ? { path: f.path, name: f.name }
-              : null,
-        })),
-        clips: clips.map(sanitizeClipForSave),
+        libraryFiles: libraryFiles.map((f: any) => {
+          const fPath = f.path || (f.file ? (f.file as any).path : undefined);
+          return {
+            id: f.id,
+            name: f.name,
+            type: f.type,
+            url: f.url,
+            path: fPath,
+            relativePath: getRel(fPath),
+            thumbnail: f.thumbnail || undefined,
+            file: f.file
+              ? { path: (f.file as any).path, name: f.file.name }
+              : fPath
+                ? { path: fPath, name: f.name }
+                : null,
+          };
+        }),
+        clips: clips.map(sanitizeClip),
         deckClips: (() => {
           const res: Record<string, any[]> = {};
           Object.entries(deckClips || {}).forEach(([k, cl]) => {
-            res[k] = Array.isArray(cl) ? cl.map(sanitizeClipForSave) : [];
+            res[k] = Array.isArray(cl) ? cl.map(sanitizeClip) : [];
           });
           return res;
         })(),
         layers: (layers || []).map((layer) => ({
           ...layer,
-          slots: (layer.slots || []).map(sanitizeClipForSave),
+          slots: (layer.slots || []).map(sanitizeClip),
         })),
         perfSettings,
         playlists: (playlists || []).map((pl) => ({
           ...pl,
-          clips: (pl.clips || []).map(sanitizeClipForSave),
+          clips: (pl.clips || []).map(sanitizeClip),
         })),
         pipLayers,
         allScreenSettings,
@@ -10813,7 +10868,7 @@ export default function App() {
 
     // Si ya existe un archivo activo, guardamos encima
     if (currentLuminPath) {
-      const dataStr = getLuminStateData();
+      const dataStr = getLuminStateData(currentLuminPath);
       const res = await window.electron.writeLuminFile(
         currentLuminPath,
         dataStr,
@@ -10853,7 +10908,7 @@ export default function App() {
     }
 
     const filePath = dialogResult.filePath;
-    const dataStr = getLuminStateData();
+    const dataStr = getLuminStateData(filePath);
 
     const res = await window.electron.writeLuminFile(filePath, dataStr);
     if (res.success) {
@@ -10900,11 +10955,43 @@ export default function App() {
         );
       }
 
+      // Helper function to resolve relative paths against the project file directory
+      const resolvePath = (absPath: string, relPath?: string) => {
+        if (!absPath) return null;
+        if (relPath && (window as any).electron) {
+          try {
+            // Get folder path where .lumin file is located
+            const projectDir = filePath.substring(0, Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/")));
+            const isWindows = filePath.includes("\\");
+            const separator = isWindows ? "\\" : "/";
+            
+            const relSegments = relPath.replace(/\\/g, "/").split("/");
+            let dirSegments = projectDir.replace(/\\/g, "/").split("/");
+            
+            for (const segment of relSegments) {
+              if (segment === ".") {
+                continue;
+              } else if (segment === "..") {
+                dirSegments.pop();
+              } else {
+                dirSegments.push(segment);
+              }
+            }
+            
+            return dirSegments.join(separator);
+          } catch (e) {
+            // Fallback to saved absolute path
+          }
+        }
+        return absPath;
+      };
+
       // Helper function to reconstruct URL from path in native mode
-      const getUrlFromPath = (path: string) => {
+      const getUrlFromPath = (pathVal: string, relPath?: string) => {
         try {
-          const normalized = path.replace(/\\/g, "/");
-          return `file:///${normalized}`;
+          const targetPath = resolvePath(pathVal, relPath) || pathVal;
+          const normalized = targetPath.replace(/\\/g, "/");
+          return `lumin-file:///${normalized}`;
         } catch (e) {
           return null;
         }
@@ -10914,9 +11001,10 @@ export default function App() {
       // En modo nativo, regeneramos las URLs a partir de los paths absolutos guardados
       const reconstructedFiles = parsedData.libraryFiles.map((f: any) => {
         let newUrl = f.url;
-        const filePath = f.path || (f.file && f.file.path);
-        if (filePath && (window as any).electron) {
-          const nativeUrl = getUrlFromPath(filePath);
+        const clipPath = f.path || (f.file && f.file.path);
+        const relPath = f.relativePath;
+        if (clipPath && (window as any).electron) {
+          const nativeUrl = getUrlFromPath(clipPath, relPath);
           if (nativeUrl) newUrl = nativeUrl;
         }
         
@@ -10930,8 +11018,8 @@ export default function App() {
           name: f.name,
           type: f.type,
           url: newUrl,
-          file: filePath ? { path: filePath, name: f.name } : null,
-          path: filePath || undefined,
+          file: clipPath ? { path: resolvePath(clipPath, relPath) || clipPath, name: f.name } : null,
+          path: resolvePath(clipPath, relPath) || clipPath || undefined,
           thumbnail: newThumbnail,
         };
       });
@@ -10945,9 +11033,10 @@ export default function App() {
       const getReconstructedClip = (clip: any) => {
         if (!clip) return null;
         let newUrl = urlMap[clip.url] || clip.url;
-        const filePath = clip.path || (clip.file && clip.file.path);
-        if (filePath && (window as any).electron) {
-          const nativeUrl = getUrlFromPath(filePath);
+        const clipPath = clip.path || (clip.file && clip.file.path);
+        const relPath = clip.relativePath;
+        if (clipPath && (window as any).electron) {
+          const nativeUrl = getUrlFromPath(clipPath, relPath);
           if (nativeUrl) newUrl = nativeUrl;
         }
         
@@ -10956,11 +11045,13 @@ export default function App() {
           newThumbnail = undefined;
         }
 
+        const resolvedAbsolutePath = clipPath ? (resolvePath(clipPath, relPath) || clipPath) : undefined;
+
         return {
           ...clip,
           url: newUrl,
-          file: filePath ? { path: filePath, name: clip.name } : null,
-          path: filePath || undefined,
+          file: resolvedAbsolutePath ? { path: resolvedAbsolutePath, name: clip.name } : null,
+          path: resolvedAbsolutePath || undefined,
           thumbnail: newThumbnail,
         };
       };
@@ -11137,7 +11228,7 @@ export default function App() {
       // 4. Importa pdf generado
       const pdfPath = conversionResult.pdfPath;
       const pdfName = baseName.replace(/\.[^/.]+$/, "") + ".pdf";
-      const fileUrl = `file:///${pdfPath.replace(/\\/g, "/")}`;
+      const fileUrl = `lumin-file:///${pdfPath.replace(/\\/g, "/")}`;
 
       const newFileItem = {
         name: pdfName,

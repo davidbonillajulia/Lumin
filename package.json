@@ -18,6 +18,14 @@
   "build": {
     "appId": "com.lumin.mediaserver",
     "productName": "LUMIN",
+    "fileAssociations": [
+      {
+        "ext": "lumin",
+        "name": "LUMIN Project",
+        "description": "LUMIN Project Configuration File",
+        "icon": "public/icon.ico"
+      }
+    ],
     "directories": {
       "output": "release"
     },
