@@ -13362,6 +13362,7 @@ export default function App() {
   const handleSelectClip = (clip: Clip) => {
     setSelectedItemId(clip.id);
     setSelectedItemType("clip");
+    handlePreviewClip(clip);
   };
 
   const handleSelectPlaylist = (playlist: Playlist) => {

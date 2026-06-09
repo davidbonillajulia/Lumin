@@ -174,8 +174,22 @@ if (!gotTheLock) {
   app.whenReady().then(() => {
     // Register custom file protocol handler for seamless local video streaming, range requests, and scrubbing
     protocol.handle('lumin-file', (request) => {
-      const fileUrl = request.url.replace('lumin-file://', 'file://');
-      return net.fetch(fileUrl);
+      try {
+        const { pathToFileURL } = require('url');
+        const urlObj = new URL(request.url);
+        let decodedPath = decodeURIComponent(urlObj.pathname);
+        
+        // On Windows, the pathname returned by URL starts with a slash, e.g., "/C:/path/to/file"
+        if (process.platform === 'win32' && decodedPath.startsWith('/')) {
+          decodedPath = decodedPath.slice(1);
+        }
+        
+        const fileUrl = pathToFileURL(decodedPath).toString();
+        return net.fetch(fileUrl);
+      } catch (err) {
+        console.error("Error serving lumin-file in protocol handler:", err);
+        return new Response("Not Found", { status: 404 });
+      }
     });
 
     createMainWindow();
