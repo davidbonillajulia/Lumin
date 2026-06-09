@@ -193,6 +193,8 @@ declare global {
       ) => Promise<{ success: boolean; data?: string; error?: string }>;
       getSystemStats?: () => Promise<{ cpuUsage: number; usedMemBytes: number; totalMemBytes: number; }>;
       exitApp?: () => void;
+      getStartFile?: () => Promise<string | null>;
+      onOpenLuminFile?: (callback: (path: string) => void) => () => void;
       isElectron: boolean;
     };
   }
@@ -10919,26 +10921,9 @@ export default function App() {
     }
   };
 
-  const handleOpenLumin = async () => {
-    if (
-      !window.electron ||
-      !window.electron.selectOpenLuminFile ||
-      !window.electron.readLuminFile
-    ) {
-      showCustomAlert(
-        "Función Nativa Requerida",
-        "La apertura de proyectos nativos solo está disponible en Windows.",
-        "info"
-      );
-      return;
-    }
+  const importLuminProjectFromFilePath = async (filePath: string) => {
+    if (!window.electron || !window.electron.readLuminFile) return;
 
-    const dialogResult = await window.electron.selectOpenLuminFile();
-    if (dialogResult.canceled || !dialogResult.filePath) {
-      return;
-    }
-
-    const filePath = dialogResult.filePath;
     const res = await window.electron.readLuminFile(filePath);
     if (!res.success || !res.data) {
       showCustomAlert("Error de Apertura", "Error al abrir archivo: " + res.error, "error");
@@ -11167,9 +11152,62 @@ export default function App() {
 
       setCurrentLuminPath(filePath);
       showCustomAlert("Proyecto Cargado", `Proyecto cargado con éxito: ${filePath}`, "success");
+
+      // Broadcast the newly hydrated state model to keep secondary output/timer screens completely in sync
+      setTimeout(() => {
+        outputChannel.current?.postMessage({
+          type: "SYNC_STATE",
+          payload: {
+            programClipId: parsedData.programClipId || null,
+            previewClipId: parsedData.previewClipId || null,
+            programPlayIndex: parsedData.programPlayIndex || 0,
+            outputPrograms: parsedData.outputPrograms || {},
+            outputTransitionTargets: parsedData.outputTransitionTargets || {},
+            outputOffStates: parsedData.outputOffStates || {},
+            outputs: parsedData.outputs || [],
+            clips: reconstructedClips,
+            crossfaderValue: parsedData.crossfaderValue || 0,
+            allScreenSettings: parsedData.allScreenSettings || {},
+            isLive: parsedData.isLive || false,
+            isTransmitting: parsedData.isTransmitting || false,
+            isProgramOff: (parsedData.outputOffStates && parsedData.outputOffStates[parsedData.activeOutputId || "1"]) || false,
+            programVolume: parsedData.programVolume || 1,
+            masterVolume: parsedData.masterVolume || 1,
+            transitionType: parsedData.externalScreenSettings?.transitionType || "fade",
+            transitionDuration: parsedData.externalScreenSettings?.transitionDuration || 0.4,
+            externalScreenSettings: parsedData.externalScreenSettings || {},
+            layers: reconstructedLayers,
+            layerOutputs: parsedData.layerOutputs || {},
+            pipLayers: parsedData.pipLayers || {},
+            perfSettings: parsedData.perfSettings || {},
+          },
+        });
+      }, 300);
     } catch (err: any) {
       showCustomAlert("Error de Procesamiento", "Error al procesar el archivo LUMIN: " + err.message, "error");
     }
+  };
+
+  const handleOpenLumin = async () => {
+    if (
+      !window.electron ||
+      !window.electron.selectOpenLuminFile ||
+      !window.electron.readLuminFile
+    ) {
+      showCustomAlert(
+        "Función Nativa Requerida",
+        "La apertura de proyectos nativos solo está disponible en Windows.",
+        "info"
+      );
+      return;
+    }
+
+    const dialogResult = await window.electron.selectOpenLuminFile();
+    if (dialogResult.canceled || !dialogResult.filePath) {
+      return;
+    }
+
+    await importLuminProjectFromFilePath(dialogResult.filePath);
   };
 
   const handleImportPptClick = async () => {
@@ -11944,6 +11982,30 @@ export default function App() {
       }));
     }
   };
+
+  // Listen for native startup .lumin files and double-click open-file events from Electron
+  useEffect(() => {
+    if (window.electron && window.electron.isElectron) {
+      // 1. Check if we were launched with a .lumin file parameter
+      if (window.electron.getStartFile) {
+        window.electron.getStartFile().then((filePath) => {
+          if (filePath) {
+            importLuminProjectFromFilePath(filePath);
+          }
+        });
+      }
+
+      // 2. Subscribe to file activation events (e.g. double-click while app is running)
+      if (window.electron.onOpenLuminFile) {
+        const unsubscribe = window.electron.onOpenLuminFile((filePath) => {
+          if (filePath) {
+            importLuminProjectFromFilePath(filePath);
+          }
+        });
+        return unsubscribe;
+      }
+    }
+  }, []);
 
   // Initialize BroadcastChannel
   useEffect(() => {

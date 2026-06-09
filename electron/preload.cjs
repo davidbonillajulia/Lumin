@@ -23,5 +23,13 @@ contextBridge.exposeInMainWorld('electron', {
   setWindowsDefaultDevice: (id) => ipcRenderer.invoke('set-windows-default-device', id),
   getSystemStats: () => ipcRenderer.invoke('get-system-stats'),
   exitApp: () => ipcRenderer.send('exit-app'),
+  getStartFile: () => ipcRenderer.invoke('get-start-file'),
+  onOpenLuminFile: (callback) => {
+    const subscription = (event, path) => callback(path);
+    ipcRenderer.on('open-lumin-file', subscription);
+    return () => {
+      ipcRenderer.removeListener('open-lumin-file', subscription);
+    };
+  },
   isElectron: true
 });

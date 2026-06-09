@@ -92,7 +92,30 @@ if (savedPerfSettings.gpuDecoding === 'nvdec') {
   app.commandLine.appendSwitch('enable-features', 'D3D11VideoDecoder,VaapiVideoDecoder');
 }
 
+function getLuminPathFromArgv(argv) {
+  if (!argv || !Array.isArray(argv)) return null;
+  for (const arg of argv) {
+    if (arg && !arg.startsWith('-') && arg.toLowerCase().endsWith('.lumin')) {
+      return arg;
+    }
+  }
+  return null;
+}
+
 let mainWindow;
+let startLuminFilePath = getLuminPathFromArgv(process.argv);
+
+// Handle macOS open-file event
+app.on('open-file', (event, path) => {
+  event.preventDefault();
+  if (path.toLowerCase().endsWith('.lumin')) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+      mainWindow.webContents.send('open-lumin-file', path);
+    } else {
+      startLuminFilePath = path;
+    }
+  }
+});
 
 // Single Instance Lock
 const gotTheLock = app.requestSingleInstanceLock();
@@ -105,6 +128,11 @@ if (!gotTheLock) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
+      
+      const filePath = getLuminPathFromArgv(commandLine);
+      if (filePath && mainWindow.webContents) {
+        mainWindow.webContents.send('open-lumin-file', filePath);
+      }
     }
   });
 
@@ -254,6 +282,12 @@ if (!gotTheLock) {
       console.error("Error reading lumin file:", err);
       return { success: false, error: err.message };
     }
+  });
+
+  ipcMain.handle('get-start-file', () => {
+    const filePath = startLuminFilePath;
+    startLuminFilePath = null; // Consume it so subsequent requests don't reload it
+    return filePath;
   });
 
   ipcMain.on('exit-app', () => {
