@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
 import JSZip from "jszip";
 import { PDFRenderer } from "./components/PDFRenderer";
 import { PerfManagerModal } from "./components/PerfManagerModal";
@@ -165,9 +171,7 @@ declare global {
       launchOutput: (data: { screenId: string; url: string }) => void;
       closeOutput?: (screenId: string) => void;
       openSettings?: () => void;
-      convertPptx?: (
-        filePath: string,
-      ) => Promise<{
+      convertPptx?: (filePath: string) => Promise<{
         success: boolean;
         slides: any[];
         totalPages: number;
@@ -191,11 +195,16 @@ declare global {
       readLuminFile?: (
         filePath: string,
       ) => Promise<{ success: boolean; data?: string; error?: string }>;
-      getSystemStats?: () => Promise<{ cpuUsage: number; usedMemBytes: number; totalMemBytes: number; }>;
+      getSystemStats?: () => Promise<{
+        cpuUsage: number;
+        usedMemBytes: number;
+        totalMemBytes: number;
+      }>;
       exitApp?: () => void;
       getStartFile?: () => Promise<string | null>;
       onOpenLuminFile?: (callback: (path: string) => void) => () => void;
       isElectron: boolean;
+      getPathForFile?: (file: File) => string;
     };
   }
 }
@@ -325,41 +334,55 @@ const getRelativePath = (fromPath: string, toPath: string) => {
   try {
     const fromParts = fromPath.replace(/\\/g, "/").split("/");
     const toParts = toPath.replace(/\\/g, "/").split("/");
-    
+
     // Remove the file name from the fromPath to get the directory of the project file
     fromParts.pop();
-    
+
     let commonIndex = 0;
     while (
       commonIndex < fromParts.length &&
       commonIndex < toParts.length &&
-      fromParts[commonIndex].toLowerCase() === toParts[commonIndex].toLowerCase()
+      fromParts[commonIndex].toLowerCase() ===
+        toParts[commonIndex].toLowerCase()
     ) {
       commonIndex++;
     }
-    
+
     const upCount = fromParts.length - commonIndex;
     const relParts = [];
     for (let i = 0; i < upCount; i++) {
       relParts.push("..");
     }
-    
+
     for (let i = commonIndex; i < toParts.length; i++) {
       relParts.push(toParts[i]);
     }
-    
+
     return relParts.join("/");
   } catch (e) {
     return undefined;
   }
 };
 
+// Gets the real filesystem path for a File object using the correct Electron 32+ API.
+// Falls back to the deprecated file.path for older environments.
+const getNativeFilePath = (file: File): string => {
+  try {
+    // Preferred: webUtils.getPathForFile (Electron 32+)
+    if ((window as any).electron?.getPathForFile) {
+      const p = (window as any).electron.getPathForFile(file);
+      if (p) return p;
+    }
+  } catch (_) {}
+  // Legacy fallback
+  return (file as any).path || "";
+};
+
 const getFileUrl = (file: File) => {
-  const filePath = (file as any).path;
+  const filePath = getNativeFilePath(file);
   if (!filePath) return URL.createObjectURL(file);
 
   try {
-    // Normalizar barras de Windows a barras de URL
     const normalized = filePath.replace(/\\/g, "/");
     return `lumin-file:///${normalized}`;
   } catch (err) {
@@ -459,7 +482,10 @@ const FluidTimeDisplay = ({
     // 1. Check if there are active layer video clips mapped on this outputId
     if (outputId && outputId !== "none" && layers && layerOutputs) {
       for (const l of layers) {
-        const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === outputId;
+        const isTargetOutput =
+          !layerOutputs[l.id] ||
+          layerOutputs[l.id] === "all" ||
+          layerOutputs[l.id] === outputId;
         if (l.activeClipId && l.isVisible !== false && isTargetOutput) {
           const clip = clips?.find((c) => c.id === l.activeClipId);
           if (clip && (clip.type === "video" || clip.type === "videoinput")) {
@@ -475,7 +501,8 @@ const FluidTimeDisplay = ({
     // 2. Fallback to the explicit/background clipId
     return {
       resolvedClipId: propClipId,
-      resolvedTrackerId: outputId && propClipId ? `output_${outputId}_${propClipId}` : null,
+      resolvedTrackerId:
+        outputId && propClipId ? `output_${outputId}_${propClipId}` : null,
     };
   }, [propClipId, outputId, clips, layers, layerOutputs]);
 
@@ -502,28 +529,45 @@ const FluidTimeDisplay = ({
           }
 
           let displayTime = 0;
-          const isRealOutputScreen = outputId && outputId !== "preview" && outputId !== "none";
+          const isRealOutputScreen =
+            outputId && outputId !== "preview" && outputId !== "none";
           const video = isRealOutputScreen
-            ? ((resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
-               (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
-               (outputId && (window as any).__luminVideos?.[outputId]))
-            : ((resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
-               (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
-               (resolvedClipId && (window as any).__luminVideos?.[resolvedClipId]) ||
-               (monitorId && (window as any).__luminVideos?.[monitorId]) ||
-               (outputId && (window as any).__luminVideos?.[outputId]) ||
-               (window as any).__luminProgramVideo);
+            ? (resolvedTrackerId &&
+                (window as any).__luminVideos?.[resolvedTrackerId]) ||
+              (outputId &&
+                resolvedClipId &&
+                (window as any).__luminVideos?.[
+                  `${outputId}_${resolvedClipId}`
+                ]) ||
+              (outputId && (window as any).__luminVideos?.[outputId])
+            : (resolvedTrackerId &&
+                (window as any).__luminVideos?.[resolvedTrackerId]) ||
+              (outputId &&
+                resolvedClipId &&
+                (window as any).__luminVideos?.[
+                  `${outputId}_${resolvedClipId}`
+                ]) ||
+              (resolvedClipId &&
+                (window as any).__luminVideos?.[resolvedClipId]) ||
+              (monitorId && (window as any).__luminVideos?.[monitorId]) ||
+              (outputId && (window as any).__luminVideos?.[outputId]) ||
+              (window as any).__luminProgramVideo;
 
           const clip = clips?.find((c) => c.id === resolvedClipId);
-          const activeIsPlaying = clip ? (clip.isPlaying !== false) : false;
+          const activeIsPlaying = clip ? clip.isPlaying !== false : false;
           const actualTotal = clip?.duration || 0;
 
           if (video) {
-            const broadcastCurrent = resolvedTrackerId ? ((window as any).__luminVideoTimes?.[resolvedTrackerId] || 0) : 0;
+            const broadcastCurrent = resolvedTrackerId
+              ? (window as any).__luminVideoTimes?.[resolvedTrackerId] || 0
+              : 0;
             let actualCurrent = video.currentTime || 0;
             const actualTotalVideo = video.duration || 0;
 
-            if (broadcastCurrent > actualCurrent && broadcastCurrent < actualTotalVideo) {
+            if (
+              broadcastCurrent > actualCurrent &&
+              broadcastCurrent < actualTotalVideo
+            ) {
               actualCurrent = broadcastCurrent;
               if (Math.abs(video.currentTime - broadcastCurrent) > 0.3) {
                 video.currentTime = broadcastCurrent;
@@ -537,7 +581,9 @@ const FluidTimeDisplay = ({
             if ((window as any).__lastVideoRefs[videoRefKey] !== video) {
               (window as any).__lastVideoRefs[videoRefKey] = video;
               if (resolvedTrackerId) {
-                smoothedTime = (window as any).__luminVideoTimes?.[resolvedTrackerId] ?? actualCurrent;
+                smoothedTime =
+                  (window as any).__luminVideoTimes?.[resolvedTrackerId] ??
+                  actualCurrent;
               } else {
                 smoothedTime = actualCurrent;
               }
@@ -558,11 +604,16 @@ const FluidTimeDisplay = ({
             }
 
             displayTime = isRemaining
-              ? Math.max(0, actualTotalVideo - Math.min(smoothedTime, actualTotalVideo))
+              ? Math.max(
+                  0,
+                  actualTotalVideo - Math.min(smoothedTime, actualTotalVideo),
+                )
               : Math.min(smoothedTime, actualTotalVideo);
           } else {
             // Fallback to background Broadcast value
-            const actualCurrent = resolvedTrackerId ? ((window as any).__luminVideoTimes?.[resolvedTrackerId] || 0) : 0;
+            const actualCurrent = resolvedTrackerId
+              ? (window as any).__luminVideoTimes?.[resolvedTrackerId] || 0
+              : 0;
 
             if (actualCurrent > 0 && actualCurrent < (actualTotal || 999999)) {
               const diff = actualCurrent - smoothedTime;
@@ -600,11 +651,17 @@ const FluidTimeDisplay = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [eventId, isRemaining, resolvedClipId, resolvedTrackerId, clips, outputId, monitorId]);
+  }, [
+    eventId,
+    isRemaining,
+    resolvedClipId,
+    resolvedTrackerId,
+    clips,
+    outputId,
+    monitorId,
+  ]);
 
-  return (
-    <span ref={spanRef} className={className}></span>
-  );
+  return <span ref={spanRef} className={className}></span>;
 };
 
 const volToDb = (vol: number) => {
@@ -1076,7 +1133,7 @@ const useAudioLevel = (
             sum += dataArrayRef.current[i];
           }
           const average = sum / dataArrayRef.current.length;
-          
+
           // Noise-gate threshold to ensure silent frames show exactly zero on meters
           if (average < 3) {
             setLevel(0);
@@ -1160,17 +1217,18 @@ const ScaleToFit = ({
   );
 };
 
-  // Helper component for gapless layer sequence playback
-  const LayerPlaybox = React.memo(({ 
-    layer, 
-    clips, 
-    volume, 
-    masterVolume, 
-    opacity, 
-    isProgram, 
-    isTransmitting, 
-    onLayerEnded, 
-    updateClip, 
+// Helper component for gapless layer sequence playback
+const LayerPlaybox = React.memo(
+  ({
+    layer,
+    clips,
+    volume,
+    masterVolume,
+    opacity,
+    isProgram,
+    isTransmitting,
+    onLayerEnded,
+    updateClip,
     perfSettings,
     isSlave = false,
     allowClockAuthority = false,
@@ -1179,17 +1237,17 @@ const ScaleToFit = ({
     isVisuallyActive = true,
     onLevelChange,
     monitorId,
-  }: { 
-    layer: Layer; 
-    clips: Clip[]; 
-    volume: number; 
-    masterVolume: number; 
-    opacity: number; 
-    isProgram: boolean; 
-    isTransmitting: boolean; 
-    onLayerEnded: any; 
-    updateClip: any; 
-    perfSettings: any; 
+  }: {
+    layer: Layer;
+    clips: Clip[];
+    volume: number;
+    masterVolume: number;
+    opacity: number;
+    isProgram: boolean;
+    isTransmitting: boolean;
+    onLayerEnded: any;
+    updateClip: any;
+    perfSettings: any;
     isSlave?: boolean;
     allowClockAuthority?: boolean;
     onProgressUpdate?: (current: number, total: number) => void;
@@ -1198,19 +1256,23 @@ const ScaleToFit = ({
     onLevelChange?: (level: number) => void;
     monitorId?: string;
   }) => {
-    const activeClip = layer.activeClipId ? clips?.find((c) => c.id === layer.activeClipId) : null;
-    const initialKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
+    const activeClip = layer.activeClipId
+      ? clips?.find((c) => c.id === layer.activeClipId)
+      : null;
+    const initialKey = activeClip
+      ? `${activeClip.id}-${layer.sequenceCounter || 0}`
+      : null;
     const [busA, setBusA] = useState<{ clip: Clip; key: string } | null>(() => {
-      return activeClip
-        ? { clip: activeClip, key: initialKey! }
-        : null;
+      return activeClip ? { clip: activeClip, key: initialKey! } : null;
     });
     const [busB, setBusB] = useState<{ clip: Clip; key: string } | null>(null);
     const [isBusAReady, setIsBusAReady] = useState(true);
     const [activeKey, setActiveKey] = useState<string | null>(initialKey);
 
     useEffect(() => {
-      const currentKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
+      const currentKey = activeClip
+        ? `${activeClip.id}-${layer.sequenceCounter || 0}`
+        : null;
       if (currentKey !== activeKey) {
         if (!activeClip) {
           setBusA(null);
@@ -1228,8 +1290,16 @@ const ScaleToFit = ({
         setActiveKey(currentKey);
       } else if (activeClip) {
         // Keep clip properties (like fitToScale, colors) up-to-date real-time
-        setBusA(prev => (prev && prev.clip.id === activeClip.id && prev.clip !== activeClip) ? { ...prev, clip: activeClip } : prev);
-        setBusB(prev => (prev && prev.clip.id === activeClip.id && prev.clip !== activeClip) ? { ...prev, clip: activeClip } : prev);
+        setBusA((prev) =>
+          prev && prev.clip.id === activeClip.id && prev.clip !== activeClip
+            ? { ...prev, clip: activeClip }
+            : prev,
+        );
+        setBusB((prev) =>
+          prev && prev.clip.id === activeClip.id && prev.clip !== activeClip
+            ? { ...prev, clip: activeClip }
+            : prev,
+        );
       }
     }, [activeClip, activeKey, isBusAReady, layer.sequenceCounter]);
 
@@ -1265,17 +1335,23 @@ const ScaleToFit = ({
     // Preload next
     let nextSrc = undefined;
     if (layer.playbackMode === "sequence" && activeClip) {
-      const currentSlotIndex = layer.activeSlotIndex !== null 
-        ? layer.activeSlotIndex 
-        : layer.slots.findIndex((s) => s?.id === activeClip.id);
-      
-      const nextClipIndex = layer.slots.findIndex((s, idx) => idx > currentSlotIndex && s !== null);
+      const currentSlotIndex =
+        layer.activeSlotIndex !== null
+          ? layer.activeSlotIndex
+          : layer.slots.findIndex((s) => s?.id === activeClip.id);
+
+      const nextClipIndex = layer.slots.findIndex(
+        (s, idx) => idx > currentSlotIndex && s !== null,
+      );
       let foundNext = null;
       if (nextClipIndex !== -1) {
         foundNext = layer.slots[nextClipIndex];
       } else if (layer.loop !== false) {
         const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
-        if (firstSlotIndex !== -1 && layer.slots[firstSlotIndex]?.id !== activeClip.id) {
+        if (
+          firstSlotIndex !== -1 &&
+          layer.slots[firstSlotIndex]?.id !== activeClip.id
+        ) {
           foundNext = layer.slots[firstSlotIndex];
         }
       }
@@ -1284,8 +1360,8 @@ const ScaleToFit = ({
 
     const activeNodes = [
       busA && { ...busA, isBusA: true },
-      busB && { ...busB, isBusA: false }
-    ].filter(Boolean) as ({ clip: Clip; key: string; isBusA: boolean })[];
+      busB && { ...busB, isBusA: false },
+    ].filter(Boolean) as { clip: Clip; key: string; isBusA: boolean }[];
 
     return (
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -1317,14 +1393,19 @@ const ScaleToFit = ({
               }
               isPlaylistSequence={layer.playbackMode === "sequence"}
               transitionType="fade"
-              transitionDuration={Math.min(1.5, layer.transitionDuration || 0.4)}
+              transitionDuration={Math.min(
+                1.5,
+                layer.transitionDuration || 0.4,
+              )}
               perfSettings={perfSettings}
               onProgressUpdate={onProgressUpdate}
               onUpdateClip={updateClip}
               onReady={() => setIsBusAReady(true)}
               isSlave={isSlave}
               isClockSource={
-                bus.isBusA ? (isProgram && allowClockAuthority && (!busB || !isBusAReady)) : false
+                bus.isBusA
+                  ? isProgram && allowClockAuthority && (!busB || !isBusAReady)
+                  : false
               }
               layerId={layer.id}
               outputId={outputId}
@@ -1342,7 +1423,8 @@ const ScaleToFit = ({
         </AnimatePresence>
       </div>
     );
-  });
+  },
+);
 
 const Monitor = React.memo(
   ({
@@ -1476,14 +1558,17 @@ const Monitor = React.memo(
     const layerLevelsRef = useRef<Record<string, number>>({});
 
     const updateLevel = useCallback(() => {
-      const activeLayerIds = new Set((layers || []).map(l => l.id));
+      const activeLayerIds = new Set((layers || []).map((l) => l.id));
       // clean up inactive layers
-      Object.keys(layerLevelsRef.current).forEach(id => {
+      Object.keys(layerLevelsRef.current).forEach((id) => {
         if (!activeLayerIds.has(id)) {
           delete layerLevelsRef.current[id];
         }
       });
-      const maxLayerLevel = Object.values(layerLevelsRef.current).reduce((max, val) => Math.max(max, val), 0);
+      const maxLayerLevel = Object.values(layerLevelsRef.current).reduce(
+        (max, val) => Math.max(max, val),
+        0,
+      );
       const combined = Math.max(audioLevel, maxLayerLevel);
       onLevelChange?.(combined);
     }, [audioLevel, layers, onLevelChange]);
@@ -1688,8 +1773,7 @@ const Monitor = React.memo(
                   style={{
                     opacity: settings?.opacity ?? 1,
                     backgroundColor:
-                      settings?.showBackground &&
-                      settings?.backgroundImage
+                      settings?.showBackground && settings?.backgroundImage
                         ? "transparent"
                         : "#000",
                     transform: `scale(${settings?.scalingW ?? 1}, ${settings?.scalingH ?? 1}) translate(${settings?.x ?? 0}px, ${settings?.y ?? 0}px) rotate(${settings?.rotation ?? 0}deg)`,
@@ -1717,7 +1801,13 @@ const Monitor = React.memo(
                     >
                       <AnimatePresence custom={transitionType}>
                         {busAClip &&
-                          !layers?.some((l: any) => l.activeClipId && (layerOutputs[l.id] === activeOutputId || !layerOutputs[l.id] || layerOutputs[l.id] === "all")) &&
+                          !layers?.some(
+                            (l: any) =>
+                              l.activeClipId &&
+                              (layerOutputs[l.id] === activeOutputId ||
+                                !layerOutputs[l.id] ||
+                                layerOutputs[l.id] === "all"),
+                          ) &&
                           (crossfaderValue === undefined ||
                             crossfaderValue < 100) && (
                             <VideoLayer
@@ -1757,7 +1847,9 @@ const Monitor = React.memo(
                             style={{ clipPath: wipeTransform }}
                             faderOpacity={audioOpacityB}
                             isProgram={crossfaderValue === 100 || !isBusAReady}
-                            isClockSource={crossfaderValue === 100 || !isBusAReady}
+                            isClockSource={
+                              crossfaderValue === 100 || !isBusAReady
+                            }
                             transitionType={transitionType}
                             isTransmitting={isTransmitting}
                             onProgressUpdate={onProgressUpdate}
@@ -1782,17 +1874,30 @@ const Monitor = React.memo(
                         const hasGlobalSource = !!busAClip || !!activeBusBClip;
                         return layers.map((l, index) => {
                           const lOut = layerOutputs[l.id];
-                          let isTargetOutput = lOut === activeOutputId || !lOut || lOut === "all";
-                          let virtualStyle: React.CSSProperties = { width: "100%", height: "100%", left: "0%", top: "0%" };
-                          
+                          let isTargetOutput =
+                            lOut === activeOutputId || !lOut || lOut === "all";
+                          let virtualStyle: React.CSSProperties = {
+                            width: "100%",
+                            height: "100%",
+                            left: "0%",
+                            top: "0%",
+                          };
+
                           if (!isTargetOutput && lOut && activeOutputId) {
-                            const targetOutput = outputs?.find((o: any) => o.id === lOut);
+                            const targetOutput = outputs?.find(
+                              (o: any) => o.id === lOut,
+                            );
                             if (targetOutput?.isVirtual) {
-                              const cellAssignments = Object.entries(targetOutput.assignments || {});
-                              const cellEntry = cellAssignments.find(([k, outId]) => outId === activeOutputId);
+                              const cellAssignments = Object.entries(
+                                targetOutput.assignments || {},
+                              );
+                              const cellEntry = cellAssignments.find(
+                                ([k, outId]) => outId === activeOutputId,
+                              );
                               if (cellEntry) {
                                 isTargetOutput = true;
-                                const [colStr, rowStr] = cellEntry[0].split("-");
+                                const [colStr, rowStr] =
+                                  cellEntry[0].split("-");
                                 const col = parseInt(colStr);
                                 const row = parseInt(rowStr);
                                 const cols = targetOutput.grid.cols || 1;
@@ -1806,16 +1911,18 @@ const Monitor = React.memo(
                               }
                             }
                           }
-                          
+
                           // Always render the layer to maintain sequencing and playback state (master),
                           // but make it visually hidden if it's not meant for the current active preview.
-                          const isVisuallyActive = l.isVisible && isTargetOutput;
-                          
+                          const isVisuallyActive =
+                            l.isVisible && isTargetOutput;
+
                           // Resolve target output route (defaults to "1" or active preview if PROGRAM routing is selected)
-                          const resolvedOutputId = layerOutputs[l.id] && layerOutputs[l.id] !== "all" 
-                            ? layerOutputs[l.id] 
-                            : (activeOutputId || "1");
-                          
+                          const resolvedOutputId =
+                            layerOutputs[l.id] && layerOutputs[l.id] !== "all"
+                              ? layerOutputs[l.id]
+                              : activeOutputId || "1";
+
                           return (
                             <div
                               key={`${l.id}`}
@@ -1847,51 +1954,53 @@ const Monitor = React.memo(
                                   transform: `rotate(${l.rotation}deg)`,
                                 }}
                               >
-                                  <LayerPlaybox
-                                    layer={l}
-                                    clips={clips || []}
-                                    volume={isVisuallyActive ? volume : 0}
-                                    masterVolume={masterVolume}
-                                    opacity={opacity}
-                                    isProgram={!!isProgram}
-                                    isTransmitting={isTransmitting}
-                                    onLayerEnded={onLayerEnded}
-                                    onProgressUpdate={(current, total) => {
-                                      if (!!isProgram && isVisuallyActive) {
-                                        onProgressUpdate?.(current, total);
-                                        try {
-                                          window.dispatchEvent(
-                                            new CustomEvent("video-progress-program", {
+                                <LayerPlaybox
+                                  layer={l}
+                                  clips={clips || []}
+                                  volume={isVisuallyActive ? volume : 0}
+                                  masterVolume={masterVolume}
+                                  opacity={opacity}
+                                  isProgram={!!isProgram}
+                                  isTransmitting={isTransmitting}
+                                  onLayerEnded={onLayerEnded}
+                                  onProgressUpdate={(current, total) => {
+                                    if (!!isProgram && isVisuallyActive) {
+                                      onProgressUpdate?.(current, total);
+                                      try {
+                                        window.dispatchEvent(
+                                          new CustomEvent(
+                                            "video-progress-program",
+                                            {
                                               detail: { current, total },
-                                            }),
-                                          );
-                                        } catch (e) {}
-                                      }
-                                    }}
-                                    updateClip={updateClip}
-                                    perfSettings={perfSettings}
-                                    isSlave={isSlave}
-                                    allowClockAuthority={
-                                      !hasGlobalSource && index === 0
+                                            },
+                                          ),
+                                        );
+                                      } catch (e) {}
                                     }
-                                    outputId={resolvedOutputId}
-                                    monitorId={monitorId}
-                                    isVisuallyActive={isVisuallyActive}
-                                    onLevelChange={(lvl) => {
-                                      if (isVisuallyActive) {
-                                        layerLevelsRef.current[l.id] = lvl;
-                                      } else {
-                                        layerLevelsRef.current[l.id] = 0;
-                                      }
-                                      updateLevel();
-                                    }}
-                                  />
+                                  }}
+                                  updateClip={updateClip}
+                                  perfSettings={perfSettings}
+                                  isSlave={isSlave}
+                                  allowClockAuthority={
+                                    !hasGlobalSource && index === 0
+                                  }
+                                  outputId={resolvedOutputId}
+                                  monitorId={monitorId}
+                                  isVisuallyActive={isVisuallyActive}
+                                  onLevelChange={(lvl) => {
+                                    if (isVisuallyActive) {
+                                      layerLevelsRef.current[l.id] = lvl;
+                                    } else {
+                                      layerLevelsRef.current[l.id] = 0;
+                                    }
+                                    updateLevel();
+                                  }}
+                                />
                               </div>
                             </div>
                           );
                         });
                       })()}
-
 
                       <AnimatePresence>
                         {pipLayers
@@ -2102,7 +2211,9 @@ const PixelMapModal = ({
   const [mosaicName, setMosaicName] = useState("Virtual Mosaic 1");
   const [cols, setCols] = useState(2);
   const [rows, setRows] = useState(1);
-  const [gridAssignments, setGridAssignments] = useState<Record<string, string>>({});
+  const [gridAssignments, setGridAssignments] = useState<
+    Record<string, string>
+  >({});
 
   if (!isOpen) return null;
 
@@ -2126,8 +2237,8 @@ const PixelMapModal = ({
     e.preventDefault();
     const outputId = e.dataTransfer.getData("text/plain");
     const newAssignments = { ...gridAssignments };
-    Object.keys(newAssignments).forEach(key => {
-       if (newAssignments[key] === outputId) delete newAssignments[key];
+    Object.keys(newAssignments).forEach((key) => {
+      if (newAssignments[key] === outputId) delete newAssignments[key];
     });
     newAssignments[`${col}-${row}`] = outputId;
     setGridAssignments(newAssignments);
@@ -2170,80 +2281,96 @@ const PixelMapModal = ({
               <p className="text-[10px] text-obs-muted mb-4">
                 Drag and drop physical outputs into the grid cells.
               </p>
-              {outputs.filter(o => !o.isVirtual).map((out) => {
-                const isAssigned = Object.values(gridAssignments).includes(out.id);
-                return (
-                  <div
-                    key={out.id}
-                    draggable={!isAssigned}
-                    onDragStart={(e) => handleDragStart(e, out.id)}
-                    className={`w-full text-left px-3 py-3 rounded text-[11px] font-bold transition-all flex items-center gap-2 border ${
-                      isAssigned
-                        ? "bg-obs-dark-1 border-obs-border text-obs-muted opacity-50 cursor-not-allowed"
-                        : "bg-obs-surface border-obs-border hover:border-obs-accent cursor-grab active:cursor-grabbing text-obs-text shadow-sm"
-                    }`}
-                  >
-                    <MonitorIcon size={14} className={isAssigned ? "opacity-50" : "text-obs-accent"} />
-                    {out.name} {isAssigned && "(Assigned)"}
-                  </div>
-                );
-              })}
+              {outputs
+                .filter((o) => !o.isVirtual)
+                .map((out) => {
+                  const isAssigned = Object.values(gridAssignments).includes(
+                    out.id,
+                  );
+                  return (
+                    <div
+                      key={out.id}
+                      draggable={!isAssigned}
+                      onDragStart={(e) => handleDragStart(e, out.id)}
+                      className={`w-full text-left px-3 py-3 rounded text-[11px] font-bold transition-all flex items-center gap-2 border ${
+                        isAssigned
+                          ? "bg-obs-dark-1 border-obs-border text-obs-muted opacity-50 cursor-not-allowed"
+                          : "bg-obs-surface border-obs-border hover:border-obs-accent cursor-grab active:cursor-grabbing text-obs-text shadow-sm"
+                      }`}
+                    >
+                      <MonitorIcon
+                        size={14}
+                        className={
+                          isAssigned ? "opacity-50" : "text-obs-accent"
+                        }
+                      />
+                      {out.name} {isAssigned && "(Assigned)"}
+                    </div>
+                  );
+                })}
             </div>
           </div>
 
           <div className="flex-1 flex flex-col bg-obs-dark-1 relative items-center justify-center p-12">
             <div className="w-full max-w-4xl aspect-video flex items-center justify-center">
-               <div 
-                  className="grid gap-2 p-2 bg-obs-surface/40 border border-obs-border rounded"
-                  style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`, width: "100%", height: "100%" }}
-               >
-                 {Array.from({ length: cols * rows }).map((_, i) => {
-                    const col = i % cols;
-                    const row = Math.floor(i / cols);
-                    const assignedId = gridAssignments[`${col}-${row}`];
-                    const assignedOutput = outputs.find(o => o.id === assignedId);
+              <div
+                className="grid gap-2 p-2 bg-obs-surface/40 border border-obs-border rounded"
+                style={{
+                  gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                  gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+                  width: "100%",
+                  height: "100%",
+                }}
+              >
+                {Array.from({ length: cols * rows }).map((_, i) => {
+                  const col = i % cols;
+                  const row = Math.floor(i / cols);
+                  const assignedId = gridAssignments[`${col}-${row}`];
+                  const assignedOutput = outputs.find(
+                    (o) => o.id === assignedId,
+                  );
 
-                    return (
-                      <div 
-                        key={i}
-                        onDrop={(e) => handleDrop(e, col, row)}
-                        onDragOver={handleDragOver}
-                        className={`relative border-2 rounded flex items-center justify-center overflow-hidden transition-all ${
-                          assignedOutput 
-                            ? "border-obs-accent bg-obs-accent/20" 
-                            : "border-dashed border-obs-muted/50 bg-obs-dark-1 hover:border-obs-accent hover:bg-obs-accent/10"
-                        }`}
-                      >
-                         {assignedOutput ? (
-                           <div className="flex flex-col items-center gap-2">
-                             <MonitorIcon size={32} className="text-obs-accent" />
-                             <span className="text-[12px] font-bold bg-obs-accent text-white px-2 py-0.5 rounded shadow">
-                               {assignedOutput.name}
-                             </span>
-                             <button
-                               onClick={(e) => {
-                                  e.stopPropagation();
-                                  const newAssigns = { ...gridAssignments };
-                                  delete newAssigns[`${col}-${row}`];
-                                  setGridAssignments(newAssigns);
-                               }}
-                               className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-1 rounded transition-colors"
-                             >
-                                <X size={12} strokeWidth={3} />
-                             </button>
-                           </div>
-                         ) : (
-                           <span className="text-[10px] uppercase font-bold text-obs-muted pointer-events-none">
-                             Drop output here
-                           </span>
-                         )}
-                         <div className="absolute bottom-2 left-2 text-[9px] font-mono text-obs-muted opacity-50">
-                            Cell {col + 1}x{row + 1}
-                         </div>
+                  return (
+                    <div
+                      key={i}
+                      onDrop={(e) => handleDrop(e, col, row)}
+                      onDragOver={handleDragOver}
+                      className={`relative border-2 rounded flex items-center justify-center overflow-hidden transition-all ${
+                        assignedOutput
+                          ? "border-obs-accent bg-obs-accent/20"
+                          : "border-dashed border-obs-muted/50 bg-obs-dark-1 hover:border-obs-accent hover:bg-obs-accent/10"
+                      }`}
+                    >
+                      {assignedOutput ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <MonitorIcon size={32} className="text-obs-accent" />
+                          <span className="text-[12px] font-bold bg-obs-accent text-white px-2 py-0.5 rounded shadow">
+                            {assignedOutput.name}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const newAssigns = { ...gridAssignments };
+                              delete newAssigns[`${col}-${row}`];
+                              setGridAssignments(newAssigns);
+                            }}
+                            className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white p-1 rounded transition-colors"
+                          >
+                            <X size={12} strokeWidth={3} />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] uppercase font-bold text-obs-muted pointer-events-none">
+                          Drop output here
+                        </span>
+                      )}
+                      <div className="absolute bottom-2 left-2 text-[9px] font-mono text-obs-muted opacity-50">
+                        Cell {col + 1}x{row + 1}
                       </div>
-                    );
-                 })}
-               </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -2286,7 +2413,9 @@ const PixelMapModal = ({
                       min={1}
                       max={8}
                       value={cols}
-                      onChange={(e) => setCols(Math.max(1, parseInt(e.target.value) || 1))}
+                      onChange={(e) =>
+                        setCols(Math.max(1, parseInt(e.target.value) || 1))
+                      }
                       className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
                     />
                   </div>
@@ -2299,16 +2428,50 @@ const PixelMapModal = ({
                       min={1}
                       max={8}
                       value={rows}
-                      onChange={(e) => setRows(Math.max(1, parseInt(e.target.value) || 1))}
+                      onChange={(e) =>
+                        setRows(Math.max(1, parseInt(e.target.value) || 1))
+                      }
                       className="w-full bg-obs-bg border border-obs-border rounded px-2 py-1.5 text-[11px] outline-none focus:border-obs-accent"
                     />
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2 pt-2">
-                   <button onClick={() => { setCols(2); setRows(1); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">2x1</button>
-                   <button onClick={() => { setCols(3); setRows(1); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">3x1</button>
-                   <button onClick={() => { setCols(1); setRows(2); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">1x2</button>
-                   <button onClick={() => { setCols(2); setRows(2); }} className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all">2x2</button>
+                  <button
+                    onClick={() => {
+                      setCols(2);
+                      setRows(1);
+                    }}
+                    className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all"
+                  >
+                    2x1
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCols(3);
+                      setRows(1);
+                    }}
+                    className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all"
+                  >
+                    3x1
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCols(1);
+                      setRows(2);
+                    }}
+                    className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all"
+                  >
+                    1x2
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCols(2);
+                      setRows(2);
+                    }}
+                    className="px-2 py-1 bg-obs-surface border border-obs-border rounded text-[10px] hover:border-obs-accent text-obs-text transition-all"
+                  >
+                    2x2
+                  </button>
                 </div>
               </div>
             </div>
@@ -2927,7 +3090,8 @@ const VideoLayer = ({
     return `clip_${clip.id}`;
   }, [layerId, outputId, clip.id]);
 
-  const activeIsPlaying = isPlaying !== undefined ? isPlaying : (clip.isPlaying !== false);
+  const activeIsPlaying =
+    isPlaying !== undefined ? isPlaying : clip.isPlaying !== false;
 
   const activePerf = useMemo(
     () =>
@@ -2989,6 +3153,43 @@ const VideoLayer = ({
     }
   }, [loopOverride, clip.loop, activePerf.loopMode]);
 
+  // Reload video element when clip URL changes (e.g., when loading from .LUMIN files)
+  // This is necessary because HTML5 video requires explicit load() call when src attribute changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && clip.type === "video" && clip.url) {
+      // Always reload when URL changes to ensure video element picks up new source
+      try {
+        console.log(`[VideoClip] Loading video: ${clip.id}, URL: ${clip.url}`);
+
+        // Explicitly call load() to reload the video element with potentially new src
+        video.load();
+
+        // Reset ready state since we're loading a new source
+        setIsReady(false);
+        setFirstFrameRendered(false);
+
+        // Setup retry mechanism in case of slow network or file access
+        const loadTimeout = setTimeout(() => {
+          if (!video.readyState || video.readyState === 0) {
+            console.warn(
+              `[VideoClip] Video failed to load within timeout, retrying: ${clip.id}`,
+            );
+            try {
+              video.load();
+            } catch (e) {
+              console.error("[VideoClip] Retry failed:", e);
+            }
+          }
+        }, 2000);
+
+        return () => clearTimeout(loadTimeout);
+      } catch (e) {
+        console.error("[VideoClip] Error reloading video source:", clip.id, e);
+      }
+    }
+  }, [clip.url, clip.type, clip.id]);
+
   // Report first frame rendered when state becomes true
   useEffect(() => {
     if (firstFrameRendered) {
@@ -3006,58 +3207,71 @@ const VideoLayer = ({
     onEndedRef.current = onEnded;
   }, [onEnded]);
 
-  const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
-    videoRef.current = el;
-    if (el) {
-      if (monitorId) {
-        (window as any).__luminVideos = (window as any).__luminVideos || {};
-        (window as any).__luminVideos[monitorId] = el;
-      }
-      if (outputId) {
-        (window as any).__luminVideos = (window as any).__luminVideos || {};
-        (window as any).__luminVideos[outputId] = el;
+  const videoRefCallback = useCallback(
+    (el: HTMLVideoElement | null) => {
+      videoRef.current = el;
+      if (el) {
+        if (monitorId) {
+          (window as any).__luminVideos = (window as any).__luminVideos || {};
+          (window as any).__luminVideos[monitorId] = el;
+        }
+        if (outputId) {
+          (window as any).__luminVideos = (window as any).__luminVideos || {};
+          (window as any).__luminVideos[outputId] = el;
+          if (clip.id) {
+            (window as any).__luminVideos[`${outputId}_${clip.id}`] = el;
+          }
+        }
+        if (trackerId) {
+          (window as any).__luminVideos = (window as any).__luminVideos || {};
+          (window as any).__luminVideos[trackerId] = el;
+        }
         if (clip.id) {
-          (window as any).__luminVideos[`${outputId}_${clip.id}`] = el;
+          (window as any).__luminVideos = (window as any).__luminVideos || {};
+          (window as any).__luminVideos[clip.id] = el;
+        }
+        if (isClockSource && !isSlave) {
+          (window as any).__luminProgramVideo = el;
+          if (typeof window !== "undefined") {
+            (window as any).__lastProgramVideo = el;
+          }
+        }
+      } else {
+        const video = videoRef.current;
+        if (video) {
+          if (
+            monitorId &&
+            (window as any).__luminVideos?.[monitorId] === video
+          ) {
+            delete (window as any).__luminVideos[monitorId];
+          }
+          if (outputId && (window as any).__luminVideos?.[outputId] === video) {
+            delete (window as any).__luminVideos[outputId];
+          }
+          if (
+            outputId &&
+            clip.id &&
+            (window as any).__luminVideos?.[`${outputId}_${clip.id}`] === video
+          ) {
+            delete (window as any).__luminVideos[`${outputId}_${clip.id}`];
+          }
+          if (
+            trackerId &&
+            (window as any).__luminVideos?.[trackerId] === video
+          ) {
+            delete (window as any).__luminVideos[trackerId];
+          }
+          if (clip.id && (window as any).__luminVideos?.[clip.id] === video) {
+            delete (window as any).__luminVideos[clip.id];
+          }
+          if (isClockSource && (window as any).__luminProgramVideo === video) {
+            (window as any).__luminProgramVideo = null;
+          }
         }
       }
-      if (trackerId) {
-        (window as any).__luminVideos = (window as any).__luminVideos || {};
-        (window as any).__luminVideos[trackerId] = el;
-      }
-      if (clip.id) {
-        (window as any).__luminVideos = (window as any).__luminVideos || {};
-        (window as any).__luminVideos[clip.id] = el;
-      }
-      if (isClockSource && !isSlave) {
-        (window as any).__luminProgramVideo = el;
-        if (typeof window !== "undefined") {
-          (window as any).__lastProgramVideo = el;
-        }
-      }
-    } else {
-      const video = videoRef.current;
-      if (video) {
-        if (monitorId && (window as any).__luminVideos?.[monitorId] === video) {
-          delete (window as any).__luminVideos[monitorId];
-        }
-        if (outputId && (window as any).__luminVideos?.[outputId] === video) {
-          delete (window as any).__luminVideos[outputId];
-        }
-        if (outputId && clip.id && (window as any).__luminVideos?.[`${outputId}_${clip.id}`] === video) {
-          delete (window as any).__luminVideos[`${outputId}_${clip.id}`];
-        }
-        if (trackerId && (window as any).__luminVideos?.[trackerId] === video) {
-          delete (window as any).__luminVideos[trackerId];
-        }
-        if (clip.id && (window as any).__luminVideos?.[clip.id] === video) {
-          delete (window as any).__luminVideos[clip.id];
-        }
-        if (isClockSource && (window as any).__luminProgramVideo === video) {
-          (window as any).__luminProgramVideo = null;
-        }
-      }
-    }
-  }, [isClockSource, clip.id, isSlave, outputId, monitorId, trackerId]);
+    },
+    [isClockSource, clip.id, isSlave, outputId, monitorId, trackerId],
+  );
 
   const filterId = useMemo(
     () => `filter-${clip.id}-${Math.random().toString(36).substr(2, 9)}`,
@@ -3091,19 +3305,30 @@ const VideoLayer = ({
               (window as any).__luminVideoTimes = {};
             }
             (window as any).__luminVideoTimes[trackerId] = video.currentTime;
-            
+
             // Both the master (controller) and active slave playing in the output can broadcast.
             // If it is a master (not isSlave), only broadcast when actually visually active in the controller UI!
             // If it is a slave, only broadcast when actually playing so we don't interfere when paused.
-            const shouldBroadcast = !isSlave ? isVisuallyActive : activeIsPlaying;
+            const shouldBroadcast = !isSlave
+              ? isVisuallyActive
+              : activeIsPlaying;
             if (shouldBroadcast) {
-              const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+              const ch =
+                (window as any).__luminTimeChannel ||
+                (typeof BroadcastChannel !== "undefined"
+                  ? new BroadcastChannel("lumin-output")
+                  : null);
               if (ch) {
-                if (!(window as any).__luminTimeChannel) (window as any).__luminTimeChannel = ch;
+                if (!(window as any).__luminTimeChannel)
+                  (window as any).__luminTimeChannel = ch;
                 try {
                   ch.postMessage({
                     type: "VIDEO_TIME_UPDATE",
-                    payload: { trackerId, clipId: clip.id, currentTime: video.currentTime },
+                    payload: {
+                      trackerId,
+                      clipId: clip.id,
+                      currentTime: video.currentTime,
+                    },
                   });
                 } catch (err) {}
               }
@@ -3114,7 +3339,7 @@ const VideoLayer = ({
         // Sequential Playback Stability
         if (isPlaylistSequence && video.duration > 0) {
           const remaining = video.duration - video.currentTime;
-          
+
           // For sequences, we trigger slightly before the end to hide buffer delay
           const threshold = transitionType === "cut" ? 0.15 : 0.35;
 
@@ -3187,7 +3412,9 @@ const VideoLayer = ({
           const payload = e.data.payload;
           if (payload && payload.trackerId === trackerId) {
             if (isSlave && videoRef.current) {
-              const diff = Math.abs(videoRef.current.currentTime - payload.currentTime);
+              const diff = Math.abs(
+                videoRef.current.currentTime - payload.currentTime,
+              );
               if (diff > 0.15) {
                 videoRef.current.currentTime = payload.currentTime;
               }
@@ -3197,12 +3424,15 @@ const VideoLayer = ({
                 if (!(window as any).__luminVideoTimes) {
                   (window as any).__luminVideoTimes = {};
                 }
-                (window as any).__luminVideoTimes[trackerId] = payload.currentTime;
+                (window as any).__luminVideoTimes[trackerId] =
+                  payload.currentTime;
               }
               // If the master video element is currently NOT visually active, keep its video time
               // strictly synchronized with the active slave to prevent jumping when transitioned active!
               if (!isVisuallyActive && videoRef.current) {
-                const diff = Math.abs(videoRef.current.currentTime - payload.currentTime);
+                const diff = Math.abs(
+                  videoRef.current.currentTime - payload.currentTime,
+                );
                 if (diff > 0.3) {
                   videoRef.current.currentTime = payload.currentTime;
                 }
@@ -3212,9 +3442,14 @@ const VideoLayer = ({
         }
       };
 
-      const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+      const ch =
+        (window as any).__luminTimeChannel ||
+        (typeof BroadcastChannel !== "undefined"
+          ? new BroadcastChannel("lumin-output")
+          : null);
       if (ch) {
-        if (!(window as any).__luminTimeChannel) (window as any).__luminTimeChannel = ch;
+        if (!(window as any).__luminTimeChannel)
+          (window as any).__luminTimeChannel = ch;
         ch.addEventListener("message", handleBroadcastMessage);
       }
 
@@ -3309,17 +3544,21 @@ const VideoLayer = ({
         faderOpacity !== undefined ? faderOpacity : opacity || 1;
 
       // Base calculated volume from fader, master, opacity, clip
-      let baseFinalVolume = volume * masterVolume * targetAudioOpacity * clipBaseVolume;
+      let baseFinalVolume =
+        volume * masterVolume * targetAudioOpacity * clipBaseVolume;
 
       // Overlay selected audio output volume & mute if applicable from active system faders
       const audioState = (window as any).__luminAudioState;
       if (audioState) {
         const { selectedAudioOutput, audioVolumes, mutedFaders } = audioState;
         if (selectedAudioOutput && selectedAudioOutput !== "none") {
-          const faderKey = selectedAudioOutput.startsWith("out-") ? selectedAudioOutput : `out-${selectedAudioOutput}`;
-          const devVolume = audioVolumes[faderKey] !== undefined ? audioVolumes[faderKey] : 0.5;
+          const faderKey = selectedAudioOutput.startsWith("out-")
+            ? selectedAudioOutput
+            : `out-${selectedAudioOutput}`;
+          const devVolume =
+            audioVolumes[faderKey] !== undefined ? audioVolumes[faderKey] : 0.5;
           const devMuted = !!mutedFaders[faderKey];
-          
+
           if (devMuted) {
             baseFinalVolume = 0;
           } else {
@@ -3441,7 +3680,11 @@ const VideoLayer = ({
   }, [clip.transform.x, isProgram, transitionType, crossfaderValue]);
 
   const isCut = transitionType === "cut";
-  const activeDuration = isCut ? 0 : (typeof transitionDuration === "number" ? transitionDuration : 0.4);
+  const activeDuration = isCut
+    ? 0
+    : typeof transitionDuration === "number"
+      ? transitionDuration
+      : 0.4;
   const variants: any = {
     initial: {
       opacity: 0,
@@ -3473,7 +3716,7 @@ const VideoLayer = ({
         },
         default: {
           duration: 0,
-        }
+        },
       },
     },
     exit: {
@@ -3486,7 +3729,7 @@ const VideoLayer = ({
         },
         default: {
           duration: 0,
-        }
+        },
       },
     },
   };
@@ -3569,7 +3812,9 @@ const VideoLayer = ({
                   : true
               }
               playsInline
-              crossOrigin={clip.url?.startsWith("http") ? "anonymous" : undefined}
+              crossOrigin={
+                clip.url?.startsWith("http") ? "anonymous" : undefined
+              }
               preload={
                 isProgram ||
                 activeIsPlaying ||
@@ -3590,20 +3835,46 @@ const VideoLayer = ({
               }}
               onPlaying={() => setFirstFrameRendered(true)}
               onWaiting={() => {
-                if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
+                if (
+                  activeIsPlaying &&
+                  videoRef.current &&
+                  videoRef.current.paused
+                ) {
                   videoRef.current.play().catch(() => {});
                 }
               }}
               onStalled={() => {
-                if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
+                if (
+                  activeIsPlaying &&
+                  videoRef.current &&
+                  videoRef.current.paused
+                ) {
                   videoRef.current.play().catch(() => {});
                 }
               }}
               onError={(e) => {
-                console.warn("Video element error encountered in VideoLayer, retrying source...", e);
+                const video = e.currentTarget;
+                const errorCode = video.error?.code;
+                const errorMessage = video.error?.message || "Unknown error";
+                const errorMap: Record<number, string> = {
+                  1: "MEDIA_ERR_ABORTED - Playback was aborted",
+                  2: "MEDIA_ERR_NETWORK - Network error occurred",
+                  3: "MEDIA_ERR_DECODE - Decoding error occurred",
+                  4: "MEDIA_ERR_SRC_NOT_SUPPORTED - Format not supported",
+                };
+
+                const errorText = errorMap[errorCode || 0] || "Unknown error";
+                console.error(`[VideoLayer] Error loading video: ${clip.id}`);
+                console.error(`  URL: ${video.src}`);
+                console.error(`  Error: ${errorText} (code: ${errorCode})`);
+                console.error(`  Message: ${errorMessage}`);
+
                 if (activeIsPlaying && videoRef.current) {
                   const currentSrc = videoRef.current.src;
                   if (currentSrc) {
+                    console.warn(
+                      `[VideoLayer] Retrying to load video: ${currentSrc}`,
+                    );
                     videoRef.current.load();
                     videoRef.current.play().catch(() => {});
                   }
@@ -3903,7 +4174,10 @@ const OutputCountdown = ({
         lineHeight: 1,
       }}
     >
-      <span className={fontStyle} style={{ animation: animationStyle, color: "inherit" }}>
+      <span
+        className={fontStyle}
+        style={{ animation: animationStyle, color: "inherit" }}
+      >
         {formatTime(remaining)}
       </span>
     </div>
@@ -4471,8 +4745,12 @@ const OutputView = React.memo(() => {
       externalScreenSettings,
     } = state;
 
-    const finalProgramVolume = mutedFaders?.["Programa"] ? 0 : (programVolume ?? 0.5);
-    const finalMasterVolume = mutedFaders?.["Master"] ? 0 : (masterVolume ?? 0.5);
+    const finalProgramVolume = mutedFaders?.["Programa"]
+      ? 0
+      : (programVolume ?? 0.5);
+    const finalMasterVolume = mutedFaders?.["Master"]
+      ? 0
+      : (masterVolume ?? 0.5);
 
     // Find if this screen is mapped to a specific LUMIN Output
     const mappedOutput = outputs?.find(
@@ -4613,8 +4891,7 @@ const OutputView = React.memo(() => {
             opacity: settings.opacity ?? 1,
             // If background is showing and we have no content, make container transparent
             backgroundColor:
-              settings.showBackground &&
-              settings.backgroundImage
+              settings.showBackground && settings.backgroundImage
                 ? "transparent"
                 : "#000",
             transform: `translate3d(${settings.x ?? 0}px, ${settings.y ?? 0}px, 0px) rotate(${settings.rotation ?? 0}deg)`,
@@ -4661,7 +4938,13 @@ const OutputView = React.memo(() => {
                 <AnimatePresence custom={transitionType}>
                   {/* Bus A Layer (Legacy/Mixer mode) */}
                   {busAClip &&
-                    !state.layers?.some((l: any) => l.activeClipId && (state.layerOutputs?.[l.id] === mappedOutput?.id || !state.layerOutputs?.[l.id] || state.layerOutputs?.[l.id] === "all")) &&
+                    !state.layers?.some(
+                      (l: any) =>
+                        l.activeClipId &&
+                        (state.layerOutputs?.[l.id] === mappedOutput?.id ||
+                          !state.layerOutputs?.[l.id] ||
+                          state.layerOutputs?.[l.id] === "all"),
+                    ) &&
                     (crossfaderValue === undefined ||
                       crossfaderValue < 100) && (
                       <VideoLayer
@@ -4732,104 +5015,119 @@ const OutputView = React.memo(() => {
                 </AnimatePresence>
 
                 {/* Layer Rendering - Multi-layer mixing */}
-                {(state.layers || [])
-                  .map((l: any, index: number) => {
-                      if (!l.isVisible) return null;
-                      
-                      const activeClip = l.activeClipId
-                        ? (state.clips || []).find(
-                            (c: any) => c.id === l.activeClipId,
-                          )
-                        : null;
-                      if (!activeClip) return null;
+                {(state.layers || []).map((l: any, index: number) => {
+                  if (!l.isVisible) return null;
 
-                      const lOut = state.layerOutputs?.[l.id];
-                      let isTargetOutput = lOut === mappedOutput?.id || !lOut || lOut === "all";
-                      let virtualStyle: React.CSSProperties = { width: "100%", height: "100%", left: "0%", top: "0%" };
-                      
-                      if (!isTargetOutput && lOut && mappedOutput?.id) {
-                        const targetOutput = outputs?.find((o: any) => o.id === lOut);
-                        if (targetOutput?.isVirtual) {
-                          const cellAssignments = Object.entries(targetOutput.assignments || {});
-                          const cellEntry = cellAssignments.find(([k, outId]) => outId === mappedOutput?.id);
-                          if (cellEntry) {
-                            isTargetOutput = true;
-                            const [colStr, rowStr] = cellEntry[0].split("-");
-                            const col = parseInt(colStr);
-                            const row = parseInt(rowStr);
-                            const cols = targetOutput.grid.cols || 1;
-                            const rows = targetOutput.grid.rows || 1;
-                            virtualStyle = {
-                              width: `${cols * 100}%`,
-                              height: `${rows * 100}%`,
-                              left: `${-col * 100}%`,
-                              top: `${-row * 100}%`,
-                            };
-                          }
-                        }
+                  const activeClip = l.activeClipId
+                    ? (state.clips || []).find(
+                        (c: any) => c.id === l.activeClipId,
+                      )
+                    : null;
+                  if (!activeClip) return null;
+
+                  const lOut = state.layerOutputs?.[l.id];
+                  let isTargetOutput =
+                    lOut === mappedOutput?.id || !lOut || lOut === "all";
+                  let virtualStyle: React.CSSProperties = {
+                    width: "100%",
+                    height: "100%",
+                    left: "0%",
+                    top: "0%",
+                  };
+
+                  if (!isTargetOutput && lOut && mappedOutput?.id) {
+                    const targetOutput = outputs?.find(
+                      (o: any) => o.id === lOut,
+                    );
+                    if (targetOutput?.isVirtual) {
+                      const cellAssignments = Object.entries(
+                        targetOutput.assignments || {},
+                      );
+                      const cellEntry = cellAssignments.find(
+                        ([k, outId]) => outId === mappedOutput?.id,
+                      );
+                      if (cellEntry) {
+                        isTargetOutput = true;
+                        const [colStr, rowStr] = cellEntry[0].split("-");
+                        const col = parseInt(colStr);
+                        const row = parseInt(rowStr);
+                        const cols = targetOutput.grid.cols || 1;
+                        const rows = targetOutput.grid.rows || 1;
+                        virtualStyle = {
+                          width: `${cols * 100}%`,
+                          height: `${rows * 100}%`,
+                          left: `${-col * 100}%`,
+                          top: `${-row * 100}%`,
+                        };
                       }
+                    }
+                  }
 
-                      if (!isTargetOutput) return null;
+                  if (!isTargetOutput) return null;
 
-                      return (
-                        <div
-                          key={l.id}
-                          className="absolute pointer-events-none"
-                          style={{
-                            opacity: l.opacity,
-                            zIndex: state.layers.length - index + 10,
-                            ...virtualStyle,
-                          }}
+                  return (
+                    <div
+                      key={l.id}
+                      className="absolute pointer-events-none"
+                      style={{
+                        opacity: l.opacity,
+                        zIndex: state.layers.length - index + 10,
+                        ...virtualStyle,
+                      }}
+                    >
+                      <svg width="0" height="0" className="absolute">
+                        <filter
+                          id={`rgbLayerOutput-${l.id}`}
+                          colorInterpolationFilters="sRGB"
                         >
-                          <svg width="0" height="0" className="absolute">
-                            <filter
-                              id={`rgbLayerOutput-${l.id}`}
-                              colorInterpolationFilters="sRGB"
-                            >
-                              <feColorMatrix
-                                type="matrix"
-                                values={`${l.colorBalance.r} 0 0 0 0
+                          <feColorMatrix
+                            type="matrix"
+                            values={`${l.colorBalance.r} 0 0 0 0
                                     0 ${l.colorBalance.g} 0 0 0
                                     0 0 ${l.colorBalance.b} 0 0
                                     0 0 0 1 0`}
-                              />
-                            </filter>
-                          </svg>
-                          <div
-                            className="w-full h-full relative"
-                            style={{
-                              filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayerOutput-${l.id})`,
-                              transform: `rotate(${l.rotation}deg)`,
-                            }}
-                          >
-                            <LayerPlaybox 
-                              layer={l}
-                              clips={state.clips || []}
-                              volume={l.muted ? 0 : finalProgramVolume}
-                              masterVolume={finalMasterVolume}
-                              opacity={1}
-                              isProgram={true}
-                              isTransmitting={isTransmitting}
-                              onLayerEnded={(layerId: string, clipId: string, seqCounter: number) => {
-                                channelRef.current?.postMessage({
-                                  type: "LAYER_CLIP_ENDED",
-                                  payload: {
-                                    layerId: layerId,
-                                    clipId: clipId,
-                                    sequenceCounter: seqCounter,
-                                    outputId: mappedOutput?.id || "1",
-                                  },
-                                });
-                              }}
-                              updateClip={updateClip}
-                              perfSettings={perfSettings}
-                              isSlave={true}
-                              outputId={mappedOutput?.id || "1"}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
+                          />
+                        </filter>
+                      </svg>
+                      <div
+                        className="w-full h-full relative"
+                        style={{
+                          filter: `brightness(${l.brightness}) contrast(${l.contrast}) saturate(${l.saturation}) url(#rgbLayerOutput-${l.id})`,
+                          transform: `rotate(${l.rotation}deg)`,
+                        }}
+                      >
+                        <LayerPlaybox
+                          layer={l}
+                          clips={state.clips || []}
+                          volume={l.muted ? 0 : finalProgramVolume}
+                          masterVolume={finalMasterVolume}
+                          opacity={1}
+                          isProgram={true}
+                          isTransmitting={isTransmitting}
+                          onLayerEnded={(
+                            layerId: string,
+                            clipId: string,
+                            seqCounter: number,
+                          ) => {
+                            channelRef.current?.postMessage({
+                              type: "LAYER_CLIP_ENDED",
+                              payload: {
+                                layerId: layerId,
+                                clipId: clipId,
+                                sequenceCounter: seqCounter,
+                                outputId: mappedOutput?.id || "1",
+                              },
+                            });
+                          }}
+                          updateClip={updateClip}
+                          perfSettings={perfSettings}
+                          isSlave={true}
+                          outputId={mappedOutput?.id || "1"}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
 
                 <AnimatePresence>
                   {state.pipLayers &&
@@ -5714,7 +6012,9 @@ const Inspector = React.memo(
                           }
                           className={`py-1.5 px-2 rounded-md text-[8px] uppercase font-black tracking-tight border transition-all flex flex-col items-center justify-center leading-tight ${layer.outputId === out.id ? "bg-obs-accent text-white border-obs-accent shadow-[0_0_10px_rgba(0,163,245,0.4)]" : "bg-obs-bg text-obs-muted border-obs-text/5 hover:border-obs-text/10"}`}
                         >
-                          <span className="truncate w-10 text-center">{out.isVirtual ? out.name : `OUT ${out.id}`}</span>
+                          <span className="truncate w-10 text-center">
+                            {out.isVirtual ? out.name : `OUT ${out.id}`}
+                          </span>
                           {!out.isVirtual && screen && (
                             <span className="text-[6px] opacity-60 font-normal truncate max-w-full">
                               ({screen.name})
@@ -6683,10 +6983,6 @@ const Inspector = React.memo(
                     />
                   </button>
                 </div>
-
-
-
-
 
                 <div className="flex items-center justify-between bg-obs-bg/50 p-2 rounded border border-obs-text/5 font-sans">
                   <div className="flex flex-col">
@@ -8140,7 +8436,9 @@ const Library = React.memo(
       }
     };
 
-    const handleLibraryLoad = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleLibraryLoad = async (
+      e: React.ChangeEvent<HTMLInputElement>,
+    ) => {
       const files = e.target.files;
       if (!files) return;
       const newFiles = await Promise.all(
@@ -8153,10 +8451,23 @@ const Library = React.memo(
           )
             type = "application/vnd.mspowerpoint";
 
-          // Persistent path if in electron, otherwise temporary URL
-          const url = (window as any).electron
-            ? (f as any).path || getFileUrl(f)
-            : URL.createObjectURL(f);
+          // Capture the real filesystem path for persistence in .LUMIN files
+          const filePath = (window as any).electron
+            ? getNativeFilePath(f)
+            : undefined;
+          if (filePath) {
+            console.log(
+              `[handleLibraryLoad] Captured native file path: ${filePath}`,
+            );
+          }
+
+          // Always use blob URL for in-session playback (fast, no range issues, no CORS)
+          // The real path is stored separately for .LUMIN save/load persistence
+          const url = URL.createObjectURL(f);
+
+          console.log(
+            `[handleLibraryLoad] File: ${f.name}, Path: ${filePath || "N/A"}, URL: ${url.substring(0, 80)}...`,
+          );
 
           let thumbnail = undefined;
           if (type.startsWith("video")) {
@@ -8174,6 +8485,7 @@ const Library = React.memo(
             name: f.name,
             type: type,
             url,
+            path: filePath || undefined,
             file: f,
             thumbnail,
             addedAt: Date.now(),
@@ -9156,16 +9468,23 @@ const LayersSection = React.memo(
                                     onUpdateClip(c.id, { currentTime: 0 });
                                   });
                                 }
-                                const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+                                const ch =
+                                  (window as any).__luminTimeChannel ||
+                                  (typeof BroadcastChannel !== "undefined"
+                                    ? new BroadcastChannel("lumin-output")
+                                    : null);
                                 if (ch && clips) {
-                                    clips.forEach((c) => {
-                                      try {
-                                        ch.postMessage({
-                                          type: "VIDEO_TIME_UPDATE",
-                                          payload: { clipId: c.id, currentTime: 0 },
-                                        });
-                                      } catch (err) {}
-                                    });
+                                  clips.forEach((c) => {
+                                    try {
+                                      ch.postMessage({
+                                        type: "VIDEO_TIME_UPDATE",
+                                        payload: {
+                                          clipId: c.id,
+                                          currentTime: 0,
+                                        },
+                                      });
+                                    } catch (err) {}
+                                  });
                                 }
                               }}
                               className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${!layer.isPlaying && !layer.activeClipId ? "border-red-500 bg-red-500 text-white" : "border-white/80 bg-white text-black hover:bg-gray-200"}`}
@@ -9181,13 +9500,11 @@ const LayersSection = React.memo(
                                   ...prev,
                                   [layer.id]: "play",
                                 }));
-                                const firstIdx = layer.slots.findIndex((s) => s !== null);
+                                const firstIdx = layer.slots.findIndex(
+                                  (s) => s !== null,
+                                );
                                 if (firstIdx !== -1) {
-                                  onTriggerClip(
-                                    layer.id,
-                                    firstIdx,
-                                    "sequence",
-                                  );
+                                  onTriggerClip(layer.id, firstIdx, "sequence");
                                 }
                               }}
                               className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${layer.isPlaying && layer.playbackMode === "sequence" ? "border-green-500 bg-green-500 text-white" : "border-white/80 bg-white text-black hover:bg-green-100 hover:border-green-500"}`}
@@ -9854,7 +10171,11 @@ const OutputManagerModal = ({
   activeOutputId: string;
   onClose: () => void;
   onApply: (newOutputs: any[]) => void;
-  showCustomAlert: (title: string, message: string, type?: "info" | "error" | "success") => void;
+  showCustomAlert: (
+    title: string,
+    message: string,
+    type?: "info" | "error" | "success",
+  ) => void;
 }) => {
   const [localOutputs, setLocalOutputs] = useState([...outputs]);
 
@@ -9880,9 +10201,9 @@ const OutputManagerModal = ({
                 localOutputs.length >= externalScreens.length
               ) {
                 showCustomAlert(
-                  "Límite de Salidas Alcanzado", 
-                  `No puedes crear más salidas que pantallas físicas detectadas (${externalScreens.length}).`, 
-                  "error"
+                  "Límite de Salidas Alcanzado",
+                  `No puedes crear más salidas que pantallas físicas detectadas (${externalScreens.length}).`,
+                  "error",
                 );
                 return;
               }
@@ -10023,7 +10344,9 @@ const PreviewManagerModal = ({
                   clipId: null,
                   volume: 0.5,
                   isLive: false,
-                  assignedOutputs: outputs.filter(o => !o.isVirtual).map((o) => o.id),
+                  assignedOutputs: outputs
+                    .filter((o) => !o.isVirtual)
+                    .map((o) => o.id),
                   selectedOutputs: [],
                   hideOverlay: false,
                   overlayColor: "#00a3f5",
@@ -10078,35 +10401,37 @@ const PreviewManagerModal = ({
                       Salidas Disponibles
                     </span>
                     <div className="flex gap-1.5 flex-wrap">
-                      {outputs.filter(o => !o.isVirtual).map((out) => (
-                        <button
-                          key={out.id}
-                          onClick={() => {
-                            setLocalPreviews((prevs) =>
-                              prevs.map((pr) =>
-                                pr.id === p.id
-                                  ? {
-                                      ...pr,
-                                      assignedOutputs: (
-                                        pr.assignedOutputs || []
-                                      ).includes(out.id)
-                                        ? pr.assignedOutputs.filter(
-                                            (o: string) => o !== out.id,
-                                          )
-                                        : [
-                                            ...(pr.assignedOutputs || []),
-                                            out.id,
-                                          ],
-                                    }
-                                  : pr,
-                              ),
-                            );
-                          }}
-                          className={`w-7 h-7 rounded text-[10px] font-black transition-all border ${p.assignedOutputs?.includes(out.id) ? "bg-obs-accent border-obs-accent text-white shadow-[0_0_8px_rgba(0,163,245,0.4)]" : "bg-obs-dark-1 border-obs-text/10 text-obs-muted hover:border-obs-text/30"}`}
-                        >
-                          {out.id}
-                        </button>
-                      ))}
+                      {outputs
+                        .filter((o) => !o.isVirtual)
+                        .map((out) => (
+                          <button
+                            key={out.id}
+                            onClick={() => {
+                              setLocalPreviews((prevs) =>
+                                prevs.map((pr) =>
+                                  pr.id === p.id
+                                    ? {
+                                        ...pr,
+                                        assignedOutputs: (
+                                          pr.assignedOutputs || []
+                                        ).includes(out.id)
+                                          ? pr.assignedOutputs.filter(
+                                              (o: string) => o !== out.id,
+                                            )
+                                          : [
+                                              ...(pr.assignedOutputs || []),
+                                              out.id,
+                                            ],
+                                      }
+                                    : pr,
+                                ),
+                              );
+                            }}
+                            className={`w-7 h-7 rounded text-[10px] font-black transition-all border ${p.assignedOutputs?.includes(out.id) ? "bg-obs-accent border-obs-accent text-white shadow-[0_0_8px_rgba(0,163,245,0.4)]" : "bg-obs-dark-1 border-obs-text/10 text-obs-muted hover:border-obs-text/30"}`}
+                          >
+                            {out.id}
+                          </button>
+                        ))}
                     </div>
                   </div>
 
@@ -10269,8 +10594,7 @@ export default function App() {
   const [audioInputDevices, setAudioInputDevices] = useState<any[]>([]);
   const [audioOutputDevices, setAudioOutputDevices] = useState<any[]>([]);
   const [windowsDevicesList, setWindowsDevicesList] = useState<any[]>([]);
-  const [selectedAudioInput, setSelectedAudioInput] =
-    useState<string>("none");
+  const [selectedAudioInput, setSelectedAudioInput] = useState<string>("none");
   const [selectedAudioOutput, setSelectedAudioOutput] =
     useState<string>("none");
   const activeFaders = useMemo(() => {
@@ -10279,14 +10603,14 @@ export default function App() {
       list.push(
         selectedAudioOutput.startsWith("out-")
           ? selectedAudioOutput
-          : `out-${selectedAudioOutput}`
+          : `out-${selectedAudioOutput}`,
       );
     }
     if (selectedAudioInput && selectedAudioInput !== "none") {
       list.push(
         selectedAudioInput.startsWith("in-")
           ? selectedAudioInput
-          : `in-${selectedAudioInput}`
+          : `in-${selectedAudioInput}`,
       );
     }
     return list;
@@ -10294,70 +10618,101 @@ export default function App() {
   const [isAudioConfigModalOpen, setIsAudioConfigModalOpen] = useState(false);
   const [mutedFaders, setMutedFaders] = useState<Record<string, boolean>>({});
 
-  const toggleMute = useCallback((sourceName: string) => {
-    setMutedFaders((prev) => {
-      const isMuted = !prev[sourceName];
-      lastFaderUserInteractionRef.current[sourceName] = Date.now();
-      
-      // Enforce physical muting if Windows electron API available
-      if (sourceName === "Master") {
-        (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
-      } else if (sourceName === "out-default") {
-        const defDev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
-        if (defDev) {
-          (window.electron as any)?.setWindowsDeviceMute?.(defDev.id, isMuted).catch(() => {});
-        } else {
-          (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
-        }
-      } else if (sourceName === "in-default") {
-        const defDev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
-        if (defDev) {
-          (window.electron as any)?.setWindowsDeviceMute?.(defDev.id, isMuted).catch(() => {});
-        }
-      } else if (sourceName === "USB") {
-        (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
-      } else if (sourceName === "IN") {
-        const defIn = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
-        if (defIn) {
-          (window.electron as any)?.setWindowsDeviceMute?.(defIn.id, isMuted).catch(() => {});
-        }
-      } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
-        const flow = sourceName.startsWith("out-") ? 0 : 1;
-        const cleanId = sourceName.replace("out-", "").replace("in-", "");
-        
-        let winDevId = cleanId;
-        let winDevToMute = windowsDevicesList.find(d => d.id === cleanId && d.flow === flow);
-        
-        if (!winDevToMute) {
-          const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
-          const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
-          
-          if (chromeDev && chromeDev.label) {
-            const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
-            winDevToMute = windowsDevicesList.find(d => d.flow === flow && 
-              (d.name === rawLabel || rawLabel.includes(d.name) || d.name.includes(rawLabel))
-            );
-          }
-        }
-        
-        if (winDevToMute) winDevId = winDevToMute.id;
-        (window.electron as any)?.setWindowsDeviceMute?.(winDevId, isMuted).catch(() => {});
-      }
+  const toggleMute = useCallback(
+    (sourceName: string) => {
+      setMutedFaders((prev) => {
+        const isMuted = !prev[sourceName];
+        lastFaderUserInteractionRef.current[sourceName] = Date.now();
 
-      return {
-        ...prev,
-        [sourceName]: isMuted
-      };
-    });
-  }, [windowsDevicesList, audioOutputDevices, audioInputDevices]);
+        // Enforce physical muting if Windows electron API available
+        if (sourceName === "Master") {
+          (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
+        } else if (sourceName === "out-default") {
+          const defDev = windowsDevicesList.find(
+            (d) => d.flow === 0 && d.isDefault,
+          );
+          if (defDev) {
+            (window.electron as any)
+              ?.setWindowsDeviceMute?.(defDev.id, isMuted)
+              .catch(() => {});
+          } else {
+            (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
+          }
+        } else if (sourceName === "in-default") {
+          const defDev = windowsDevicesList.find(
+            (d) => d.flow === 1 && d.isDefault,
+          );
+          if (defDev) {
+            (window.electron as any)
+              ?.setWindowsDeviceMute?.(defDev.id, isMuted)
+              .catch(() => {});
+          }
+        } else if (sourceName === "USB") {
+          (window.electron as any)?.setWindowsMute?.(isMuted).catch(() => {});
+        } else if (sourceName === "IN") {
+          const defIn = windowsDevicesList.find(
+            (d) => d.flow === 1 && d.isDefault,
+          );
+          if (defIn) {
+            (window.electron as any)
+              ?.setWindowsDeviceMute?.(defIn.id, isMuted)
+              .catch(() => {});
+          }
+        } else if (
+          sourceName.startsWith("out-") ||
+          sourceName.startsWith("in-")
+        ) {
+          const flow = sourceName.startsWith("out-") ? 0 : 1;
+          const cleanId = sourceName.replace("out-", "").replace("in-", "");
+
+          let winDevId = cleanId;
+          let winDevToMute = windowsDevicesList.find(
+            (d) => d.id === cleanId && d.flow === flow,
+          );
+
+          if (!winDevToMute) {
+            const chromeList =
+              flow === 0 ? audioOutputDevices : audioInputDevices;
+            const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+
+            if (chromeDev && chromeDev.label) {
+              const rawLabel = chromeDev.label
+                .replace(/^Predeterminado - /, "")
+                .trim();
+              winDevToMute = windowsDevicesList.find(
+                (d) =>
+                  d.flow === flow &&
+                  (d.name === rawLabel ||
+                    rawLabel.includes(d.name) ||
+                    d.name.includes(rawLabel)),
+              );
+            }
+          }
+
+          if (winDevToMute) winDevId = winDevToMute.id;
+          (window.electron as any)
+            ?.setWindowsDeviceMute?.(winDevId, isMuted)
+            .catch(() => {});
+        }
+
+        return {
+          ...prev,
+          [sourceName]: isMuted,
+        };
+      });
+    },
+    [windowsDevicesList, audioOutputDevices, audioInputDevices],
+  );
 
   // Audio signals
   const [programLevel, setProgramLevel] = useState(0);
   const micVolumeRef = useRef<number>(0);
 
   const [activeOutputId, setActiveOutputId] = useState<string>("1");
-  const [leftPreviewSelection, setLeftPreviewSelection] = useState<string>("preview");
-  const [rightPreviewSelection, setRightPreviewSelection] = useState<string>("1");
+  const [leftPreviewSelection, setLeftPreviewSelection] =
+    useState<string>("preview");
+  const [rightPreviewSelection, setRightPreviewSelection] =
+    useState<string>("1");
   const [libraryFiles, setLibraryFiles] = useState<
     {
       id?: string;
@@ -10371,149 +10726,197 @@ export default function App() {
     }[]
   >([]);
 
-  const getFaderSignalLevel = useCallback((sourceName: string): number => {
-    // If the fader is muted, return exactly 0 immediately
-    if (mutedFaders[sourceName]) return 0;
+  const getFaderSignalLevel = useCallback(
+    (sourceName: string): number => {
+      // If the fader is muted, return exactly 0 immediately
+      if (mutedFaders[sourceName]) return 0;
 
-    // Volume setting
-    const vol =
-      sourceName === "Master"
-        ? masterVolume
-        : sourceName === "out-default"
-          ? (windowsDevicesList.find((d) => d.flow === 0 && d.isDefault)?.volume ?? audioVolumes["out-default"] ?? 0.5)
-          : sourceName === "in-default"
-            ? (windowsDevicesList.find((d) => d.flow === 1 && d.isDefault)?.volume ?? audioVolumes["in-default"] ?? 0.5)
-            : sourceName === "Programa"
-              ? programVolume
-              : sourceName === "USB"
-                ? usbOutVolume
-                : sourceName === "IN"
-                  ? usbInVolume
-                  : (audioVolumes[sourceName] ?? 0.5);
+      // Volume setting
+      const vol =
+        sourceName === "Master"
+          ? masterVolume
+          : sourceName === "out-default"
+            ? (windowsDevicesList.find((d) => d.flow === 0 && d.isDefault)
+                ?.volume ??
+              audioVolumes["out-default"] ??
+              0.5)
+            : sourceName === "in-default"
+              ? (windowsDevicesList.find((d) => d.flow === 1 && d.isDefault)
+                  ?.volume ??
+                audioVolumes["in-default"] ??
+                0.5)
+              : sourceName === "Programa"
+                ? programVolume
+                : sourceName === "USB"
+                  ? usbOutVolume
+                  : sourceName === "IN"
+                    ? usbInVolume
+                    : (audioVolumes[sourceName] ?? 0.5);
 
-    if (vol <= 0.001) return 0;
+      if (vol <= 0.001) return 0;
 
-    // Windows native WASAPI real-time peak signal integration gated by our app's active content sending
-    if (typeof window !== "undefined" && (window as any).electron && windowsDevicesList.length > 0) {
-      if (sourceName === "Master") {
-        const dev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
-        if (dev) {
-          const progSig = programLevel * programVolume;
-          const micSig = micVolumeRef.current * usbInVolume;
-          let ourAppLevel = Math.max(progSig, micSig);
+      // Windows native WASAPI real-time peak signal integration gated by our app's active content sending
+      if (
+        typeof window !== "undefined" &&
+        (window as any).electron &&
+        windowsDevicesList.length > 0
+      ) {
+        if (sourceName === "Master") {
+          const dev = windowsDevicesList.find(
+            (d) => d.flow === 0 && d.isDefault,
+          );
+          if (dev) {
+            const progSig = programLevel * programVolume;
+            const micSig = micVolumeRef.current * usbInVolume;
+            let ourAppLevel = Math.max(progSig, micSig);
 
-          Object.keys(audioVolumes).forEach((id) => {
-            if (id !== "Master" && !mutedFaders[id]) {
-              const fV = audioVolumes[id] ?? 0.5;
-              if (id === "Programa") ourAppLevel = Math.max(ourAppLevel, programLevel * fV);
-              else if (id === "IN" || id === selectedAudioInput) ourAppLevel = Math.max(ourAppLevel, micVolumeRef.current * fV);
-            }
-          });
+            Object.keys(audioVolumes).forEach((id) => {
+              if (id !== "Master" && !mutedFaders[id]) {
+                const fV = audioVolumes[id] ?? 0.5;
+                if (id === "Programa")
+                  ourAppLevel = Math.max(ourAppLevel, programLevel * fV);
+                else if (id === "IN" || id === selectedAudioInput)
+                  ourAppLevel = Math.max(
+                    ourAppLevel,
+                    micVolumeRef.current * fV,
+                  );
+              }
+            });
 
-          if (ourAppLevel <= 0.005) return 0; // Gated: our app is silent, show zero on Master VU meter
-          let peak = dev.peak;
-          if (peak < 0.005) peak = 0; // noise gate
-          return Math.max(0, Math.min(1, peak * vol * 1.15));
-        }
-      } else if (sourceName === "out-default") {
-        const dev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
-        if (dev) {
-          const ourAppLevel = programLevel * vol;
-          if (ourAppLevel <= 0.005) return 0; // Gated
-          let peak = dev.peak;
-          if (peak < 0.005) peak = 0; // noise gate
-          return Math.max(0, Math.min(1, peak * vol * 1.15));
-        }
-      } else if (sourceName === "in-default") {
-        const dev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
-        if (dev) {
-          if (micVolumeRef.current <= 0.005) return 0; // Gated
-          let peak = dev.peak;
-          if (peak < 0.005) peak = 0; // noise gate
-          return Math.max(0, Math.min(1, peak * vol * 1.15));
-        }
-      } else if (sourceName === "IN") {
-        const dev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
-        if (dev) {
-          if (micVolumeRef.current <= 0.005) return 0; // Gated
-          let peak = dev.peak;
-          if (peak < 0.005) peak = 0; // noise gate
-          return Math.max(0, Math.min(1, peak * vol * 1.15));
-        }
-      } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
-        const flow = sourceName.startsWith("out-") ? 0 : 1;
-        const cleanId = sourceName.replace("out-", "").replace("in-", "");
-        
-        let winDevId = cleanId;
-        let winDevToPeak = windowsDevicesList.find(d => d.id === cleanId && d.flow === flow);
-        
-        if (!winDevToPeak) {
-          const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
-          const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
-          
-          if (chromeDev && chromeDev.label) {
-            const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
-            winDevToPeak = windowsDevicesList.find(d => d.flow === flow && 
-              (d.name === rawLabel || rawLabel.includes(d.name) || d.name.includes(rawLabel))
-            );
+            if (ourAppLevel <= 0.005) return 0; // Gated: our app is silent, show zero on Master VU meter
+            let peak = dev.peak;
+            if (peak < 0.005) peak = 0; // noise gate
+            return Math.max(0, Math.min(1, peak * vol * 1.15));
           }
-        }
-        if (winDevToPeak) winDevId = winDevToPeak.id;
-
-        const dev = windowsDevicesList.find((d) => d.id === winDevId);
-        if (dev) {
-          if (flow === 0) {
+        } else if (sourceName === "out-default") {
+          const dev = windowsDevicesList.find(
+            (d) => d.flow === 0 && d.isDefault,
+          );
+          if (dev) {
             const ourAppLevel = programLevel * vol;
             if (ourAppLevel <= 0.005) return 0; // Gated
-          } else {
-            if (selectedAudioInput !== cleanId || micVolumeRef.current <= 0.005) return 0; // Gated
+            let peak = dev.peak;
+            if (peak < 0.005) peak = 0; // noise gate
+            return Math.max(0, Math.min(1, peak * vol * 1.15));
           }
-          let peak = dev.peak;
-          if (peak < 0.005) peak = 0; // noise gate
-          return Math.max(0, Math.min(1, peak * vol * 1.15));
+        } else if (sourceName === "in-default") {
+          const dev = windowsDevicesList.find(
+            (d) => d.flow === 1 && d.isDefault,
+          );
+          if (dev) {
+            if (micVolumeRef.current <= 0.005) return 0; // Gated
+            let peak = dev.peak;
+            if (peak < 0.005) peak = 0; // noise gate
+            return Math.max(0, Math.min(1, peak * vol * 1.15));
+          }
+        } else if (sourceName === "IN") {
+          const dev = windowsDevicesList.find(
+            (d) => d.flow === 1 && d.isDefault,
+          );
+          if (dev) {
+            if (micVolumeRef.current <= 0.005) return 0; // Gated
+            let peak = dev.peak;
+            if (peak < 0.005) peak = 0; // noise gate
+            return Math.max(0, Math.min(1, peak * vol * 1.15));
+          }
+        } else if (
+          sourceName.startsWith("out-") ||
+          sourceName.startsWith("in-")
+        ) {
+          const flow = sourceName.startsWith("out-") ? 0 : 1;
+          const cleanId = sourceName.replace("out-", "").replace("in-", "");
+
+          let winDevId = cleanId;
+          let winDevToPeak = windowsDevicesList.find(
+            (d) => d.id === cleanId && d.flow === flow,
+          );
+
+          if (!winDevToPeak) {
+            const chromeList =
+              flow === 0 ? audioOutputDevices : audioInputDevices;
+            const chromeDev = chromeList.find((d) => d.deviceId === cleanId);
+
+            if (chromeDev && chromeDev.label) {
+              const rawLabel = chromeDev.label
+                .replace(/^Predeterminado - /, "")
+                .trim();
+              winDevToPeak = windowsDevicesList.find(
+                (d) =>
+                  d.flow === flow &&
+                  (d.name === rawLabel ||
+                    rawLabel.includes(d.name) ||
+                    d.name.includes(rawLabel)),
+              );
+            }
+          }
+          if (winDevToPeak) winDevId = winDevToPeak.id;
+
+          const dev = windowsDevicesList.find((d) => d.id === winDevId);
+          if (dev) {
+            if (flow === 0) {
+              const ourAppLevel = programLevel * vol;
+              if (ourAppLevel <= 0.005) return 0; // Gated
+            } else {
+              if (
+                selectedAudioInput !== cleanId ||
+                micVolumeRef.current <= 0.005
+              )
+                return 0; // Gated
+            }
+            let peak = dev.peak;
+            if (peak < 0.005) peak = 0; // noise gate
+            return Math.max(0, Math.min(1, peak * vol * 1.15));
+          }
         }
       }
-    }
 
-    let baseSignal = 0;
-    
-    // Logic for individual faders (cross-platform fallback)
-    if (sourceName === "Programa") {
-      baseSignal = programLevel;
-    } else if (sourceName === "IN" || sourceName.startsWith("in-") || sourceName === selectedAudioInput) {
-      baseSignal = micVolumeRef.current;
-    } else if (sourceName === "USB" || sourceName.startsWith("out-")) {
-      baseSignal = programLevel; // Default out faders to program signal
-    } else if (sourceName === "Master") {
-      // Master is a mix of Programa level and Mic level
-      const progSig = programLevel * programVolume;
-      const micSig = micVolumeRef.current * usbInVolume;
-      baseSignal = Math.max(progSig, micSig);
-      
-      // Also consider dynamic faders from audioVolumes
-      Object.keys(audioVolumes).forEach(id => {
-        if (id !== "Master") {
-          const fV = audioVolumes[id] ?? 0.5;
-          if (id === "Programa") baseSignal = Math.max(baseSignal, programLevel * fV);
-          else if (id === "IN" || id === selectedAudioInput) baseSignal = Math.max(baseSignal, micVolumeRef.current * fV);
-        }
-      });
-    }
+      let baseSignal = 0;
 
-    // Return the signal scaled by this fader's volume
-    // Multiply by a small gain (1.15) to make it look "lively"
-    return Math.max(0, Math.min(1, baseSignal * vol * 1.15));
-  }, [
-    masterVolume,
-    programVolume,
-    usbInVolume,
-    usbOutVolume,
-    audioVolumes,
-    programLevel,
-    selectedAudioInput,
-    windowsDevicesList,
-    mutedFaders
-  ]);
+      // Logic for individual faders (cross-platform fallback)
+      if (sourceName === "Programa") {
+        baseSignal = programLevel;
+      } else if (
+        sourceName === "IN" ||
+        sourceName.startsWith("in-") ||
+        sourceName === selectedAudioInput
+      ) {
+        baseSignal = micVolumeRef.current;
+      } else if (sourceName === "USB" || sourceName.startsWith("out-")) {
+        baseSignal = programLevel; // Default out faders to program signal
+      } else if (sourceName === "Master") {
+        // Master is a mix of Programa level and Mic level
+        const progSig = programLevel * programVolume;
+        const micSig = micVolumeRef.current * usbInVolume;
+        baseSignal = Math.max(progSig, micSig);
+
+        // Also consider dynamic faders from audioVolumes
+        Object.keys(audioVolumes).forEach((id) => {
+          if (id !== "Master") {
+            const fV = audioVolumes[id] ?? 0.5;
+            if (id === "Programa")
+              baseSignal = Math.max(baseSignal, programLevel * fV);
+            else if (id === "IN" || id === selectedAudioInput)
+              baseSignal = Math.max(baseSignal, micVolumeRef.current * fV);
+          }
+        });
+      }
+
+      // Return the signal scaled by this fader's volume
+      // Multiply by a small gain (1.15) to make it look "lively"
+      return Math.max(0, Math.min(1, baseSignal * vol * 1.15));
+    },
+    [
+      masterVolume,
+      programVolume,
+      usbInVolume,
+      usbOutVolume,
+      audioVolumes,
+      programLevel,
+      selectedAudioInput,
+      windowsDevicesList,
+      mutedFaders,
+    ],
+  );
 
   const DEFAULT_SCREEN_SETTINGS: ExternalScreenSettings = {
     resolution: "1920x1080",
@@ -10635,7 +11038,7 @@ export default function App() {
   // Force stability on Windows by setting additional Chromium flags and preventing too many concurrent decoders
   useEffect(() => {
     if ((window as any).electron) {
-      // In a real scenario we'd talk to IPC to adjust priorities, 
+      // In a real scenario we'd talk to IPC to adjust priorities,
       // but here we just ensure we are cleaning up every hidden preview.
     }
   }, []);
@@ -10656,7 +11059,7 @@ export default function App() {
   useEffect(() => {
     const root = document.documentElement;
     let sansFont = '"IBM Plex Sans", ui-sans-serif, sans-serif';
-    
+
     switch (currentFont) {
       case "inter":
         sansFont = '"Inter", ui-sans-serif, sans-serif';
@@ -10678,7 +11081,7 @@ export default function App() {
         sansFont = '"IBM Plex Sans", ui-sans-serif, sans-serif';
         break;
     }
-    
+
     root.style.setProperty("--custom-sans", sansFont);
     try {
       localStorage.setItem("lumin_font", currentFont);
@@ -10697,7 +11100,11 @@ export default function App() {
     type: "info" | "error" | "success";
   }>({ isOpen: false, title: "", message: "", type: "info" });
 
-  const showCustomAlert = (title: string, message: string, type: "info" | "error" | "success" = "info") => {
+  const showCustomAlert = (
+    title: string,
+    message: string,
+    type: "info" | "error" | "success" = "info",
+  ) => {
     setCustomAlertOptions({ isOpen: true, title, message, type });
   };
 
@@ -10714,12 +11121,18 @@ export default function App() {
             changed = true;
           }
           // Repair broken object URLs if they are from a previous session
-          if ((updated.url?.startsWith("blob:") || !updated.url) && (window as any).electron && updated.path) {
+          if (
+            (updated.url?.startsWith("blob:") || !updated.url) &&
+            (window as any).electron &&
+            updated.path
+          ) {
             const urlFromPath = (p: string) => {
               try {
                 const normalized = p.replace(/\\/g, "/");
                 return `lumin-file:///${normalized}`;
-              } catch (e) { return null; }
+              } catch (e) {
+                return null;
+              }
             };
             const nativeUrl = urlFromPath(updated.path);
             if (nativeUrl) {
@@ -10758,7 +11171,9 @@ export default function App() {
     if (libraryFiles.length > 0) {
       hydrate();
     }
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [libraryFiles.length]); // Run when count changes or on load
 
   const sanitizeClipForSave = (clip: any) => {
@@ -10780,8 +11195,15 @@ export default function App() {
 
     const sanitizeClip = (clip: any) => {
       if (!clip) return null;
-      const filePath =
-        clip.path || (clip.file ? (clip.file as any).path : undefined);
+      // For saving: get path using webUtils (Electron 32+) if clip.file is a real File object,
+      // otherwise fall back to clip.path or clip.file.path (legacy)
+      let filePath = clip.path;
+      if (!filePath && clip.file instanceof File) {
+        filePath = getNativeFilePath(clip.file);
+      }
+      if (!filePath && clip.file) {
+        filePath = (clip.file as any).path;
+      }
       return {
         ...clip,
         file: filePath ? { path: filePath, name: clip.name } : null,
@@ -10793,7 +11215,15 @@ export default function App() {
     return JSON.stringify(
       {
         libraryFiles: libraryFiles.map((f: any) => {
-          const fPath = f.path || (f.file ? (f.file as any).path : undefined);
+          // CRITICAL: Resolve the real native path using webUtils if file is a real File object
+          let fPath = f.path;
+          if (!fPath && f.file instanceof File) {
+            fPath = getNativeFilePath(f.file);
+          }
+          console.log(
+            `[Save] LibraryFile: ${f.name}, path: ${fPath || "NO PATH"}, url: ${f.url?.substring(0, 60)}...`,
+          );
+
           return {
             id: f.id,
             name: f.name,
@@ -10802,11 +11232,7 @@ export default function App() {
             path: fPath,
             relativePath: getRel(fPath),
             thumbnail: f.thumbnail || undefined,
-            file: f.file
-              ? { path: (f.file as any).path, name: f.file.name }
-              : fPath
-                ? { path: fPath, name: f.name }
-                : null,
+            file: fPath ? { path: fPath, name: f.name } : null,
           };
         }),
         clips: clips.map(sanitizeClip),
@@ -10863,7 +11289,7 @@ export default function App() {
       showCustomAlert(
         "Función Nativa Requerida",
         "El guardado de proyectos nativos solo está disponible en Windows.",
-        "info"
+        "info",
       );
       return;
     }
@@ -10871,14 +11297,26 @@ export default function App() {
     // Si ya existe un archivo activo, guardamos encima
     if (currentLuminPath) {
       const dataStr = getLuminStateData(currentLuminPath);
+      console.log(`[Save] Saving project to: ${currentLuminPath}`);
+      console.log(`[Save] Data size: ${dataStr.length} bytes`);
       const res = await window.electron.writeLuminFile(
         currentLuminPath,
         dataStr,
       );
       if (res.success) {
-        showCustomAlert("Proyecto Guardado", `Proyecto guardado en: ${currentLuminPath}`, "success");
+        console.log(`[Save] Project saved successfully`);
+        showCustomAlert(
+          "Proyecto Guardado",
+          `Proyecto guardado en: ${currentLuminPath}`,
+          "success",
+        );
       } else {
-        showCustomAlert("Error de Guardado", "Error al guardar: " + res.error, "error");
+        console.error(`[Save] Error: ${res.error}`);
+        showCustomAlert(
+          "Error de Guardado",
+          "Error al guardar: " + res.error,
+          "error",
+        );
       }
     } else {
       // Si no hay archivo activo, actúa como "Guardar Como"
@@ -10895,7 +11333,7 @@ export default function App() {
       showCustomAlert(
         "Función Nativa Requerida",
         "El guardado de proyectos nativos solo está disponible en Windows.",
-        "info"
+        "info",
       );
       return;
     }
@@ -10915,9 +11353,17 @@ export default function App() {
     const res = await window.electron.writeLuminFile(filePath, dataStr);
     if (res.success) {
       setCurrentLuminPath(filePath);
-      showCustomAlert("Proyecto Guardado Como", `Proyecto guardado como: ${filePath}`, "success");
+      showCustomAlert(
+        "Proyecto Guardado Como",
+        `Proyecto guardado como: ${filePath}`,
+        "success",
+      );
     } else {
-      showCustomAlert("Error de Guardado", "Error al guardar como: " + res.error, "error");
+      showCustomAlert(
+        "Error de Guardado",
+        "Error al guardar como: " + res.error,
+        "error",
+      );
     }
   };
 
@@ -10926,7 +11372,11 @@ export default function App() {
 
     const res = await window.electron.readLuminFile(filePath);
     if (!res.success || !res.data) {
-      showCustomAlert("Error de Apertura", "Error al abrir archivo: " + res.error, "error");
+      showCustomAlert(
+        "Error de Apertura",
+        "Error al abrir archivo: " + res.error,
+        "error",
+      );
       return;
     }
 
@@ -10946,13 +11396,16 @@ export default function App() {
         if (relPath && (window as any).electron) {
           try {
             // Get folder path where .lumin file is located
-            const projectDir = filePath.substring(0, Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/")));
+            const projectDir = filePath.substring(
+              0,
+              Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/")),
+            );
             const isWindows = filePath.includes("\\");
             const separator = isWindows ? "\\" : "/";
-            
+
             const relSegments = relPath.replace(/\\/g, "/").split("/");
             let dirSegments = projectDir.replace(/\\/g, "/").split("/");
-            
+
             for (const segment of relSegments) {
               if (segment === ".") {
                 continue;
@@ -10962,12 +11415,21 @@ export default function App() {
                 dirSegments.push(segment);
               }
             }
-            
-            return dirSegments.join(separator);
+
+            const resolved = dirSegments.join(separator);
+            console.log(
+              `[resolvePath] absPath: ${absPath}, relPath: ${relPath}, resolved: ${resolved}`,
+            );
+            return resolved;
           } catch (e) {
             // Fallback to saved absolute path
+            console.warn(
+              `[resolvePath] Failed to resolve relative path, using absolute:`,
+              e,
+            );
           }
         }
+        console.log(`[resolvePath] Using absPath (no relPath): ${absPath}`);
         return absPath;
       };
 
@@ -10975,9 +11437,15 @@ export default function App() {
       const getUrlFromPath = (pathVal: string, relPath?: string) => {
         try {
           const targetPath = resolvePath(pathVal, relPath) || pathVal;
+          // Use lumin-file:// protocol directly - needed for local videos to bypass CORS and handle range requests properly
           const normalized = targetPath.replace(/\\/g, "/");
-          return `lumin-file:///${normalized}`;
+          const generatedUrl = `lumin-file:///${normalized}`;
+          console.log(
+            `[getUrlFromPath] Generated URL: ${generatedUrl} from path: ${targetPath}`,
+          );
+          return generatedUrl;
         } catch (e) {
+          console.error(`[getUrlFromPath] Error generating URL:`, e);
           return null;
         }
       };
@@ -10985,26 +11453,37 @@ export default function App() {
       // Re-estructurar files para la sesión local
       // En modo nativo, regeneramos las URLs a partir de los paths absolutos guardados
       const reconstructedFiles = parsedData.libraryFiles.map((f: any) => {
+        // For library files: always prioritize the file path over cached URL
         let newUrl = f.url;
         const clipPath = f.path || (f.file && f.file.path);
         const relPath = f.relativePath;
+
         if (clipPath && (window as any).electron) {
           const nativeUrl = getUrlFromPath(clipPath, relPath);
-          if (nativeUrl) newUrl = nativeUrl;
+          if (nativeUrl) {
+            newUrl = nativeUrl;
+            console.log(
+              `[Import] Library file URL reconstructed: ${f.name} -> ${newUrl}`,
+            );
+          }
+        } else if (clipPath) {
+          newUrl = resolvePath(clipPath, relPath) || clipPath;
         }
-        
+
         let newThumbnail = f.thumbnail;
         if (newThumbnail?.startsWith("blob:")) {
           newThumbnail = undefined;
         }
 
         return {
-          id: f.id || `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id:
+            f.id ||
+            `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           name: f.name,
           type: f.type,
           url: newUrl,
-          file: clipPath ? { path: resolvePath(clipPath, relPath) || clipPath, name: f.name } : null,
-          path: resolvePath(clipPath, relPath) || clipPath || undefined,
+          path: clipPath || f.path || undefined,
+          file: clipPath ? { path: clipPath, name: f.name } : null,
           thumbnail: newThumbnail,
         };
       });
@@ -11017,26 +11496,47 @@ export default function App() {
 
       const getReconstructedClip = (clip: any) => {
         if (!clip) return null;
-        let newUrl = urlMap[clip.url] || clip.url;
+
+        // For loading from .LUMIN files: always prioritize the file path over cached URL
+        // This ensures we use the actual file location, not stale blob: or intermediate URLs
+        let newUrl = clip.url;
         const clipPath = clip.path || (clip.file && clip.file.path);
         const relPath = clip.relativePath;
+
+        // If we have a file path, generate a fresh URL from it
         if (clipPath && (window as any).electron) {
           const nativeUrl = getUrlFromPath(clipPath, relPath);
-          if (nativeUrl) newUrl = nativeUrl;
+          if (nativeUrl) {
+            newUrl = nativeUrl;
+            console.log(
+              `[Import] Reconstructed clip URL from path: ${clipPath} -> ${newUrl}`,
+            );
+          }
+        } else if (clipPath) {
+          // Fallback for non-native: still try to use the path if available
+          // This prevents using stale blob: URLs
+          const resolved = resolvePath(clipPath, relPath) || clipPath;
+          if (resolved) {
+            newUrl = resolved;
+          }
         }
-        
+
         let newThumbnail = clip.thumbnail;
         if (newThumbnail?.startsWith("blob:")) {
           newThumbnail = undefined;
         }
 
-        const resolvedAbsolutePath = clipPath ? (resolvePath(clipPath, relPath) || clipPath) : undefined;
+        const resolvedAbsolutePath = clipPath
+          ? resolvePath(clipPath, relPath) || clipPath
+          : undefined;
 
         return {
           ...clip,
           url: newUrl,
-          file: resolvedAbsolutePath ? { path: resolvedAbsolutePath, name: clip.name } : null,
           path: resolvedAbsolutePath || undefined,
+          file: resolvedAbsolutePath
+            ? { path: resolvedAbsolutePath, name: clip.name }
+            : null,
           thumbnail: newThumbnail,
         };
       };
@@ -11151,7 +11651,26 @@ export default function App() {
         setIsDarkMode(parsedData.isDarkMode);
 
       setCurrentLuminPath(filePath);
-      showCustomAlert("Proyecto Cargado", `Proyecto cargado con éxito: ${filePath}`, "success");
+
+      // Log import summary for debugging
+      console.log(`[Import] ===== LUMIN FILE LOADED =====`);
+      console.log(`[Import] File: ${filePath}`);
+      console.log(`[Import] Reconstructed ${reconstructedClips.length} clips`);
+      console.log(
+        `[Import] Reconstructed ${reconstructedFiles.length} library files`,
+      );
+      const totalVideos = Object.values(reconstructedDeckClips).flat().length;
+      console.log(`[Import] Total media items in decks: ${totalVideos}`);
+      reconstructedFiles.forEach((f) => {
+        console.log(`[Import]   - ${f.name}: ${f.url?.substring(0, 80)}...`);
+      });
+      console.log(`[Import] ==============================`);
+
+      showCustomAlert(
+        "Proyecto Cargado",
+        `Proyecto cargado con éxito: ${filePath}`,
+        "success",
+      );
 
       // Broadcast the newly hydrated state model to keep secondary output/timer screens completely in sync
       setTimeout(() => {
@@ -11170,11 +11689,16 @@ export default function App() {
             allScreenSettings: parsedData.allScreenSettings || {},
             isLive: parsedData.isLive || false,
             isTransmitting: parsedData.isTransmitting || false,
-            isProgramOff: (parsedData.outputOffStates && parsedData.outputOffStates[parsedData.activeOutputId || "1"]) || false,
+            isProgramOff:
+              (parsedData.outputOffStates &&
+                parsedData.outputOffStates[parsedData.activeOutputId || "1"]) ||
+              false,
             programVolume: parsedData.programVolume || 1,
             masterVolume: parsedData.masterVolume || 1,
-            transitionType: parsedData.externalScreenSettings?.transitionType || "fade",
-            transitionDuration: parsedData.externalScreenSettings?.transitionDuration || 0.4,
+            transitionType:
+              parsedData.externalScreenSettings?.transitionType || "fade",
+            transitionDuration:
+              parsedData.externalScreenSettings?.transitionDuration || 0.4,
             externalScreenSettings: parsedData.externalScreenSettings || {},
             layers: reconstructedLayers,
             layerOutputs: parsedData.layerOutputs || {},
@@ -11184,7 +11708,11 @@ export default function App() {
         });
       }, 300);
     } catch (err: any) {
-      showCustomAlert("Error de Procesamiento", "Error al procesar el archivo LUMIN: " + err.message, "error");
+      showCustomAlert(
+        "Error de Procesamiento",
+        "Error al procesar el archivo LUMIN: " + err.message,
+        "error",
+      );
     }
   };
 
@@ -11197,7 +11725,7 @@ export default function App() {
       showCustomAlert(
         "Función Nativa Requerida",
         "La apertura de proyectos nativos solo está disponible en Windows.",
-        "info"
+        "info",
       );
       return;
     }
@@ -11215,7 +11743,7 @@ export default function App() {
       showCustomAlert(
         "Función Nativa Requerida",
         "La importación de PPT nativa solo está disponible en la versión de escritorio para Windows.",
-        "info"
+        "info",
       );
       return;
     }
@@ -11293,7 +11821,11 @@ export default function App() {
       clearInterval(progressInterval);
       setIsPptImporting(false);
       setPptImportProgress(0);
-      showCustomAlert("Error de Importación PPT", "Error al importar PowerPoint: " + err.message, "error");
+      showCustomAlert(
+        "Error de Importación PPT",
+        "Error al importar PowerPoint: " + err.message,
+        "error",
+      );
     }
   };
 
@@ -11526,18 +12058,24 @@ export default function App() {
             setWindowsDevicesList(winDevices);
 
             // Determine active default inputs/outputs
-            const inputs = winDevices.filter((d: any) => d.flow === 1).map((d: any) => ({ deviceId: d.id, label: d.name }));
-            const outputs = winDevices.filter((d: any) => d.flow === 0).map((d: any) => ({ deviceId: d.id, label: d.name }));
+            const inputs = winDevices
+              .filter((d: any) => d.flow === 1)
+              .map((d: any) => ({ deviceId: d.id, label: d.name }));
+            const outputs = winDevices
+              .filter((d: any) => d.flow === 0)
+              .map((d: any) => ({ deviceId: d.id, label: d.name }));
 
             if (inputs.length > 0) {
               setAudioInputDevices((prev) => {
-                if (JSON.stringify(prev) !== JSON.stringify(inputs)) return inputs;
+                if (JSON.stringify(prev) !== JSON.stringify(inputs))
+                  return inputs;
                 return prev;
               });
             }
             if (outputs.length > 0) {
               setAudioOutputDevices((prev) => {
-                if (JSON.stringify(prev) !== JSON.stringify(outputs)) return outputs;
+                if (JSON.stringify(prev) !== JSON.stringify(outputs))
+                  return outputs;
                 return prev;
               });
             }
@@ -11546,7 +12084,10 @@ export default function App() {
             if (
               selectedAudioOutputRef.current !== "none" &&
               selectedAudioOutputRef.current &&
-              !winDevices.some((d: any) => d.flow === 0 && d.id === selectedAudioOutputRef.current)
+              !winDevices.some(
+                (d: any) =>
+                  d.flow === 0 && d.id === selectedAudioOutputRef.current,
+              )
             ) {
               setSelectedAudioOutput("none");
             }
@@ -11554,17 +12095,25 @@ export default function App() {
             if (
               selectedAudioInputRef.current !== "none" &&
               selectedAudioInputRef.current &&
-              !winDevices.some((d: any) => d.flow === 1 && d.id === selectedAudioInputRef.current)
+              !winDevices.some(
+                (d: any) =>
+                  d.flow === 1 && d.id === selectedAudioInputRef.current,
+              )
             ) {
               setSelectedAudioInput("none");
             }
 
             // Sync master fader with Windows default output endpoint
-            const defPlayback = winDevices.find((d: any) => d.flow === 0 && d.isDefault);
+            const defPlayback = winDevices.find(
+              (d: any) => d.flow === 0 && d.isDefault,
+            );
             if (defPlayback) {
-              const lastInMaster = lastFaderUserInteractionRef.current["Master"] || 0;
+              const lastInMaster =
+                lastFaderUserInteractionRef.current["Master"] || 0;
               if (Date.now() - lastInMaster >= 1500) {
-                if (Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03) {
+                if (
+                  Math.abs(defPlayback.volume - lastVolumeRef.current) > 0.03
+                ) {
                   lastVolumeRef.current = defPlayback.volume;
                   setMasterVolume(defPlayback.volume);
                 }
@@ -11572,12 +12121,20 @@ export default function App() {
             }
 
             // Update default IN fader with volume of default audio record input device if active
-            const defRecord = winDevices.find((d: any) => d.flow === 1 && d.isDefault);
+            const defRecord = winDevices.find(
+              (d: any) => d.flow === 1 && d.isDefault,
+            );
             if (defRecord) {
-              const lastInDefaultIn = lastFaderUserInteractionRef.current["IN"] || lastFaderUserInteractionRef.current["in-default"] || 0;
+              const lastInDefaultIn =
+                lastFaderUserInteractionRef.current["IN"] ||
+                lastFaderUserInteractionRef.current["in-default"] ||
+                0;
               if (Date.now() - lastInDefaultIn >= 1500) {
                 setAudioVolumes((prev) => {
-                  if (prev["IN"] !== undefined && Math.abs(defRecord.volume - prev["IN"]) > 0.03) {
+                  if (
+                    prev["IN"] !== undefined &&
+                    Math.abs(defRecord.volume - prev["IN"]) > 0.03
+                  ) {
                     return { ...prev, IN: defRecord.volume };
                   }
                   return prev;
@@ -11590,8 +12147,10 @@ export default function App() {
               let changed = false;
               const nextMuted = { ...prevMuted };
               winDevices.forEach((dev: any) => {
-                const faderId = dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
-                const lastIn = lastFaderUserInteractionRef.current[faderId] || 0;
+                const faderId =
+                  dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
+                const lastIn =
+                  lastFaderUserInteractionRef.current[faderId] || 0;
                 if (Date.now() - lastIn >= 1500) {
                   const isMutedInWin = !!dev.mute;
                   if (prevMuted[faderId] !== isMutedInWin) {
@@ -11609,9 +12168,14 @@ export default function App() {
               const next = { ...prevVolumes };
 
               if (defPlayback) {
-                const lastInOutDef = lastFaderUserInteractionRef.current["out-default"] || 0;
+                const lastInOutDef =
+                  lastFaderUserInteractionRef.current["out-default"] || 0;
                 if (Date.now() - lastInOutDef >= 1500) {
-                  if (prevVolumes["out-default"] === undefined || Math.abs(defPlayback.volume - prevVolumes["out-default"]) > 0.03) {
+                  if (
+                    prevVolumes["out-default"] === undefined ||
+                    Math.abs(defPlayback.volume - prevVolumes["out-default"]) >
+                      0.03
+                  ) {
                     next["out-default"] = defPlayback.volume;
                     changed = true;
                   }
@@ -11619,9 +12183,14 @@ export default function App() {
               }
 
               if (defRecord) {
-                const lastInInDef = lastFaderUserInteractionRef.current["in-default"] || 0;
+                const lastInInDef =
+                  lastFaderUserInteractionRef.current["in-default"] || 0;
                 if (Date.now() - lastInInDef >= 1500) {
-                  if (prevVolumes["in-default"] === undefined || Math.abs(defRecord.volume - prevVolumes["in-default"]) > 0.03) {
+                  if (
+                    prevVolumes["in-default"] === undefined ||
+                    Math.abs(defRecord.volume - prevVolumes["in-default"]) >
+                      0.03
+                  ) {
                     next["in-default"] = defRecord.volume;
                     changed = true;
                   }
@@ -11629,11 +12198,16 @@ export default function App() {
               }
 
               winDevices.forEach((dev: any) => {
-                const faderId = dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
-                const lastIn = lastFaderUserInteractionRef.current[faderId] || 0;
+                const faderId =
+                  dev.flow === 0 ? `out-${dev.id}` : `in-${dev.id}`;
+                const lastIn =
+                  lastFaderUserInteractionRef.current[faderId] || 0;
                 if (Date.now() - lastIn >= 1500) {
                   const currentVol = prevVolumes[faderId];
-                  if (currentVol === undefined || Math.abs(dev.volume - currentVol) > 0.03) {
+                  if (
+                    currentVol === undefined ||
+                    Math.abs(dev.volume - currentVol) > 0.03
+                  ) {
                     next[faderId] = dev.volume;
                     changed = true;
                   }
@@ -11671,14 +12245,20 @@ export default function App() {
   // Dynamically route AudioContext output to selected playback output device of Windows
   useEffect(() => {
     if (audioContext && typeof (audioContext as any).setSinkId === "function") {
-      const targetSink = selectedAudioOutput === "default" ? "" : selectedAudioOutput;
+      const targetSink =
+        selectedAudioOutput === "default" ? "" : selectedAudioOutput;
       (audioContext as any)
         .setSinkId(targetSink)
         .then(() => {
-          console.log(`Audio output routed successfully to target sink: ${selectedAudioOutput}`);
+          console.log(
+            `Audio output routed successfully to target sink: ${selectedAudioOutput}`,
+          );
         })
         .catch((e: any) => {
-          console.warn("Failed to dynamically set audioContext target sinkId:", e);
+          console.warn(
+            "Failed to dynamically set audioContext target sinkId:",
+            e,
+          );
         });
     }
   }, [selectedAudioOutput]);
@@ -11813,28 +12393,45 @@ export default function App() {
   const [isTransmitting, setIsTransmitting] = useState(true);
   const [externalScreens, setExternalScreens] = useState<Screen[]>([]);
   const [hasDetailedScreens, setHasDetailedScreens] = useState(false);
-  const isVideoCurrentlyCastingOnOutput = useCallback((outputId: string): boolean => {
-    const activeProgramId = outputPrograms[outputId];
-    if (activeProgramId) {
-      const clip = clips.find((c) => c.id === activeProgramId);
-      if (clip && (clip.type === "video" || clip.type === "videoinput" || clip.name?.toLowerCase().endsWith(".mp4") || clip.name?.toLowerCase().endsWith(".mov") || clip.name?.toLowerCase().endsWith(".mkv"))) {
-        return true;
-      }
-    }
-    const activeLayers = layers.filter((l) => {
-      const route = layerOutputs[l.id] || "all";
-      return route === "all" || route === outputId;
-    });
-    for (const layer of activeLayers) {
-      if (layer.activeClipId) {
-        const clip = clips.find((c) => c.id === layer.activeClipId);
-        if (clip && (clip.type === "video" || clip.type === "videoinput" || clip.name?.toLowerCase().endsWith(".mp4") || clip.name?.toLowerCase().endsWith(".mov") || clip.name?.toLowerCase().endsWith(".mkv"))) {
+  const isVideoCurrentlyCastingOnOutput = useCallback(
+    (outputId: string): boolean => {
+      const activeProgramId = outputPrograms[outputId];
+      if (activeProgramId) {
+        const clip = clips.find((c) => c.id === activeProgramId);
+        if (
+          clip &&
+          (clip.type === "video" ||
+            clip.type === "videoinput" ||
+            clip.name?.toLowerCase().endsWith(".mp4") ||
+            clip.name?.toLowerCase().endsWith(".mov") ||
+            clip.name?.toLowerCase().endsWith(".mkv"))
+        ) {
           return true;
         }
       }
-    }
-    return false;
-  }, [outputPrograms, clips, layers, layerOutputs]);
+      const activeLayers = layers.filter((l) => {
+        const route = layerOutputs[l.id] || "all";
+        return route === "all" || route === outputId;
+      });
+      for (const layer of activeLayers) {
+        if (layer.activeClipId) {
+          const clip = clips.find((c) => c.id === layer.activeClipId);
+          if (
+            clip &&
+            (clip.type === "video" ||
+              clip.type === "videoinput" ||
+              clip.name?.toLowerCase().endsWith(".mp4") ||
+              clip.name?.toLowerCase().endsWith(".mov") ||
+              clip.name?.toLowerCase().endsWith(".mkv"))
+          ) {
+            return true;
+          }
+        }
+      }
+      return false;
+    },
+    [outputPrograms, clips, layers, layerOutputs],
+  );
   const isProgCasting = isVideoCurrentlyCastingOnOutput(activeOutputId);
   const [isIframe, setIsIframe] = useState(false);
   const [permissionStatus, setPermissionStatus] =
@@ -12071,7 +12668,7 @@ export default function App() {
       if (event.data.type === "CLIP_ENDED") {
         const { outputId, clipId } = event.data.payload;
         const clip = clips.find((c: any) => c.id === clipId);
-        
+
         // Reset the currentTime of the ended clip to 0 so it starts fresh next time
         const programTrackerId = `output_${outputId || "1"}_${clipId}`;
         if (typeof window !== "undefined") {
@@ -12080,7 +12677,11 @@ export default function App() {
           }
           (window as any).__luminVideoTimes[programTrackerId] = 0;
         }
-        const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+        const ch =
+          (window as any).__luminTimeChannel ||
+          (typeof BroadcastChannel !== "undefined"
+            ? new BroadcastChannel("lumin-output")
+            : null);
         if (ch) {
           try {
             ch.postMessage({
@@ -12133,7 +12734,8 @@ export default function App() {
         }
       }
       if (event.data.type === "LAYER_CLIP_ENDED") {
-        const { layerId, clipId, sequenceCounter, outputId } = event.data.payload;
+        const { layerId, clipId, sequenceCounter, outputId } =
+          event.data.payload;
         handleLayerEnded(layerId, clipId, sequenceCounter, outputId);
       }
     };
@@ -12427,19 +13029,21 @@ export default function App() {
       }
 
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId !== "default" && d.deviceId !== "communications");
-      const outputs = devices.filter((d) => d.kind === "audiooutput" && d.deviceId !== "default" && d.deviceId !== "communications");
+      const inputs = devices.filter(
+        (d) =>
+          d.kind === "audioinput" &&
+          d.deviceId !== "default" &&
+          d.deviceId !== "communications",
+      );
+      const outputs = devices.filter(
+        (d) =>
+          d.kind === "audiooutput" &&
+          d.deviceId !== "default" &&
+          d.deviceId !== "communications",
+      );
 
-      setAudioInputDevices(
-        inputs.length > 0
-          ? inputs
-          : []
-      );
-      setAudioOutputDevices(
-        outputs.length > 0
-          ? outputs
-          : []
-      );
+      setAudioInputDevices(inputs.length > 0 ? inputs : []);
+      setAudioOutputDevices(outputs.length > 0 ? outputs : []);
     } catch (e) {
       console.error("Error enumerando dispositivos de audio:", e);
       setAudioInputDevices([
@@ -12603,7 +13207,7 @@ export default function App() {
         showCustomAlert(
           "Aviso de Navegador",
           "El navegador bloqueó la ventana emergente o falló al abrirla. Por favor, permite ventanas emergentes.",
-          "error"
+          "error",
         );
       }
     } catch (err) {
@@ -12686,7 +13290,11 @@ export default function App() {
       }
       (window as any).__luminVideoTimes[layerTrackerId] = 0;
     }
-    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    const ch =
+      (window as any).__luminTimeChannel ||
+      (typeof BroadcastChannel !== "undefined"
+        ? new BroadcastChannel("lumin-output")
+        : null);
     if (ch) {
       try {
         ch.postMessage({
@@ -12749,16 +13357,24 @@ export default function App() {
             }
             (window as any).__luminVideoTimes[nextTrackerId] = 0;
           }
-          const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+          const ch =
+            (window as any).__luminTimeChannel ||
+            (typeof BroadcastChannel !== "undefined"
+              ? new BroadcastChannel("lumin-output")
+              : null);
           if (ch) {
             try {
               ch.postMessage({
                 type: "VIDEO_TIME_UPDATE",
-                payload: { trackerId: nextTrackerId, clipId: nextClip.id, currentTime: 0 },
+                payload: {
+                  trackerId: nextTrackerId,
+                  clipId: nextClip.id,
+                  currentTime: 0,
+                },
               });
             } catch (err) {}
           }
-          
+
           return {
             ...layer,
             activeClipId: nextClip.id,
@@ -12778,12 +13394,20 @@ export default function App() {
               }
               (window as any).__luminVideoTimes[firstTrackerId] = 0;
             }
-            const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+            const ch =
+              (window as any).__luminTimeChannel ||
+              (typeof BroadcastChannel !== "undefined"
+                ? new BroadcastChannel("lumin-output")
+                : null);
             if (ch) {
               try {
                 ch.postMessage({
                   type: "VIDEO_TIME_UPDATE",
-                  payload: { trackerId: firstTrackerId, clipId: firstClip.id, currentTime: 0 },
+                  payload: {
+                    trackerId: firstTrackerId,
+                    clipId: firstClip.id,
+                    currentTime: 0,
+                  },
                 });
               } catch (err) {}
             }
@@ -12829,11 +13453,15 @@ export default function App() {
       if (typeof window !== "undefined") {
         (window as any).__luminVideoTimes = {};
       }
-      setClips(prev => {
-        const next = prev.map(c => ({ ...c, currentTime: 0 }));
+      setClips((prev) => {
+        const next = prev.map((c) => ({ ...c, currentTime: 0 }));
         return next;
       });
-      const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+      const ch =
+        (window as any).__luminTimeChannel ||
+        (typeof BroadcastChannel !== "undefined"
+          ? new BroadcastChannel("lumin-output")
+          : null);
       if (ch) {
         clips.forEach((c) => {
           try {
@@ -12855,7 +13483,11 @@ export default function App() {
           }
           (window as any).__luminVideoTimes[trackerId] = 0;
         }
-        const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+        const ch =
+          (window as any).__luminTimeChannel ||
+          (typeof BroadcastChannel !== "undefined"
+            ? new BroadcastChannel("lumin-output")
+            : null);
         if (ch) {
           try {
             ch.postMessage({
@@ -12876,12 +13508,20 @@ export default function App() {
             }
             (window as any).__luminVideoTimes[prevTrackerId] = 0;
           }
-          const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+          const ch =
+            (window as any).__luminTimeChannel ||
+            (typeof BroadcastChannel !== "undefined"
+              ? new BroadcastChannel("lumin-output")
+              : null);
           if (ch) {
             try {
               ch.postMessage({
                 type: "VIDEO_TIME_UPDATE",
-                payload: { trackerId: prevTrackerId, clipId: prevActiveClipId, currentTime: 0 },
+                payload: {
+                  trackerId: prevTrackerId,
+                  clipId: prevActiveClipId,
+                  currentTime: 0,
+                },
               });
             } catch (err) {}
           }
@@ -12974,7 +13614,11 @@ export default function App() {
     clips.forEach((c) => {
       updateClip(c.id, { currentTime: 0 });
     });
-    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    const ch =
+      (window as any).__luminTimeChannel ||
+      (typeof BroadcastChannel !== "undefined"
+        ? new BroadcastChannel("lumin-output")
+        : null);
     if (ch) {
       clips.forEach((c) => {
         try {
@@ -13124,20 +13768,25 @@ export default function App() {
       let url = "";
       let name = "";
       let type = "";
+      let filePath: string | undefined = undefined;
 
       if (item instanceof File) {
         file = item;
         name = file.name;
         type = file.type;
-        url =
-          window.electron && (file as any).path
-            ? getFileUrl(file)
-            : URL.createObjectURL(file);
+        filePath = window.electron ? getNativeFilePath(file) : undefined;
+        // Always use blob URL for in-session playback
+        url = URL.createObjectURL(file);
       } else {
+        // item is a library file
         file = item.file;
         name = item.name;
         type = item.type;
         url = item.url;
+        filePath = item.path; // Capture path from library file!
+        console.log(
+          `[handleAddClips] Creating clip from library: ${name}, path: ${filePath || "N/A"}, url: ${url?.substring(0, 60)}...`,
+        );
       }
 
       const clipType = getClipTypeFromFile(type, name);
@@ -13189,9 +13838,9 @@ export default function App() {
         name: name,
         thumbnail: isVideo ? metadata.thumbnail || "" : url,
         url: url,
+        path: filePath,
         type: clipType,
         file: file,
-        path: file ? (file as any).path : undefined,
         status: "idle",
         currentPage: 1,
         transform: { ...DEFAULT_TRANSFORM },
@@ -13598,7 +14247,11 @@ export default function App() {
     clips.forEach((c) => {
       updateClip(c.id, { currentTime: 0 });
     });
-    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    const ch =
+      (window as any).__luminTimeChannel ||
+      (typeof BroadcastChannel !== "undefined"
+        ? new BroadcastChannel("lumin-output")
+        : null);
     if (ch) {
       clips.forEach((c) => {
         try {
@@ -13778,32 +14431,42 @@ export default function App() {
     } else if (e.dataTransfer.files.length > 0) {
       // Handle OS files
       const files = Array.from(e.dataTransfer.files);
-      clipsToClone = files.map((f) => ({
-        id: `temp-${Date.now()}-${Math.random()}`,
-        name: f.name,
-        thumbnail: URL.createObjectURL(f),
-        url: URL.createObjectURL(f),
-        type: getClipTypeFromFile(f.type, f.name),
-        status: "idle" as const,
-        currentPage: 1,
-        transform: { ...DEFAULT_TRANSFORM },
-        mask: "none" as const,
-        opacity: 1,
-        master: 1,
-        speed: 1,
-        volume: 1,
-        pan: 0,
-        blendMode: "Alpha" as const,
-        behavior: "Cortar" as const,
-        curve: "Lineal" as const,
-        filter: "none" as const,
-        brightness: 1,
-        contrast: 1,
-        saturation: 1,
-        colorBalance: { r: 1, g: 1, b: 1 },
-        isPlaying: true,
-        loop: true,
-      }));
+      clipsToClone = files.map((f) => {
+        const filePath = (window as any).electron
+          ? getNativeFilePath(f)
+          : undefined;
+        // Always use blob URL for in-session playback
+        const url = URL.createObjectURL(f);
+
+        return {
+          id: `temp-${Date.now()}-${Math.random()}`,
+          name: f.name,
+          thumbnail: url,
+          url: url,
+          path: filePath,
+          file: filePath ? { path: filePath, name: f.name } : f,
+          type: getClipTypeFromFile(f.type, f.name),
+          status: "idle" as const,
+          currentPage: 1,
+          transform: { ...DEFAULT_TRANSFORM },
+          mask: "none" as const,
+          opacity: 1,
+          master: 1,
+          speed: 1,
+          volume: 1,
+          pan: 0,
+          blendMode: "Alpha" as const,
+          behavior: "Cortar" as const,
+          curve: "Lineal" as const,
+          filter: "none" as const,
+          brightness: 1,
+          contrast: 1,
+          saturation: 1,
+          colorBalance: { r: 1, g: 1, b: 1 },
+          isPlaying: true,
+          loop: true,
+        };
+      });
     }
 
     if (clipsToClone.length > 0) {
@@ -14000,15 +14663,28 @@ export default function App() {
               className="bg-obs-dark-1 border border-obs-border p-6 rounded shadow-2xl min-w-[320px] max-w-md w-full"
             >
               <h2 className="text-white text-[12px] font-black uppercase tracking-widest mb-3 flex items-center gap-2">
-                {customAlertOptions.type === "error" ? <AlertTriangle size={16} className="text-red-500" /> : null}
-                {customAlertOptions.type === "success" ? <Check size={16} className="text-emerald-500" /> : null}
-                {customAlertOptions.type === "info" ? <AlertTriangle size={16} className="text-blue-500" /> : null}
+                {customAlertOptions.type === "error" ? (
+                  <AlertTriangle size={16} className="text-red-500" />
+                ) : null}
+                {customAlertOptions.type === "success" ? (
+                  <Check size={16} className="text-emerald-500" />
+                ) : null}
+                {customAlertOptions.type === "info" ? (
+                  <AlertTriangle size={16} className="text-blue-500" />
+                ) : null}
                 {customAlertOptions.title}
               </h2>
-              <p className="text-obs-muted mb-6 text-[10px] leading-relaxed break-words">{customAlertOptions.message}</p>
+              <p className="text-obs-muted mb-6 text-[10px] leading-relaxed break-words">
+                {customAlertOptions.message}
+              </p>
               <div className="flex justify-end">
                 <button
-                  onClick={() => setCustomAlertOptions({ ...customAlertOptions, isOpen: false })}
+                  onClick={() =>
+                    setCustomAlertOptions({
+                      ...customAlertOptions,
+                      isOpen: false,
+                    })
+                  }
                   className="px-5 py-2 bg-obs-accent hover:opacity-90 text-white rounded text-[10px] font-bold uppercase transition-all"
                 >
                   Aceptar
@@ -14135,7 +14811,9 @@ export default function App() {
                       const val = e.target.value;
                       setSelectedAudioOutput(val);
                       if (val !== "none" && val !== "default") {
-                        (window.electron as any)?.setWindowsDefaultDevice?.(val).catch(() => {});
+                        (window.electron as any)
+                          ?.setWindowsDefaultDevice?.(val)
+                          .catch(() => {});
                       }
                     }}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
@@ -14164,7 +14842,9 @@ export default function App() {
                       const val = e.target.value;
                       setSelectedAudioInput(val);
                       if (val !== "none" && val !== "default") {
-                        (window.electron as any)?.setWindowsDefaultDevice?.(val).catch(() => {});
+                        (window.electron as any)
+                          ?.setWindowsDefaultDevice?.(val)
+                          .catch(() => {});
                       }
                     }}
                     className="w-full bg-obs-surface text-white text-[10px] font-bold p-2.5 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none"
@@ -14243,13 +14923,22 @@ export default function App() {
                   >
                     <option value="ibm">IBM Plex Sans (Por Defecto)</option>
                     <option value="inter">Inter (Moderno Minimalista)</option>
-                    <option value="barlow">Barlow Condensed (Alta Densidad - Resolume Style)</option>
-                    <option value="space">Space Grotesk (Tecnológico / Futurista)</option>
-                    <option value="cinzel">Cinzel (Estilo Galería de Arte / Serif)</option>
-                    <option value="mono">JetBrains Mono (Consola de Programación)</option>
+                    <option value="barlow">
+                      Barlow Condensed (Alta Densidad - Resolume Style)
+                    </option>
+                    <option value="space">
+                      Space Grotesk (Tecnológico / Futurista)
+                    </option>
+                    <option value="cinzel">
+                      Cinzel (Estilo Galería de Arte / Serif)
+                    </option>
+                    <option value="mono">
+                      JetBrains Mono (Consola de Programación)
+                    </option>
                   </select>
                   <p className="text-[7.5px] text-obs-muted mt-0.5">
-                    Ajusta inmediatamente el estilo visual o densidad del texto de toda la interfaz de LUMIN.
+                    Ajusta inmediatamente el estilo visual o densidad del texto
+                    de toda la interfaz de LUMIN.
                   </p>
                 </div>
                 <div className="space-y-1">
@@ -14573,58 +15262,105 @@ export default function App() {
                                 sourceName === "Master"
                                   ? masterVolume
                                   : sourceName === "out-default"
-                                    ? (windowsDevicesList.find((d) => d.flow === 0 && d.isDefault)?.volume ?? audioVolumes["out-default"] ?? 0.5)
+                                    ? (windowsDevicesList.find(
+                                        (d) => d.flow === 0 && d.isDefault,
+                                      )?.volume ??
+                                      audioVolumes["out-default"] ??
+                                      0.5)
                                     : sourceName === "in-default"
-                                      ? (windowsDevicesList.find((d) => d.flow === 1 && d.isDefault)?.volume ?? audioVolumes["in-default"] ?? 0.5)
+                                      ? (windowsDevicesList.find(
+                                          (d) => d.flow === 1 && d.isDefault,
+                                        )?.volume ??
+                                        audioVolumes["in-default"] ??
+                                        0.5)
                                       : (audioVolumes[sourceName] ?? 0.5);
 
                               const onChange = (val: number) => {
-                                lastFaderUserInteractionRef.current[sourceName] = Date.now();
+                                lastFaderUserInteractionRef.current[
+                                  sourceName
+                                ] = Date.now();
                                 if (sourceName === "Master") {
                                   setMasterVolume(val);
-                                  (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
+                                  (window.electron as any)
+                                    ?.setWindowsVolume?.(val)
+                                    .catch(() => {});
                                 } else if (sourceName === "out-default") {
-                                  const defDev = windowsDevicesList.find((d) => d.flow === 0 && d.isDefault);
+                                  const defDev = windowsDevicesList.find(
+                                    (d) => d.flow === 0 && d.isDefault,
+                                  );
                                   if (defDev) {
-                                    (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, val).catch(() => {});
+                                    (window.electron as any)
+                                      ?.setWindowsDeviceVolume?.(defDev.id, val)
+                                      .catch(() => {});
                                   } else {
-                                    (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
+                                    (window.electron as any)
+                                      ?.setWindowsVolume?.(val)
+                                      .catch(() => {});
                                   }
                                 } else if (sourceName === "in-default") {
-                                  const defDev = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+                                  const defDev = windowsDevicesList.find(
+                                    (d) => d.flow === 1 && d.isDefault,
+                                  );
                                   if (defDev) {
-                                    (window.electron as any)?.setWindowsDeviceVolume?.(defDev.id, val).catch(() => {});
+                                    (window.electron as any)
+                                      ?.setWindowsDeviceVolume?.(defDev.id, val)
+                                      .catch(() => {});
                                   }
                                 } else if (sourceName === "Programa") {
                                   setProgramVolume(val);
                                 } else if (sourceName === "USB") {
                                   setUsbOutVolume(val);
-                                  (window.electron as any)?.setWindowsVolume?.(val).catch(() => {});
+                                  (window.electron as any)
+                                    ?.setWindowsVolume?.(val)
+                                    .catch(() => {});
                                 } else if (sourceName === "IN") {
                                   setUsbInVolume(val);
-                                  const defIn = windowsDevicesList.find((d) => d.flow === 1 && d.isDefault);
+                                  const defIn = windowsDevicesList.find(
+                                    (d) => d.flow === 1 && d.isDefault,
+                                  );
                                   if (defIn) {
-                                    (window.electron as any)?.setWindowsDeviceVolume?.(defIn.id, val).catch(() => {});
+                                    (window.electron as any)
+                                      ?.setWindowsDeviceVolume?.(defIn.id, val)
+                                      .catch(() => {});
                                   }
-                                } else if (sourceName.startsWith("out-") || sourceName.startsWith("in-")) {
-                                  const flow = sourceName.startsWith("out-") ? 0 : 1;
-                                  const cleanId = sourceName.replace("out-", "").replace("in-", "");
-                                  
+                                } else if (
+                                  sourceName.startsWith("out-") ||
+                                  sourceName.startsWith("in-")
+                                ) {
+                                  const flow = sourceName.startsWith("out-")
+                                    ? 0
+                                    : 1;
+                                  const cleanId = sourceName
+                                    .replace("out-", "")
+                                    .replace("in-", "");
+
                                   let winDevId = cleanId;
-                                  
+
                                   // Find the device in the windows device list directly by ID first
-                                  let winDev = windowsDevicesList.find(d => d.id === cleanId);
-                                  
+                                  let winDev = windowsDevicesList.find(
+                                    (d) => d.id === cleanId,
+                                  );
+
                                   if (!winDev) {
                                     // Fallback: try mapping if it's a Chrome ID
-                                    const chromeList = flow === 0 ? audioOutputDevices : audioInputDevices;
-                                    const chromeDev = chromeList.find(d => d.deviceId === cleanId);
-                                    
+                                    const chromeList =
+                                      flow === 0
+                                        ? audioOutputDevices
+                                        : audioInputDevices;
+                                    const chromeDev = chromeList.find(
+                                      (d) => d.deviceId === cleanId,
+                                    );
+
                                     if (chromeDev && chromeDev.label) {
-                                      const rawLabel = chromeDev.label.replace(/^Predeterminado - /, "").trim();
-                                      winDev = windowsDevicesList.find(d => 
-                                        d.flow === flow && 
-                                        (d.name === rawLabel || rawLabel.includes(d.name) || d.name.includes(rawLabel))
+                                      const rawLabel = chromeDev.label
+                                        .replace(/^Predeterminado - /, "")
+                                        .trim();
+                                      winDev = windowsDevicesList.find(
+                                        (d) =>
+                                          d.flow === flow &&
+                                          (d.name === rawLabel ||
+                                            rawLabel.includes(d.name) ||
+                                            d.name.includes(rawLabel)),
                                       );
                                     }
                                   }
@@ -14633,7 +15369,9 @@ export default function App() {
                                     winDevId = winDev.id;
                                   }
 
-                                  (window.electron as any)?.setWindowsDeviceVolume?.(winDevId, val).catch(() => {});
+                                  (window.electron as any)
+                                    ?.setWindowsDeviceVolume?.(winDevId, val)
+                                    .catch(() => {});
                                 }
 
                                 setAudioVolumes((prev) => ({
@@ -14677,7 +15415,9 @@ export default function App() {
                                   }`}
                                 >
                                   <div className="flex items-center justify-between gap-2 px-1">
-                                    <span className={`text-[8.5px] font-black uppercase tracking-wider truncate flex-1 transition-colors ${mutedFaders[sourceName] ? "text-red-400" : "text-obs-text"}`}>
+                                    <span
+                                      className={`text-[8.5px] font-black uppercase tracking-wider truncate flex-1 transition-colors ${mutedFaders[sourceName] ? "text-red-400" : "text-obs-text"}`}
+                                    >
                                       {faderLabel}
                                     </span>
                                     <button
@@ -14687,16 +15427,26 @@ export default function App() {
                                           ? "bg-red-600 border-red-500 text-white hover:bg-red-500 shadow-md shadow-red-900/20"
                                           : "bg-obs-dark-2 border-white/5 text-obs-muted hover:bg-obs-surface hover:text-white"
                                       }`}
-                                      title={mutedFaders[sourceName] ? "Desmutear" : "Mutear canal"}
+                                      title={
+                                        mutedFaders[sourceName]
+                                          ? "Desmutear"
+                                          : "Mutear canal"
+                                      }
                                     >
-                                      {mutedFaders[sourceName] ? "MUTED" : "MUTE"}
+                                      {mutedFaders[sourceName]
+                                        ? "MUTED"
+                                        : "MUTE"}
                                     </button>
                                   </div>
 
                                   <PropertyControl
                                     label="Volumen"
                                     value={mutedFaders[sourceName] ? 0 : volume}
-                                    displayValue={mutedFaders[sourceName] ? "-∞ dB" : volToDb(volume)}
+                                    displayValue={
+                                      mutedFaders[sourceName]
+                                        ? "-∞ dB"
+                                        : volToDb(volume)
+                                    }
                                     min={0}
                                     max={1}
                                     step={0.01}
@@ -14704,10 +15454,14 @@ export default function App() {
                                     isAudioControl={true}
                                   />
                                   <AudioBumeter
-                                    volume={mutedFaders[sourceName] ? 0 : volume}
+                                    volume={
+                                      mutedFaders[sourceName] ? 0 : volume
+                                    }
                                     isActive={true}
                                     getSignalLevel={() =>
-                                      mutedFaders[sourceName] ? 0 : getFaderSignalLevel(sourceName)
+                                      mutedFaders[sourceName]
+                                        ? 0
+                                        : getFaderSignalLevel(sourceName)
                                     }
                                   />
                                 </div>
@@ -14964,7 +15718,10 @@ export default function App() {
                           selectedLibraryUrls.has(f.url),
                         );
                         if (!selectedFile) return null;
-                        if (selectedFile.type === "videoinput" || selectedFile.type?.startsWith("video")) {
+                        if (
+                          selectedFile.type === "videoinput" ||
+                          selectedFile.type?.startsWith("video")
+                        ) {
                           return <LibraryMediaPreview file={selectedFile} />;
                         } else if (
                           selectedFile.type === "document" ||
@@ -15013,21 +15770,48 @@ export default function App() {
             <div className="flex-none flex flex-wrap gap-4 auto-rows-max shrink-0">
               {/* Left Preview Monitor */}
               {(() => {
-                const activeLeftPreview = leftPreviewSelection === "preview"
-                  ? "preview"
-                  : leftPreviewSelection === "none"
-                    ? "none"
-                    : (outputs.some((o) => o.id === leftPreviewSelection) ? leftPreviewSelection : "preview");
+                const activeLeftPreview =
+                  leftPreviewSelection === "preview"
+                    ? "preview"
+                    : leftPreviewSelection === "none"
+                      ? "none"
+                      : outputs.some((o) => o.id === leftPreviewSelection)
+                        ? leftPreviewSelection
+                        : "preview";
 
-                const isLeftCasting = activeLeftPreview === "preview"
-                  ? (previewClipId ? (clips.find(c => c.id === previewClipId)?.type === "video" || clips.find(c => c.id === previewClipId)?.type === "videoinput" || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mp4") || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mov") || clips.find(c => c.id === previewClipId)?.name?.toLowerCase().endsWith(".mkv")) : false)
-                  : (activeLeftPreview === "none" ? false : isVideoCurrentlyCastingOnOutput(activeLeftPreview));
+                const isLeftCasting =
+                  activeLeftPreview === "preview"
+                    ? previewClipId
+                      ? clips.find((c) => c.id === previewClipId)?.type ===
+                          "video" ||
+                        clips.find((c) => c.id === previewClipId)?.type ===
+                          "videoinput" ||
+                        clips
+                          .find((c) => c.id === previewClipId)
+                          ?.name?.toLowerCase()
+                          .endsWith(".mp4") ||
+                        clips
+                          .find((c) => c.id === previewClipId)
+                          ?.name?.toLowerCase()
+                          .endsWith(".mov") ||
+                        clips
+                          .find((c) => c.id === previewClipId)
+                          ?.name?.toLowerCase()
+                          .endsWith(".mkv")
+                      : false
+                    : activeLeftPreview === "none"
+                      ? false
+                      : isVideoCurrentlyCastingOnOutput(activeLeftPreview);
 
                 return (
                   <div className="flex flex-col gap-1.5 group/mon relative w-[320px]">
                     <div className="flex justify-between items-end px-1">
                       <span className="text-[9px] text-[#114e6d] font-black uppercase tracking-[0.2em]">
-                        {activeLeftPreview === "preview" ? "VISTA PREVIA" : activeLeftPreview === "none" ? "NINGUNA SALIDA" : `SALIDA ${activeLeftPreview}`}
+                        {activeLeftPreview === "preview"
+                          ? "VISTA PREVIA"
+                          : activeLeftPreview === "none"
+                            ? "NINGUNA SALIDA"
+                            : `SALIDA ${activeLeftPreview}`}
                       </span>
                     </div>
                     <div className="w-full aspect-video shadow-xl relative border rounded overflow-hidden border-obs-muted/40 hover:border-obs-muted/70 bg-black">
@@ -15053,7 +15837,11 @@ export default function App() {
                         />
                       ) : activeLeftPreview === "none" ? (
                         <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-m2 text-obs-muted text-[10px] uppercase font-black tracking-widest leading-none border-2 border-obs-border">
-                          <MonitorIcon size={40} strokeWidth={1} className="mb-2 opacity-15" />
+                          <MonitorIcon
+                            size={40}
+                            strokeWidth={1}
+                            className="mb-2 opacity-15"
+                          />
                           Ninguna Salida
                         </div>
                       ) : (
@@ -15061,22 +15849,39 @@ export default function App() {
                           outputs={outputs}
                           title={`VISTA SALIDA ${activeLeftPreview}`}
                           isActive={isLive}
-                          activeClip={clips.find((c) => c.id === outputPrograms[activeLeftPreview]) || null}
+                          activeClip={
+                            clips.find(
+                              (c) => c.id === outputPrograms[activeLeftPreview],
+                            ) || null
+                          }
                           isDarkMode={isDarkMode}
                           clips={clips}
-                          programClipId={outputPrograms[activeLeftPreview] || null}
+                          programClipId={
+                            outputPrograms[activeLeftPreview] || null
+                          }
                           previewClipId={previewClipId}
                           programPlayIndex={programPlayIndex}
-                          targetClipId={outputTransitionTargets[activeLeftPreview]}
-                          hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
+                          targetClipId={
+                            outputTransitionTargets[activeLeftPreview]
+                          }
+                          hasTransitionTargets={
+                            Object.keys(outputTransitionTargets).length > 0
+                          }
                           crossfaderValue={crossfaderValue}
                           isProgram={true}
                           layers={layers}
                           layerOutputs={layerOutputs}
                           isTransmitting={isTransmitting}
-                          isProgramOff={outputOffStates[activeLeftPreview] || false}
-                          settings={allScreenSettings[activeLeftPreview] || DEFAULT_SCREEN_SETTINGS}
-                          masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
+                          isProgramOff={
+                            outputOffStates[activeLeftPreview] || false
+                          }
+                          settings={
+                            allScreenSettings[activeLeftPreview] ||
+                            DEFAULT_SCREEN_SETTINGS
+                          }
+                          masterVolume={
+                            mutedFaders["Master"] ? 0 : masterVolume
+                          }
                           onEnded={handleProgramNext}
                           onLayerEnded={handleLayerEnded}
                           onLevelChange={setProgramLevel}
@@ -15084,21 +15889,58 @@ export default function App() {
                           onToggleLoop={handleToggleLoop}
                           onRewind={handleRewind}
                           onSkip={handleSkip}
-                          onProgressUpdate={(cur, tot) => setProgramProgress({ current: cur, total: tot })}
+                          onProgressUpdate={(cur, tot) =>
+                            setProgramProgress({ current: cur, total: tot })
+                          }
                           onUpdateClip={updateClip}
                           isPlaylist={!!programPlaylistState}
                           volume={mutedFaders["Programa"] ? 0 : programVolume}
-                          brightness={allScreenSettings[activeLeftPreview]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
-                          contrast={allScreenSettings[activeLeftPreview]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
-                          saturation={allScreenSettings[activeLeftPreview]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
-                          opacity={allScreenSettings[activeLeftPreview]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
-                          x={allScreenSettings[activeLeftPreview]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
-                          y={allScreenSettings[activeLeftPreview]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
-                          rotation={allScreenSettings[activeLeftPreview]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
-                          scalingW={allScreenSettings[activeLeftPreview]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
-                          scalingH={allScreenSettings[activeLeftPreview]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
-                          transitionType={allScreenSettings[activeLeftPreview]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
-                          colorBalance={allScreenSettings[activeLeftPreview]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
+                          brightness={
+                            allScreenSettings[activeLeftPreview]?.brightness ??
+                            DEFAULT_SCREEN_SETTINGS.brightness
+                          }
+                          contrast={
+                            allScreenSettings[activeLeftPreview]?.contrast ??
+                            DEFAULT_SCREEN_SETTINGS.contrast
+                          }
+                          saturation={
+                            allScreenSettings[activeLeftPreview]?.saturation ??
+                            DEFAULT_SCREEN_SETTINGS.saturation
+                          }
+                          opacity={
+                            allScreenSettings[activeLeftPreview]?.opacity ??
+                            DEFAULT_SCREEN_SETTINGS.opacity
+                          }
+                          x={
+                            allScreenSettings[activeLeftPreview]?.x ??
+                            DEFAULT_SCREEN_SETTINGS.x
+                          }
+                          y={
+                            allScreenSettings[activeLeftPreview]?.y ??
+                            DEFAULT_SCREEN_SETTINGS.y
+                          }
+                          rotation={
+                            allScreenSettings[activeLeftPreview]?.rotation ??
+                            DEFAULT_SCREEN_SETTINGS.rotation
+                          }
+                          scalingW={
+                            allScreenSettings[activeLeftPreview]?.scalingW ??
+                            DEFAULT_SCREEN_SETTINGS.scalingW
+                          }
+                          scalingH={
+                            allScreenSettings[activeLeftPreview]?.scalingH ??
+                            DEFAULT_SCREEN_SETTINGS.scalingH
+                          }
+                          transitionType={
+                            allScreenSettings[activeLeftPreview]
+                              ?.transitionType ??
+                            DEFAULT_SCREEN_SETTINGS.transitionType
+                          }
+                          colorBalance={
+                            allScreenSettings[activeLeftPreview]
+                              ?.colorBalance ??
+                            DEFAULT_SCREEN_SETTINGS.colorBalance
+                          }
                           pipLayers={pipLayers}
                           activeOutputId={activeLeftPreview}
                           perfSettings={perfSettings}
@@ -15112,27 +15954,38 @@ export default function App() {
                     <div className="flex justify-between items-center px-2 py-1 bg-obs-dark-1/25 rounded border border-obs-border/30 mt-1">
                       {/* Timer Display */}
                       {(() => {
-                        const clipId = activeLeftPreview === "preview" 
-                          ? previewClipId 
-                          : outputPrograms[activeLeftPreview];
+                        const clipId =
+                          activeLeftPreview === "preview"
+                            ? previewClipId
+                            : outputPrograms[activeLeftPreview];
                         const clip = clips.find((c) => c.id === clipId);
 
-                        const isVideo = clip && (clip.type === "video" || clip.type === "videoinput");
-                        const activeDocOrPptClip = (clip && (
-                          clip.type === "document" ||
-                          clip.type === "ppt" ||
-                          clip.name?.toLowerCase().endsWith(".pdf")
-                        )) ? clip : clips?.find((c) => {
-                          const hasLayer = (layers || []).some((l) => {
-                            const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === activeLeftPreview;
-                            return l.activeClipId === c.id && isTargetOutput;
-                          });
-                          return hasLayer && (
-                            c.type === "document" ||
-                            c.type === "ppt" ||
-                            c.name?.toLowerCase().endsWith(".pdf")
-                          );
-                        });
+                        const isVideo =
+                          clip &&
+                          (clip.type === "video" || clip.type === "videoinput");
+                        const activeDocOrPptClip =
+                          clip &&
+                          (clip.type === "document" ||
+                            clip.type === "ppt" ||
+                            clip.name?.toLowerCase().endsWith(".pdf"))
+                            ? clip
+                            : clips?.find((c) => {
+                                const hasLayer = (layers || []).some((l) => {
+                                  const isTargetOutput =
+                                    !layerOutputs[l.id] ||
+                                    layerOutputs[l.id] === "all" ||
+                                    layerOutputs[l.id] === activeLeftPreview;
+                                  return (
+                                    l.activeClipId === c.id && isTargetOutput
+                                  );
+                                });
+                                return (
+                                  hasLayer &&
+                                  (c.type === "document" ||
+                                    c.type === "ppt" ||
+                                    c.name?.toLowerCase().endsWith(".pdf"))
+                                );
+                              });
 
                         return (
                           <div className="flex flex-col">
@@ -15146,7 +15999,11 @@ export default function App() {
                                   "00:00:00"
                                 ) : (
                                   <FluidTimeDisplay
-                                    eventId={activeLeftPreview === "preview" ? "video-progress-preview" : `video-progress-output-${activeLeftPreview}`}
+                                    eventId={
+                                      activeLeftPreview === "preview"
+                                        ? "video-progress-preview"
+                                        : `video-progress-output-${activeLeftPreview}`
+                                    }
                                     isRemaining={timerMode === "remaining"}
                                     clipId={clipId}
                                     outputId={activeLeftPreview}
@@ -15161,28 +16018,41 @@ export default function App() {
                                 <button
                                   onClick={() =>
                                     setTimerMode((prev) =>
-                                      prev === "elapsed" ? "remaining" : "elapsed",
+                                      prev === "elapsed"
+                                        ? "remaining"
+                                        : "elapsed",
                                     )
                                   }
                                   className="p-0.5 h-4 w-4 bg-obs-dark-1 hover:bg-obs-text/10 rounded transition-colors border border-obs-text/5 flex items-center justify-center cursor-pointer"
                                   title="Cambiar formato"
                                 >
-                                  <RefreshCw size={8} className="text-obs-muted max-h-full max-w-full" />
+                                  <RefreshCw
+                                    size={8}
+                                    className="text-obs-muted max-h-full max-w-full"
+                                  />
                                 </button>
                               )}
-                              {activeLeftPreview === "preview" && previewClipId && (
-                                <button
-                                  id="stop-preview-btn"
-                                  onClick={() => setPreviewClipId(null)}
-                                  className="p-0.5 h-4 w-4 bg-red-950 hover:bg-red-900 rounded transition-colors border border-red-800 flex items-center justify-center cursor-pointer"
-                                  title="Parar Preview"
-                                >
-                                  <Square size={8} className="text-red-400 max-h-full max-w-full" />
-                                </button>
-                              )}
+                              {activeLeftPreview === "preview" &&
+                                previewClipId && (
+                                  <button
+                                    id="stop-preview-btn"
+                                    onClick={() => setPreviewClipId(null)}
+                                    className="p-0.5 h-4 w-4 bg-red-950 hover:bg-red-900 rounded transition-colors border border-red-800 flex items-center justify-center cursor-pointer"
+                                    title="Parar Preview"
+                                  >
+                                    <Square
+                                      size={8}
+                                      className="text-red-400 max-h-full max-w-full"
+                                    />
+                                  </button>
+                                )}
                             </div>
                             <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest leading-none mt-0.5">
-                              {activeDocOrPptClip ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
+                              {activeDocOrPptClip
+                                ? "DIAPOSITIVA"
+                                : timerMode === "remaining"
+                                  ? "REMAINING"
+                                  : "ELAPSED"}
                             </span>
                           </div>
                         );
@@ -15191,16 +16061,25 @@ export default function App() {
                       {/* Dropdown Select */}
                       <select
                         value={activeLeftPreview}
-                        onChange={(e) => setLeftPreviewSelection(e.target.value)}
+                        onChange={(e) =>
+                          setLeftPreviewSelection(e.target.value)
+                        }
                         className="bg-obs-surface text-white text-[10px] font-bold p-1 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-24 uppercase"
                       >
                         <option value="preview">PREVIEW</option>
                         <option value="none">NINGUNA</option>
-                        {outputs.filter(o => !o.isVirtual).map((out) => (
-                          <option key={`left-preview-opt-${out.id}`} value={out.id}>
-                            {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
-                          </option>
-                        ))}
+                        {outputs
+                          .filter((o) => !o.isVirtual)
+                          .map((out) => (
+                            <option
+                              key={`left-preview-opt-${out.id}`}
+                              value={out.id}
+                            >
+                              {out.name
+                                ? out.name.toUpperCase()
+                                : `SALIDA ${out.id}`}
+                            </option>
+                          ))}
                       </select>
                     </div>
                   </div>
@@ -15209,25 +16088,35 @@ export default function App() {
 
               {/* Right Preview Monitor */}
               {(() => {
-                const activeRightPreview = rightPreviewSelection === "none"
-                  ? "none"
-                  : (outputs.some((o) => o.id === rightPreviewSelection)
-                    ? rightPreviewSelection
-                    : (outputs[0]?.id || "1"));
+                const activeRightPreview =
+                  rightPreviewSelection === "none"
+                    ? "none"
+                    : outputs.some((o) => o.id === rightPreviewSelection)
+                      ? rightPreviewSelection
+                      : outputs[0]?.id || "1";
 
-                const isRightCasting = activeRightPreview === "none" ? false : isVideoCurrentlyCastingOnOutput(activeRightPreview);
+                const isRightCasting =
+                  activeRightPreview === "none"
+                    ? false
+                    : isVideoCurrentlyCastingOnOutput(activeRightPreview);
 
                 return (
                   <div className="flex flex-col gap-1.5 group/mon relative w-[320px]">
                     <div className="flex justify-between items-end px-1">
                       <span className="text-[9px] text-[#114e6d] font-black uppercase tracking-[0.2em]">
-                        {activeRightPreview === "none" ? "NINGUNA SALIDA" : `SALIDA ${activeRightPreview}`}
+                        {activeRightPreview === "none"
+                          ? "NINGUNA SALIDA"
+                          : `SALIDA ${activeRightPreview}`}
                       </span>
                     </div>
                     <div className="w-full aspect-video shadow-xl relative border rounded overflow-hidden border-obs-muted/40 hover:border-obs-muted/70 bg-black">
                       {activeRightPreview === "none" ? (
                         <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-m2 text-obs-muted text-[10px] uppercase font-black tracking-widest leading-none border-2 border-obs-border">
-                          <MonitorIcon size={40} strokeWidth={1} className="mb-2 opacity-15" />
+                          <MonitorIcon
+                            size={40}
+                            strokeWidth={1}
+                            className="mb-2 opacity-15"
+                          />
                           Ninguna Salida
                         </div>
                       ) : (
@@ -15235,22 +16124,40 @@ export default function App() {
                           outputs={outputs}
                           title={`VISTA SALIDA ${activeRightPreview}`}
                           isActive={isLive}
-                          activeClip={clips.find((c) => c.id === outputPrograms[activeRightPreview]) || null}
+                          activeClip={
+                            clips.find(
+                              (c) =>
+                                c.id === outputPrograms[activeRightPreview],
+                            ) || null
+                          }
                           isDarkMode={isDarkMode}
                           clips={clips}
-                          programClipId={outputPrograms[activeRightPreview] || null}
+                          programClipId={
+                            outputPrograms[activeRightPreview] || null
+                          }
                           previewClipId={previewClipId}
                           programPlayIndex={programPlayIndex}
-                          targetClipId={outputTransitionTargets[activeRightPreview]}
-                          hasTransitionTargets={Object.keys(outputTransitionTargets).length > 0}
+                          targetClipId={
+                            outputTransitionTargets[activeRightPreview]
+                          }
+                          hasTransitionTargets={
+                            Object.keys(outputTransitionTargets).length > 0
+                          }
                           crossfaderValue={crossfaderValue}
                           isProgram={true}
                           layers={layers}
                           layerOutputs={layerOutputs}
                           isTransmitting={isTransmitting}
-                          isProgramOff={outputOffStates[activeRightPreview] || false}
-                          settings={allScreenSettings[activeRightPreview] || DEFAULT_SCREEN_SETTINGS}
-                          masterVolume={mutedFaders["Master"] ? 0 : masterVolume}
+                          isProgramOff={
+                            outputOffStates[activeRightPreview] || false
+                          }
+                          settings={
+                            allScreenSettings[activeRightPreview] ||
+                            DEFAULT_SCREEN_SETTINGS
+                          }
+                          masterVolume={
+                            mutedFaders["Master"] ? 0 : masterVolume
+                          }
                           onEnded={handleProgramNext}
                           onLayerEnded={handleLayerEnded}
                           onLevelChange={setProgramLevel}
@@ -15258,21 +16165,58 @@ export default function App() {
                           onToggleLoop={handleToggleLoop}
                           onRewind={handleRewind}
                           onSkip={handleSkip}
-                          onProgressUpdate={(cur, tot) => setProgramProgress({ current: cur, total: tot })}
+                          onProgressUpdate={(cur, tot) =>
+                            setProgramProgress({ current: cur, total: tot })
+                          }
                           onUpdateClip={updateClip}
                           isPlaylist={!!programPlaylistState}
                           volume={mutedFaders["Programa"] ? 0 : programVolume}
-                          brightness={allScreenSettings[activeRightPreview]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
-                          contrast={allScreenSettings[activeRightPreview]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
-                          saturation={allScreenSettings[activeRightPreview]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
-                          opacity={allScreenSettings[activeRightPreview]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
-                          x={allScreenSettings[activeRightPreview]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
-                          y={allScreenSettings[activeRightPreview]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
-                          rotation={allScreenSettings[activeRightPreview]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
-                          scalingW={allScreenSettings[activeRightPreview]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
-                          scalingH={allScreenSettings[activeRightPreview]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
-                          transitionType={allScreenSettings[activeRightPreview]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
-                          colorBalance={allScreenSettings[activeRightPreview]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
+                          brightness={
+                            allScreenSettings[activeRightPreview]?.brightness ??
+                            DEFAULT_SCREEN_SETTINGS.brightness
+                          }
+                          contrast={
+                            allScreenSettings[activeRightPreview]?.contrast ??
+                            DEFAULT_SCREEN_SETTINGS.contrast
+                          }
+                          saturation={
+                            allScreenSettings[activeRightPreview]?.saturation ??
+                            DEFAULT_SCREEN_SETTINGS.saturation
+                          }
+                          opacity={
+                            allScreenSettings[activeRightPreview]?.opacity ??
+                            DEFAULT_SCREEN_SETTINGS.opacity
+                          }
+                          x={
+                            allScreenSettings[activeRightPreview]?.x ??
+                            DEFAULT_SCREEN_SETTINGS.x
+                          }
+                          y={
+                            allScreenSettings[activeRightPreview]?.y ??
+                            DEFAULT_SCREEN_SETTINGS.y
+                          }
+                          rotation={
+                            allScreenSettings[activeRightPreview]?.rotation ??
+                            DEFAULT_SCREEN_SETTINGS.rotation
+                          }
+                          scalingW={
+                            allScreenSettings[activeRightPreview]?.scalingW ??
+                            DEFAULT_SCREEN_SETTINGS.scalingW
+                          }
+                          scalingH={
+                            allScreenSettings[activeRightPreview]?.scalingH ??
+                            DEFAULT_SCREEN_SETTINGS.scalingH
+                          }
+                          transitionType={
+                            allScreenSettings[activeRightPreview]
+                              ?.transitionType ??
+                            DEFAULT_SCREEN_SETTINGS.transitionType
+                          }
+                          colorBalance={
+                            allScreenSettings[activeRightPreview]
+                              ?.colorBalance ??
+                            DEFAULT_SCREEN_SETTINGS.colorBalance
+                          }
                           pipLayers={pipLayers}
                           activeOutputId={activeRightPreview}
                           perfSettings={perfSettings}
@@ -15286,10 +16230,15 @@ export default function App() {
                     <div className="flex justify-between items-center px-2 py-1 bg-obs-dark-1/25 rounded border border-obs-border/30 mt-1">
                       {/* Timer Display */}
                       {(() => {
-                        const clipId = activeRightPreview === "none" ? null : outputPrograms[activeRightPreview];
+                        const clipId =
+                          activeRightPreview === "none"
+                            ? null
+                            : outputPrograms[activeRightPreview];
                         const clip = clips.find((c) => c.id === clipId);
 
-                        const isVideo = clip && (clip.type === "video" || clip.type === "videoinput");
+                        const isVideo =
+                          clip &&
+                          (clip.type === "video" || clip.type === "videoinput");
                         const activeDocOrPptClip =
                           !isVideo &&
                           clip &&
@@ -15299,12 +16248,15 @@ export default function App() {
                             ? clip
                             : !isVideo
                               ? clips?.find((c) => {
-                                  const hasLayer = (layers || []).some(
-                                    (l) => {
-                                      const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === activeRightPreview;
-                                      return l.activeClipId === c.id && isTargetOutput;
-                                    }
-                                  );
+                                  const hasLayer = (layers || []).some((l) => {
+                                    const isTargetOutput =
+                                      !layerOutputs[l.id] ||
+                                      layerOutputs[l.id] === "all" ||
+                                      layerOutputs[l.id] === activeRightPreview;
+                                    return (
+                                      l.activeClipId === c.id && isTargetOutput
+                                    );
+                                  });
                                   return (
                                     hasLayer &&
                                     (c.type === "document" ||
@@ -15341,18 +16293,27 @@ export default function App() {
                                 <button
                                   onClick={() =>
                                     setTimerMode((prev) =>
-                                      prev === "elapsed" ? "remaining" : "elapsed",
+                                      prev === "elapsed"
+                                        ? "remaining"
+                                        : "elapsed",
                                     )
                                   }
                                   className="p-0.5 h-4 w-4 bg-obs-dark-1 hover:bg-obs-text/10 rounded transition-colors border border-obs-text/5 flex items-center justify-center cursor-pointer"
                                   title="Cambiar formato"
                                 >
-                                  <RefreshCw size={8} className="text-obs-muted max-h-full max-w-full" />
+                                  <RefreshCw
+                                    size={8}
+                                    className="text-obs-muted max-h-full max-w-full"
+                                  />
                                 </button>
                               )}
                             </div>
                             <span className="text-[7px] text-obs-muted uppercase font-black tracking-widest leading-none mt-0.5">
-                              {activeDocOrPptClip ? "DIAPOSITIVA" : timerMode === "remaining" ? "REMAINING" : "ELAPSED"}
+                              {activeDocOrPptClip
+                                ? "DIAPOSITIVA"
+                                : timerMode === "remaining"
+                                  ? "REMAINING"
+                                  : "ELAPSED"}
                             </span>
                           </div>
                         );
@@ -15361,15 +16322,24 @@ export default function App() {
                       {/* Dropdown Select */}
                       <select
                         value={activeRightPreview}
-                        onChange={(e) => setRightPreviewSelection(e.target.value)}
+                        onChange={(e) =>
+                          setRightPreviewSelection(e.target.value)
+                        }
                         className="bg-obs-surface text-white text-[10px] font-bold p-1 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-24 uppercase"
                       >
                         <option value="none">NINGUNA</option>
-                        {outputs.filter(o => !o.isVirtual).map((out) => (
-                          <option key={`right-preview-opt-${out.id}`} value={out.id}>
-                            {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
-                          </option>
-                        ))}
+                        {outputs
+                          .filter((o) => !o.isVirtual)
+                          .map((out) => (
+                            <option
+                              key={`right-preview-opt-${out.id}`}
+                              value={out.id}
+                            >
+                              {out.name
+                                ? out.name.toUpperCase()
+                                : `SALIDA ${out.id}`}
+                            </option>
+                          ))}
                       </select>
                     </div>
                   </div>
@@ -15380,25 +16350,35 @@ export default function App() {
             {/* Right: Program Monitor & Controls */}
             <div className="w-[480px] flex flex-col flex-none shrink-0 group/prog">
               <div className="flex justify-between items-end px-1 pb-0.5">
-                <span className={`text-[9px] font-black uppercase tracking-[0.2em] ${isProgCasting ? "text-red-500" : "text-[#114e6d]"}`}>
-                  {activeOutputId === "none" ? "PROGRAM NINGUNA SALIDA" : `PROGRAM SALIDA ${activeOutputId}`}
-                  {activeOutputId !== "none" && outputs.find((o) => o.id === activeOutputId)
-                    ?.physicalScreenId && (
-                    <span className="text-obs-muted ml-2 font-medium">
-                      [
-                      {externalScreens.find(
-                        (s) =>
-                          s.id ===
-                          outputs.find((o) => o.id === activeOutputId)
-                            ?.physicalScreenId,
-                      )?.name || "Monitor"}
-                      ]
-                    </span>
-                  )}
+                <span
+                  className={`text-[9px] font-black uppercase tracking-[0.2em] ${isProgCasting ? "text-red-500" : "text-[#114e6d]"}`}
+                >
+                  {activeOutputId === "none"
+                    ? "PROGRAM NINGUNA SALIDA"
+                    : `PROGRAM SALIDA ${activeOutputId}`}
+                  {activeOutputId !== "none" &&
+                    outputs.find((o) => o.id === activeOutputId)
+                      ?.physicalScreenId && (
+                      <span className="text-obs-muted ml-2 font-medium">
+                        [
+                        {externalScreens.find(
+                          (s) =>
+                            s.id ===
+                            outputs.find((o) => o.id === activeOutputId)
+                              ?.physicalScreenId,
+                        )?.name || "Monitor"}
+                        ]
+                      </span>
+                    )}
                 </span>
                 {isLive && (
-                  <div className={`text-[7px] font-black flex items-center gap-1.5 uppercase tracking-tighter ${isProgCasting ? "text-red-500 animate-pulse" : "text-[#114e6d]"}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${isProgCasting ? "bg-red-500" : "bg-[#114e6d]"}`} /> ON AIR
+                  <div
+                    className={`text-[7px] font-black flex items-center gap-1.5 uppercase tracking-tighter ${isProgCasting ? "text-red-500 animate-pulse" : "text-[#114e6d]"}`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${isProgCasting ? "bg-red-500" : "bg-[#114e6d]"}`}
+                    />{" "}
+                    ON AIR
                   </div>
                 )}
               </div>
@@ -15413,7 +16393,11 @@ export default function App() {
                 >
                   {activeOutputId === "none" ? (
                     <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-m2 text-obs-muted text-xs uppercase font-black tracking-widest leading-none border-2 border-obs-border">
-                      <MonitorIcon size={64} strokeWidth={1} className="mb-2 opacity-15" />
+                      <MonitorIcon
+                        size={64}
+                        strokeWidth={1}
+                        className="mb-2 opacity-15"
+                      />
                       Ninguna Salida Programa
                     </div>
                   ) : (
@@ -15462,17 +16446,50 @@ export default function App() {
                       onUpdateClip={updateClip}
                       isPlaylist={!!programPlaylistState}
                       volume={mutedFaders["Programa"] ? 0 : programVolume}
-                      brightness={allScreenSettings[activeOutputId]?.brightness ?? DEFAULT_SCREEN_SETTINGS.brightness}
-                      contrast={allScreenSettings[activeOutputId]?.contrast ?? DEFAULT_SCREEN_SETTINGS.contrast}
-                      saturation={allScreenSettings[activeOutputId]?.saturation ?? DEFAULT_SCREEN_SETTINGS.saturation}
-                      opacity={allScreenSettings[activeOutputId]?.opacity ?? DEFAULT_SCREEN_SETTINGS.opacity}
-                      x={allScreenSettings[activeOutputId]?.x ?? DEFAULT_SCREEN_SETTINGS.x}
-                      y={allScreenSettings[activeOutputId]?.y ?? DEFAULT_SCREEN_SETTINGS.y}
-                      rotation={allScreenSettings[activeOutputId]?.rotation ?? DEFAULT_SCREEN_SETTINGS.rotation}
-                      scalingW={allScreenSettings[activeOutputId]?.scalingW ?? DEFAULT_SCREEN_SETTINGS.scalingW}
-                      scalingH={allScreenSettings[activeOutputId]?.scalingH ?? DEFAULT_SCREEN_SETTINGS.scalingH}
-                      transitionType={allScreenSettings[activeOutputId]?.transitionType ?? DEFAULT_SCREEN_SETTINGS.transitionType}
-                      colorBalance={allScreenSettings[activeOutputId]?.colorBalance ?? DEFAULT_SCREEN_SETTINGS.colorBalance}
+                      brightness={
+                        allScreenSettings[activeOutputId]?.brightness ??
+                        DEFAULT_SCREEN_SETTINGS.brightness
+                      }
+                      contrast={
+                        allScreenSettings[activeOutputId]?.contrast ??
+                        DEFAULT_SCREEN_SETTINGS.contrast
+                      }
+                      saturation={
+                        allScreenSettings[activeOutputId]?.saturation ??
+                        DEFAULT_SCREEN_SETTINGS.saturation
+                      }
+                      opacity={
+                        allScreenSettings[activeOutputId]?.opacity ??
+                        DEFAULT_SCREEN_SETTINGS.opacity
+                      }
+                      x={
+                        allScreenSettings[activeOutputId]?.x ??
+                        DEFAULT_SCREEN_SETTINGS.x
+                      }
+                      y={
+                        allScreenSettings[activeOutputId]?.y ??
+                        DEFAULT_SCREEN_SETTINGS.y
+                      }
+                      rotation={
+                        allScreenSettings[activeOutputId]?.rotation ??
+                        DEFAULT_SCREEN_SETTINGS.rotation
+                      }
+                      scalingW={
+                        allScreenSettings[activeOutputId]?.scalingW ??
+                        DEFAULT_SCREEN_SETTINGS.scalingW
+                      }
+                      scalingH={
+                        allScreenSettings[activeOutputId]?.scalingH ??
+                        DEFAULT_SCREEN_SETTINGS.scalingH
+                      }
+                      transitionType={
+                        allScreenSettings[activeOutputId]?.transitionType ??
+                        DEFAULT_SCREEN_SETTINGS.transitionType
+                      }
+                      colorBalance={
+                        allScreenSettings[activeOutputId]?.colorBalance ??
+                        DEFAULT_SCREEN_SETTINGS.colorBalance
+                      }
                       pipLayers={pipLayers}
                       activeOutputId={activeOutputId}
                       perfSettings={perfSettings}
@@ -15539,18 +16556,27 @@ export default function App() {
                           } else {
                             const chosenOut = outputs.find((o) => o.id === val);
                             setProgramClipId(outputPrograms[val] || null);
-                            setSelectedScreenId(chosenOut?.physicalScreenId || null);
+                            setSelectedScreenId(
+                              chosenOut?.physicalScreenId || null,
+                            );
                           }
                           setSelectedItemType("program");
                         }}
                         className="bg-obs-surface text-white text-[11px] font-bold h-[26px] px-2 border border-obs-border rounded focus:outline-none focus:border-obs-accent hover:border-obs-accent/50 outline-none w-36 uppercase"
                       >
                         <option value="none">NINGUNA</option>
-                        {outputs.filter(o => !o.isVirtual).map((out) => (
-                          <option key={`output-select-opt-${out.id}`} value={out.id}>
-                            {out.name ? out.name.toUpperCase() : `SALIDA ${out.id}`}
-                          </option>
-                        ))}
+                        {outputs
+                          .filter((o) => !o.isVirtual)
+                          .map((out) => (
+                            <option
+                              key={`output-select-opt-${out.id}`}
+                              value={out.id}
+                            >
+                              {out.name
+                                ? out.name.toUpperCase()
+                                : `SALIDA ${out.id}`}
+                            </option>
+                          ))}
                       </select>
                     </div>
                   </div>
@@ -15578,7 +16604,10 @@ export default function App() {
                 {/* Work Mode Selectors & Timer */}
                 <div className="flex justify-between items-center mt-2">
                   {(() => {
-                    const activeProgramId = activeOutputId === "none" ? null : outputPrograms[activeOutputId];
+                    const activeProgramId =
+                      activeOutputId === "none"
+                        ? null
+                        : outputPrograms[activeOutputId];
                     const activeProgramClip = clips.find(
                       (c) => c.id === activeProgramId,
                     );
@@ -15587,21 +16616,27 @@ export default function App() {
                       activeProgramClip &&
                       (activeProgramClip.type === "video" ||
                         activeProgramClip.type === "videoinput");
-                    const activeDocOrPptClip = (activeProgramClip && (
-                      activeProgramClip.type === "document" ||
-                      activeProgramClip.type === "ppt" ||
-                      activeProgramClip.name?.toLowerCase().endsWith(".pdf")
-                    )) ? activeProgramClip : clips?.find((c) => {
-                      const hasLayer = layers?.some((l) => {
-                        const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === activeOutputId;
-                        return l.activeClipId === c.id && isTargetOutput;
-                      });
-                      return hasLayer && (
-                        c.type === "document" ||
-                        c.type === "ppt" ||
-                        c.name?.toLowerCase().endsWith(".pdf")
-                      );
-                    });
+                    const activeDocOrPptClip =
+                      activeProgramClip &&
+                      (activeProgramClip.type === "document" ||
+                        activeProgramClip.type === "ppt" ||
+                        activeProgramClip.name?.toLowerCase().endsWith(".pdf"))
+                        ? activeProgramClip
+                        : clips?.find((c) => {
+                            const hasLayer = layers?.some((l) => {
+                              const isTargetOutput =
+                                !layerOutputs[l.id] ||
+                                layerOutputs[l.id] === "all" ||
+                                layerOutputs[l.id] === activeOutputId;
+                              return l.activeClipId === c.id && isTargetOutput;
+                            });
+                            return (
+                              hasLayer &&
+                              (c.type === "document" ||
+                                c.type === "ppt" ||
+                                c.name?.toLowerCase().endsWith(".pdf"))
+                            );
+                          });
 
                     return (
                       <div className="flex flex-col">
@@ -15639,7 +16674,10 @@ export default function App() {
                               className="p-1 rounded bg-obs-dark-1 hover:bg-obs-text/10 transition-colors border border-obs-text/5 flex items-center justify-center cursor-pointer"
                               title="Cambiar formato"
                             >
-                              <RefreshCw size={12} className="text-obs-muted max-h-full max-w-full" />
+                              <RefreshCw
+                                size={12}
+                                className="text-obs-muted max-h-full max-w-full"
+                              />
                             </button>
                           )}
                         </div>
@@ -15914,12 +16952,12 @@ export default function App() {
               className="w-80 bg-obs-dark-1 border-2 border-obs-border rounded-xl shadow-2xl overflow-hidden font-sans select-none"
             >
               {/* Header (Drag handle) */}
-              <div 
+              <div
                 onMouseDown={(e) => {
                   setIsDraggingFloatingTimer(sId);
                   dragOffsetRef.current = {
                     x: e.clientX - pos.x,
-                    y: e.clientY - pos.y
+                    y: e.clientY - pos.y,
                   };
                 }}
                 className="flex items-center justify-between bg-obs-surface border-b border-obs-border p-2 cursor-move text-stone-200"
@@ -16133,8 +17171,6 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-
-
     </div>
   );
 }
