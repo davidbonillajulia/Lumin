@@ -1,101 +1,132 @@
-const { app, BrowserWindow, screen, ipcMain, shell, dialog, protocol, net } = require('electron');
-const path = require('path');
-const fs = require('fs');
-const { exec } = require('child_process');
-const { autoUpdater } = require('electron-updater');
-const os = require('os');
+const {
+  app,
+  BrowserWindow,
+  screen,
+  ipcMain,
+  shell,
+  dialog,
+  protocol,
+  net,
+} = require("electron");
+const path = require("path");
+const fs = require("fs");
+const { exec } = require("child_process");
+const { autoUpdater } = require("electron-updater");
+const os = require("os");
 
 // Native check if running in development
 const isDev = !app.isPackaged;
 
 // Carpeta de configuración en el directorio oficial de datos de usuario de Windows (APPDATA)
-const appDataDir = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME, 'Library/Application Support') : '/var/local');
-const configDir = path.join(appDataDir, 'LUMIN_Media_Server');
-const configPath = path.join(configDir, 'lumin_perf.json');
+const appDataDir =
+  process.env.APPDATA ||
+  (process.platform === "darwin"
+    ? path.join(process.env.HOME, "Library/Application Support")
+    : "/var/local");
+const configDir = path.join(appDataDir, "LUMIN_Media_Server");
+const configPath = path.join(configDir, "lumin_perf.json");
 
 let savedPerfSettings = {
-  gpuDecoding: 'd3d11',
-  engine: 'native_chromium',
-  bufferingMode: 'aggressive',
-  renderingBackend: 'directx11',
+  gpuDecoding: "d3d11",
+  engine: "native_chromium",
+  bufferingMode: "aggressive",
+  renderingBackend: "directx11",
   codecOptimization: true,
-  renderCodec: 'dxv3',
-  loopMode: 'native_seamless',
+  renderCodec: "dxv3",
+  loopMode: "native_seamless",
   highResOptimization: true,
-  maxThreads: 4
+  maxThreads: 4,
 };
 
 try {
   if (fs.existsSync(configPath)) {
-    const raw = fs.readFileSync(configPath, 'utf8');
+    const raw = fs.readFileSync(configPath, "utf8");
     savedPerfSettings = JSON.parse(raw);
   }
 } catch (err) {
-  console.error("No se pudo cargar la configuración de rendimiento en Windows:", err);
+  console.error(
+    "No se pudo cargar la configuración de rendimiento en Windows:",
+    err,
+  );
 }
 
 // Register custom protocol privilege for seamless local file loading and range streaming
 protocol.registerSchemesAsPrivileged([
-  { 
-    scheme: 'lumin-file', 
-    privileges: { 
-      bypassCSP: true, 
-      secure: true, 
-      supportFetchAPI: true, 
-      stream: true 
-    } 
-  }
+  {
+    scheme: "lumin-file",
+    privileges: {
+      bypassCSP: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
 ]);
 
 // OPTIMIZACIONES DE COMPORTAMIENTO HARDWARE NATIVO (Estilo Resolume / OBS)
 // Estas directivas eliminan retardos por hilos de pintado de HTML, activan búferes directos y fuerzan decodificadores GPU.
-app.commandLine.appendSwitch('ignore-gpu-blocklist');
-app.commandLine.appendSwitch('enable-gpu-rasterization');
-app.commandLine.appendSwitch('enable-zero-copy');
-app.commandLine.appendSwitch('enable-hardware-overlays', 'single-fullscreen,unscaled');
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("enable-zero-copy");
+app.commandLine.appendSwitch(
+  "enable-hardware-overlays",
+  "single-fullscreen,unscaled",
+);
 // Se elimina disable-gpu-vsync para activar V-Sync nativo y eliminar las líneas horizontales (screen tearing) en los monitores/proyectores.
 
 // DIRECTIVAS CRÍTICAS PARA EVITAR CORTES Y CONGELAMIENTOS EN WINDOWS NATIVO MULTIPANTALLA:
 // 1. Evita que Windows deje de renderizar las salidas secundarias fullscreen cuando pierden el foco.
-app.commandLine.appendSwitch('disable-features', 'CalculateWindowOcclusion,CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch(
+  "disable-features",
+  "CalculateWindowOcclusion,CalculateNativeWinOcclusion",
+);
 // 2. Impide que Chromium estrangule la CPU/GPU y el temporizador JS de las ventanas de salida en segundo plano.
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
-app.commandLine.appendSwitch('disable-background-timer-throttling');
-app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 // 3. Fuerza la aceleración de decodificación de vídeo por hardware en Chromium.
-app.commandLine.appendSwitch('enable-accelerated-video-decode');
-app.commandLine.appendSwitch('enable-gpu-memory-buffer-video-frames');
-app.commandLine.appendSwitch('enable-hardware-overlays');
+app.commandLine.appendSwitch("enable-accelerated-video-decode");
+app.commandLine.appendSwitch("enable-gpu-memory-buffer-video-frames");
+app.commandLine.appendSwitch("enable-hardware-overlays");
 
 // Configurar la API gráfica (DirectX 11, DirectX 12, OpenGL o Vulkan) de Windows de forma nativa
-if (savedPerfSettings.renderingBackend === 'directx12') {
-  app.commandLine.appendSwitch('use-angle', 'd3d12');
-  app.commandLine.appendSwitch('enable-features', 'WebGPUService,Vulkan,D3D11VideoDecoder');
-} else if (savedPerfSettings.renderingBackend === 'vulkan') {
-  app.commandLine.appendSwitch('use-angle', 'vulkan');
-  app.commandLine.appendSwitch('enable-features', 'Vulkan');
-} else if (savedPerfSettings.renderingBackend === 'opengl') {
-  app.commandLine.appendSwitch('use-gl', 'desktop'); // Fuerza el driver nativo OpenGL de NVIDIA/AMD en Windows
+if (savedPerfSettings.renderingBackend === "directx12") {
+  app.commandLine.appendSwitch("use-angle", "d3d12");
+  app.commandLine.appendSwitch(
+    "enable-features",
+    "WebGPUService,Vulkan,D3D11VideoDecoder",
+  );
+} else if (savedPerfSettings.renderingBackend === "vulkan") {
+  app.commandLine.appendSwitch("use-angle", "vulkan");
+  app.commandLine.appendSwitch("enable-features", "Vulkan");
+} else if (savedPerfSettings.renderingBackend === "opengl") {
+  app.commandLine.appendSwitch("use-gl", "desktop"); // Fuerza el driver nativo OpenGL de NVIDIA/AMD en Windows
 } else {
-  app.commandLine.appendSwitch('use-angle', 'd3d11'); // DirectX 11 dedicado
+  app.commandLine.appendSwitch("use-angle", "d3d11"); // DirectX 11 dedicado
 }
 
 // Configurar decodificador por Hardware Windows Media Foundation
-if (savedPerfSettings.gpuDecoding === 'nvdec') {
-  app.commandLine.appendSwitch('enable-features', 'D3D11VideoDecoder,VaapiVideoDecoder,VaapiVideoDecodeLinux');
-  app.commandLine.appendSwitch('enable-nvdec');
-} else if (savedPerfSettings.gpuDecoding === 'dxva2') {
-  app.commandLine.appendSwitch('enable-features', 'DXVAVideoDecoder');
-} else if (savedPerfSettings.gpuDecoding === 'software') {
-  app.commandLine.appendSwitch('disable-accelerated-video-decode');
+if (savedPerfSettings.gpuDecoding === "nvdec") {
+  app.commandLine.appendSwitch(
+    "enable-features",
+    "D3D11VideoDecoder,VaapiVideoDecoder,VaapiVideoDecodeLinux",
+  );
+  app.commandLine.appendSwitch("enable-nvdec");
+} else if (savedPerfSettings.gpuDecoding === "dxva2") {
+  app.commandLine.appendSwitch("enable-features", "DXVAVideoDecoder");
+} else if (savedPerfSettings.gpuDecoding === "software") {
+  app.commandLine.appendSwitch("disable-accelerated-video-decode");
 } else {
-  app.commandLine.appendSwitch('enable-features', 'D3D11VideoDecoder,VaapiVideoDecoder');
+  app.commandLine.appendSwitch(
+    "enable-features",
+    "D3D11VideoDecoder,VaapiVideoDecoder",
+  );
 }
 
 function getLuminPathFromArgv(argv) {
   if (!argv || !Array.isArray(argv)) return null;
   for (const arg of argv) {
-    if (arg && !arg.startsWith('-') && arg.toLowerCase().endsWith('.lumin')) {
+    if (arg && !arg.startsWith("-") && arg.toLowerCase().endsWith(".lumin")) {
       return arg;
     }
   }
@@ -106,11 +137,11 @@ let mainWindow;
 let startLuminFilePath = getLuminPathFromArgv(process.argv);
 
 // Handle macOS open-file event
-app.on('open-file', (event, path) => {
+app.on("open-file", (event, path) => {
   event.preventDefault();
-  if (path.toLowerCase().endsWith('.lumin')) {
+  if (path.toLowerCase().endsWith(".lumin")) {
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
-      mainWindow.webContents.send('open-lumin-file', path);
+      mainWindow.webContents.send("open-lumin-file", path);
     } else {
       startLuminFilePath = path;
     }
@@ -123,15 +154,15 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
-  app.on('second-instance', (event, commandLine, workingDirectory) => {
+  app.on("second-instance", (event, commandLine, workingDirectory) => {
     // If someone tries to run a second instance, focus our main window.
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
-      
+
       const filePath = getLuminPathFromArgv(commandLine);
       if (filePath && mainWindow.webContents) {
-        mainWindow.webContents.send('open-lumin-file', filePath);
+        mainWindow.webContents.send("open-lumin-file", filePath);
       }
     }
   });
@@ -140,12 +171,12 @@ if (!gotTheLock) {
     mainWindow = new BrowserWindow({
       width: 1920,
       height: 1080,
-      title: 'LUMIN Media Server',
-      backgroundColor: '#000000',
+      title: "LUMIN Media Server",
+      backgroundColor: "#000000",
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        preload: path.join(__dirname, 'preload.cjs'),
+        preload: path.join(__dirname, "preload.cjs"),
         webSecurity: false, // Allow loading local files
       },
     });
@@ -153,18 +184,18 @@ if (!gotTheLock) {
     mainWindow.setMenu(null);
 
     if (isDev) {
-      mainWindow.loadURL('http://localhost:3000');
+      mainWindow.loadURL("http://localhost:3000");
       mainWindow.webContents.openDevTools();
     } else {
-      mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+      mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
       // Check for updates on startup in production
       autoUpdater.checkForUpdatesAndNotify();
     }
 
-    mainWindow.on('closed', () => {
+    mainWindow.on("closed", () => {
       mainWindow = null;
       // Close all output windows when main interface is closed
-      outputWindows.forEach(win => {
+      outputWindows.forEach((win) => {
         if (!win.isDestroyed()) win.close();
       });
       outputWindows.clear();
@@ -172,22 +203,48 @@ if (!gotTheLock) {
   }
 
   app.whenReady().then(() => {
-    // Register custom file protocol handler for seamless local video streaming, range requests, and scrubbing
-    protocol.handle('lumin-file', (request) => {
+    // Register custom file protocol handler with proper Range request support for video scrubbing
+    protocol.handle("lumin-file", async (request) => {
       try {
-        const { pathToFileURL } = require('url');
+        const { pathToFileURL } = require("url");
         const urlObj = new URL(request.url);
         let decodedPath = decodeURIComponent(urlObj.pathname);
-        
-        // On Windows, the pathname returned by URL starts with a slash, e.g., "/C:/path/to/file"
-        if (process.platform === 'win32' && decodedPath.startsWith('/')) {
+
+        // On Windows, URL pathname starts with '/', e.g. "/C:/path/to/file"
+        if (process.platform === "win32" && decodedPath.startsWith("/")) {
           decodedPath = decodedPath.slice(1);
         }
-        
+
+        if (!fs.existsSync(decodedPath)) {
+          console.error("[lumin-file] File not found:", decodedPath);
+          return new Response("File not found", { status: 404 });
+        }
+
         const fileUrl = pathToFileURL(decodedPath).toString();
-        return net.fetch(fileUrl);
+
+        // Forward ALL original request headers, including Range, so video seeking works correctly
+        const forwardHeaders = {};
+        request.headers.forEach((value, key) => {
+          forwardHeaders[key] = value;
+        });
+
+        const response = await net.fetch(fileUrl, {
+          method: request.method,
+          headers: forwardHeaders,
+        });
+
+        // Clone the response and add CORS + Accept-Ranges headers
+        const responseHeaders = new Headers(response.headers);
+        responseHeaders.set("Access-Control-Allow-Origin", "*");
+        responseHeaders.set("Accept-Ranges", "bytes");
+
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+        });
       } catch (err) {
-        console.error("Error serving lumin-file in protocol handler:", err);
+        console.error("[lumin-file] Error:", err);
         return new Response("Not Found", { status: 404 });
       }
     });
@@ -195,13 +252,13 @@ if (!gotTheLock) {
     createMainWindow();
   });
 
-  app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") {
       app.quit();
     }
   });
 
-  app.on('activate', () => {
+  app.on("activate", () => {
     if (mainWindow === null) {
       createMainWindow();
     }
@@ -209,26 +266,26 @@ if (!gotTheLock) {
 
   const outputWindows = new Map();
 
-  ipcMain.handle('get-screens', () => {
+  ipcMain.handle("get-screens", () => {
     const displays = screen.getAllDisplays();
-    return displays.map(d => ({
+    return displays.map((d) => ({
       id: d.id.toString(),
       name: d.label || `Display ${d.id}`,
       width: Math.round(d.bounds.width * d.scaleFactor),
       height: Math.round(d.bounds.height * d.scaleFactor),
       left: Math.round(d.bounds.x * d.scaleFactor),
       top: Math.round(d.bounds.y * d.scaleFactor),
-      isPrimary: d.id === screen.getPrimaryDisplay().id
+      isPrimary: d.id === screen.getPrimaryDisplay().id,
     }));
   });
 
-  ipcMain.handle('save-perf-settings', (event, settings) => {
+  ipcMain.handle("save-perf-settings", (event, settings) => {
     try {
       if (!fs.existsSync(configDir)) {
         fs.mkdirSync(configDir, { recursive: true });
       }
-      fs.writeFileSync(configPath, JSON.stringify(settings, null, 2), 'utf8');
-      
+      fs.writeFileSync(configPath, JSON.stringify(settings, null, 2), "utf8");
+
       // Actualizamos la variable en memoria para que concuerde en la sesión actual
       savedPerfSettings = { ...savedPerfSettings, ...settings };
       return { success: true };
@@ -238,15 +295,15 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('get-perf-settings', () => {
+  ipcMain.handle("get-perf-settings", () => {
     return savedPerfSettings;
   });
 
-  ipcMain.handle('select-open-lumin-file', async () => {
+  ipcMain.handle("select-open-lumin-file", async () => {
     const result = await dialog.showOpenDialog({
-      title: 'Abrir archivo LUMIN',
-      filters: [{ name: 'LUMIN Config', extensions: ['lumin'] }],
-      properties: ['openFile']
+      title: "Abrir archivo LUMIN",
+      filters: [{ name: "LUMIN Config", extensions: ["lumin"] }],
+      properties: ["openFile"],
     });
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true };
@@ -254,11 +311,11 @@ if (!gotTheLock) {
     return { canceled: false, filePath: result.filePaths[0] };
   });
 
-  ipcMain.handle('select-save-lumin-file', async (event, defaultName) => {
+  ipcMain.handle("select-save-lumin-file", async (event, defaultName) => {
     const result = await dialog.showSaveDialog({
-      title: 'Guardar archivo LUMIN',
-      defaultPath: defaultName || 'configuracion.lumin',
-      filters: [{ name: 'LUMIN Config', extensions: ['lumin'] }]
+      title: "Guardar archivo LUMIN",
+      defaultPath: defaultName || "configuracion.lumin",
+      filters: [{ name: "LUMIN Config", extensions: ["lumin"] }],
     });
     if (result.canceled || !result.filePath) {
       return { canceled: true };
@@ -266,11 +323,13 @@ if (!gotTheLock) {
     return { canceled: false, filePath: result.filePath };
   });
 
-  ipcMain.handle('select-ppt-file', async () => {
+  ipcMain.handle("select-ppt-file", async () => {
     const result = await dialog.showOpenDialog({
-      title: 'Importar PowerPoint',
-      filters: [{ name: 'PowerPoint Presentations', extensions: ['ppt', 'pptx'] }],
-      properties: ['openFile']
+      title: "Importar PowerPoint",
+      filters: [
+        { name: "PowerPoint Presentations", extensions: ["ppt", "pptx"] },
+      ],
+      properties: ["openFile"],
     });
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true };
@@ -278,9 +337,9 @@ if (!gotTheLock) {
     return { canceled: false, filePath: result.filePaths[0] };
   });
 
-  ipcMain.handle('write-lumin-file', async (event, { filePath, data }) => {
+  ipcMain.handle("write-lumin-file", async (event, { filePath, data }) => {
     try {
-      fs.writeFileSync(filePath, data, 'utf8');
+      fs.writeFileSync(filePath, data, "utf8");
       return { success: true };
     } catch (err) {
       console.error("Error writing lumin file:", err);
@@ -288,9 +347,9 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('read-lumin-file', async (event, filePath) => {
+  ipcMain.handle("read-lumin-file", async (event, filePath) => {
     try {
-      const data = fs.readFileSync(filePath, 'utf8');
+      const data = fs.readFileSync(filePath, "utf8");
       return { success: true, data };
     } catch (err) {
       console.error("Error reading lumin file:", err);
@@ -298,18 +357,18 @@ if (!gotTheLock) {
     }
   });
 
-  ipcMain.handle('get-start-file', () => {
+  ipcMain.handle("get-start-file", () => {
     const filePath = startLuminFilePath;
     startLuminFilePath = null; // Consume it so subsequent requests don't reload it
     return filePath;
   });
 
-  ipcMain.on('exit-app', () => {
+  ipcMain.on("exit-app", () => {
     app.exit(0);
   });
 
   let previousCpus = os.cpus();
-  ipcMain.handle('get-system-stats', async () => {
+  ipcMain.handle("get-system-stats", async () => {
     const cpus = os.cpus();
     let user = 0;
     let nice = 0;
@@ -342,13 +401,19 @@ if (!gotTheLock) {
       }
     }
 
-    const totalDiff = (user - prevUser) + (nice - prevNice) + (sys - prevSys) + (idle - prevIdle) + (irq - prevIrq);
+    const totalDiff =
+      user -
+      prevUser +
+      (nice - prevNice) +
+      (sys - prevSys) +
+      (idle - prevIdle) +
+      (irq - prevIrq);
     const idleDiff = idle - prevIdle;
-    
+
     // CPU usage percentage
     let cpuUsage = 0;
     if (totalDiff > 0) {
-      cpuUsage = 100 - (100 * idleDiff / totalDiff);
+      cpuUsage = 100 - (100 * idleDiff) / totalDiff;
     }
     previousCpus = cpus;
 
@@ -359,13 +424,13 @@ if (!gotTheLock) {
     return {
       cpuUsage,
       usedMemBytes,
-      totalMemBytes
+      totalMemBytes,
     };
   });
 
-  ipcMain.handle('get-windows-devices', async () => {
+  ipcMain.handle("get-windows-devices", async () => {
     return new Promise((resolve) => {
-      if (process.platform !== 'win32') {
+      if (process.platform !== "win32") {
         resolve([]);
         return;
       }
@@ -440,7 +505,7 @@ if (!gotTheLock) {
                 sb.Append(\\"[\\");
                 try {
                     var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
-                    
+
                     string defaultOutId = \\"\\";
                     try {
                         IntPtr defOutPtr = IntPtr.Zero;
@@ -471,22 +536,22 @@ if (!gotTheLock) {
                         IntPtr collectionPtr = IntPtr.Zero;
                         enumerator.EnumAudioEndpoints(flow, 1, out collectionPtr);
                         if (collectionPtr == IntPtr.Zero) continue;
-                        
+
                         var collection = (IMMDeviceCollection)Marshal.GetObjectForIUnknown(collectionPtr);
                         int count = 0;
                         collection.GetCount(out count);
-                        
+
                         for (int i = 0; i < count; i++) {
                             IntPtr devPtr = IntPtr.Zero;
                             collection.Item(i, out devPtr);
                             if (devPtr == IntPtr.Zero) continue;
-                            
+
                             var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
-                            
+
                             IntPtr idPtr = IntPtr.Zero;
                             dev.GetId(out idPtr);
                             string id = Marshal.PtrToStringUni(idPtr);
-                            
+
                             float volumeVal = 0.5f;
                             bool muteVal = false;
                             try {
@@ -500,7 +565,7 @@ if (!gotTheLock) {
                                     Marshal.Release(volPtr);
                                 }
                             } catch {}
-                            
+
                             float peakVal = 0.0f;
                             try {
                                 IntPtr meterPtr = IntPtr.Zero;
@@ -512,7 +577,7 @@ if (!gotTheLock) {
                                     Marshal.Release(meterPtr);
                                 }
                             } catch {}
-                            
+
                             string name = \\"Unknown Device\\";
                             try {
                                 IntPtr propPtr = IntPtr.Zero;
@@ -530,9 +595,9 @@ if (!gotTheLock) {
                                     Marshal.Release(propPtr);
                                 }
                             } catch {}
-                            
+
                             bool isDefault = (flow == 0 && id == defaultOutId) || (flow == 1 && id == defaultInId);
-                            
+
                             if (sb.Length > 1) sb.Append(\\",\\");
                             sb.Append(\\"{\\");
                             sb.AppendFormat(\\\"\\\\\\\"id\\\\\\\":\\\\\\\"{0}\\\\\\\",\\\", id.Replace(\\"\\\\\\\\\\", \\"\\\\\\\\\\\\\\\\\\").Replace(\\"\\\\\\"\\", \\"\\\\\\\\\\\\\\"\\"));
@@ -543,7 +608,7 @@ if (!gotTheLock) {
                             sb.AppendFormat(\\\"\\\\\\\"peak\\\\\\\":{0:F4},\\\", peakVal);
                             sb.AppendFormat(\\\"\\\\\\\"isDefault\\\\\\\":{0}\\\", isDefault ? \\"true\\" : \\"false\\");
                             sb.Append(\\"}\\");
-                            
+
                             Marshal.Release(devPtr);
                         }
                         Marshal.Release(collectionPtr);
@@ -566,7 +631,7 @@ if (!gotTheLock) {
           try {
             const devices = JSON.parse(stdout.trim());
             resolve(devices);
-          } catch(e) {
+          } catch (e) {
             resolve([]);
           }
         }
@@ -574,9 +639,9 @@ if (!gotTheLock) {
     });
   });
 
-  ipcMain.handle('set-windows-device-volume', async (event, { id, val }) => {
+  ipcMain.handle("set-windows-device-volume", async (event, { id, val }) => {
     return new Promise((resolve) => {
-      if (process.platform !== 'win32') {
+      if (process.platform !== "win32") {
         resolve(true);
         return;
       }
@@ -626,21 +691,21 @@ if (!gotTheLock) {
                         IntPtr collectionPtr = IntPtr.Zero;
                         enumerator.EnumAudioEndpoints(flow, 1, out collectionPtr);
                         if (collectionPtr == IntPtr.Zero) continue;
-                        
+
                         var collection = (IMMDeviceCollection)Marshal.GetObjectForIUnknown(collectionPtr);
                         int count = 0;
                         collection.GetCount(out count);
-                        
+
                         for (int i = 0; i < count; i++) {
                             IntPtr devPtr = IntPtr.Zero;
                             collection.Item(i, out devPtr);
                             if (devPtr == IntPtr.Zero) continue;
-                            
+
                             var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
                             IntPtr idPtr = IntPtr.Zero;
                             dev.GetId(out idPtr);
                             string devId = Marshal.PtrToStringUni(idPtr);
-                            
+
                             if (devId == id) {
                                 IntPtr volPtr = IntPtr.Zero;
                                 var volIid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
@@ -671,7 +736,7 @@ if (!gotTheLock) {
     });
   });
 
-  ipcMain.handle('get-windows-volume', async () => {
+  ipcMain.handle("get-windows-volume", async () => {
     return new Promise((resolve) => {
       const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
         $code = @'
@@ -735,7 +800,7 @@ if (!gotTheLock) {
     });
   });
 
-  ipcMain.handle('set-windows-volume', async (event, val) => {
+  ipcMain.handle("set-windows-volume", async (event, val) => {
     return new Promise((resolve) => {
       const psCommand = `powershell -NoProfile -ExecutionPolicy Bypass -Command "
         $code = @'
@@ -793,9 +858,9 @@ if (!gotTheLock) {
     });
   });
 
-  ipcMain.handle('set-windows-device-mute', async (event, { id, mute }) => {
+  ipcMain.handle("set-windows-device-mute", async (event, { id, mute }) => {
     return new Promise((resolve) => {
-      if (process.platform !== 'win32') {
+      if (process.platform !== "win32") {
         resolve(true);
         return;
       }
@@ -845,21 +910,21 @@ if (!gotTheLock) {
                         IntPtr collectionPtr = IntPtr.Zero;
                         enumerator.EnumAudioEndpoints(flow, 1, out collectionPtr);
                         if (collectionPtr == IntPtr.Zero) continue;
-                        
+
                         var collection = (IMMDeviceCollection)Marshal.GetObjectForIUnknown(collectionPtr);
                         int count = 0;
                         collection.GetCount(out count);
-                        
+
                         for (int i = 0; i < count; i++) {
                             IntPtr devPtr = IntPtr.Zero;
                             collection.Item(i, out devPtr);
                             if (devPtr == IntPtr.Zero) continue;
-                            
+
                             var dev = (IMMDevice)Marshal.GetObjectForIUnknown(devPtr);
                             IntPtr idPtr = IntPtr.Zero;
                             dev.GetId(out idPtr);
                             string devId = Marshal.PtrToStringUni(idPtr);
-                            
+
                             if (devId == id) {
                                 IntPtr volPtr = IntPtr.Zero;
                                 var volIid = new Guid(\\"5CDF2C82-841E-4546-9722-0CF74078229A\\");
@@ -885,15 +950,15 @@ if (!gotTheLock) {
         [AudioSync]::SetDeviceMute('${id.replace(/'/g, "''")}', $mute)
       "`;
       const pY = mute ? "$true" : "$false";
-      exec(psCommand.replace('$mute', pY), () => {
+      exec(psCommand.replace("$mute", pY), () => {
         resolve(true);
       });
     });
   });
 
-  ipcMain.handle('set-windows-mute', async (event, mute) => {
+  ipcMain.handle("set-windows-mute", async (event, mute) => {
     return new Promise((resolve) => {
-      if (process.platform !== 'win32') {
+      if (process.platform !== "win32") {
         resolve(true);
         return;
       }
@@ -948,15 +1013,15 @@ if (!gotTheLock) {
         [Audio]::SetMute($mute)
       "`;
       const pY = mute ? "$true" : "$false";
-      exec(psCommand.replace('$mute', pY), () => {
+      exec(psCommand.replace("$mute", pY), () => {
         resolve(true);
       });
     });
   });
 
-  ipcMain.handle('set-windows-default-device', async (event, id) => {
+  ipcMain.handle("set-windows-default-device", async (event, id) => {
     return new Promise((resolve) => {
-      if (process.platform !== 'win32') {
+      if (process.platform !== "win32") {
         resolve(true);
         return;
       }
@@ -1016,18 +1081,18 @@ if (!gotTheLock) {
     });
   });
 
-  ipcMain.handle('convert-ppt-to-pdf', async (event, filePath) => {
+  ipcMain.handle("convert-ppt-to-pdf", async (event, filePath) => {
     return new Promise((resolve) => {
       const presentationId = `LUMIN_PPT_PDF_${Date.now()}`;
-      const tempPdfDirectory = app.getPath('temp');
+      const tempPdfDirectory = app.getPath("temp");
       const pdfPath = path.join(tempPdfDirectory, `${presentationId}.pdf`);
       const jsonPath = path.join(tempPdfDirectory, `${presentationId}.json`);
 
-      const env = { 
-        ...process.env, 
-        _LUMIN_PPT_INPUT: filePath, 
+      const env = {
+        ...process.env,
+        _LUMIN_PPT_INPUT: filePath,
         _LUMIN_PPT_OUTPUT: pdfPath,
-        _LUMIN_PPT_JSON: jsonPath
+        _LUMIN_PPT_JSON: jsonPath,
       };
 
       const psScript = `
@@ -1042,7 +1107,7 @@ try {
 
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
-    
+
     # Make PowerPoint visible safely
     try {
         $ppt.Visible = -1
@@ -1056,7 +1121,7 @@ try {
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
     # Using integer literals: ReadOnly=-1, Untitled=0, WithWindow=-1
     $pres = $ppt.Presentations.Open($inputPath, -1, 0, -1)
-    
+
     # Save deck as a multi-page PDF document
     # Try both SaveAs(outputPath, 32) and ExportAsFixedFormat(outputPath, 2) for maximum compatibility.
     try {
@@ -1065,7 +1130,7 @@ try {
         # Fallback to ExportAsFixedFormat if SaveAs fails
         $pres.ExportAsFixedFormat($outputPath, 2, 1) # 2 = ppFixedFormatTypePDF, 1 = ppFixedFormatIntentScreen
     }
-    
+
     # Orderly close presentation and quit PowerPoint
     $pres.Close()
     $ppt.Quit()
@@ -1080,97 +1145,134 @@ try {
         success = $true
         pdfPath = $outputPath
     }
-    
+
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
     [System.IO.File]::WriteAllText($jsonPath, $json)
 } catch {
-    try { 
-        $pres.Close() 
+    try {
+        $pres.Close()
     } catch {}
-    try { 
+    try {
         [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
     } catch {}
 
-    try { 
-        $ppt.Quit() 
+    try {
+        $ppt.Quit()
     } catch {}
-    try { 
+    try {
         [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
     } catch {}
-    
+
     $res = @{
         success = $false
         error = $_.Exception.Message
     }
-    
+
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
     [System.IO.File]::WriteAllText($jsonPath, $json)
 }
 `;
 
-      const psScriptPath = path.join(app.getPath('temp'), `${presentationId}_script.ps1`);
-      
+      const psScriptPath = path.join(
+        app.getPath("temp"),
+        `${presentationId}_script.ps1`,
+      );
+
       try {
-        fs.writeFileSync(psScriptPath, psScript, 'utf8');
+        fs.writeFileSync(psScriptPath, psScript, "utf8");
       } catch (writeError) {
         console.error("Error writing temporary script file:", writeError);
-        resolve({ success: false, error: "Error de escritura temporal en disco." });
+        resolve({
+          success: false,
+          error: "Error de escritura temporal en disco.",
+        });
         return;
       }
 
       const runCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScriptPath}"`;
-      
-      exec(runCmd, { env, maxBuffer: 10 * 1024 * 1024 }, (execError, stdout, stderr) => {
-        try {
-          if (fs.existsSync(psScriptPath)) {
-            fs.unlinkSync(psScriptPath);
-          }
-        } catch (cleanErr) {}
 
-        if (execError) {
-          console.error("PowerShell PPT-to-PDF conversion failed:", execError, stderr);
-          resolve({ success: false, error: `Error de automatización de PowerPoint: ${execError.message}` });
-          return;
-        }
-
-        try {
-          let psResult = { success: false, error: "JSON result file not generated." };
-          
-          if (fs.existsSync(jsonPath)) {
-            const rawJson = fs.readFileSync(jsonPath, "utf8").replace(/^\uFEFF/, "");
-            if (rawJson.trim()) {
-              psResult = JSON.parse(rawJson);
+      exec(
+        runCmd,
+        { env, maxBuffer: 10 * 1024 * 1024 },
+        (execError, stdout, stderr) => {
+          try {
+            if (fs.existsSync(psScriptPath)) {
+              fs.unlinkSync(psScriptPath);
             }
-            fs.unlinkSync(jsonPath); // Clean up
-          } else if (stdout.trim()) {
-            psResult = JSON.parse(stdout.trim().replace(/^\uFEFF/, ""));
+          } catch (cleanErr) {}
+
+          if (execError) {
+            console.error(
+              "PowerShell PPT-to-PDF conversion failed:",
+              execError,
+              stderr,
+            );
+            resolve({
+              success: false,
+              error: `Error de automatización de PowerPoint: ${execError.message}`,
+            });
+            return;
           }
-          
-          resolve(psResult);
-        } catch (jsonErr) {
-          console.error("Failed parsing PowerShell PDF output JSON:", jsonErr, stdout, stderr);
-          resolve({ 
-            success: false, 
-            error: "La automatización de PowerPoint falló. STDOUT: " + stdout.substring(0, 100) + " STDERR: " + stderr.substring(0, 100) 
-          });
-        }
-      });
+
+          try {
+            let psResult = {
+              success: false,
+              error: "JSON result file not generated.",
+            };
+
+            if (fs.existsSync(jsonPath)) {
+              const rawJson = fs
+                .readFileSync(jsonPath, "utf8")
+                .replace(/^\uFEFF/, "");
+              if (rawJson.trim()) {
+                psResult = JSON.parse(rawJson);
+              }
+              fs.unlinkSync(jsonPath); // Clean up
+            } else if (stdout.trim()) {
+              psResult = JSON.parse(stdout.trim().replace(/^\uFEFF/, ""));
+            }
+
+            resolve(psResult);
+          } catch (jsonErr) {
+            console.error(
+              "Failed parsing PowerShell PDF output JSON:",
+              jsonErr,
+              stdout,
+              stderr,
+            );
+            resolve({
+              success: false,
+              error:
+                "La automatización de PowerPoint falló. STDOUT: " +
+                stdout.substring(0, 100) +
+                " STDERR: " +
+                stderr.substring(0, 100),
+            });
+          }
+        },
+      );
     });
   });
 
-  ipcMain.handle('convert-pptx', async (event, filePath) => {
+  ipcMain.handle("convert-pptx", async (event, filePath) => {
     return new Promise((resolve) => {
       // Create a temporary directory dedicated to this PowerPoint presentation's slide images
       const presentationId = `LUMIN_PPT_${Date.now()}`;
-      const tempDir = path.join(app.getPath('temp'), presentationId);
-      
+      const tempDir = path.join(app.getPath("temp"), presentationId);
+
       try {
         if (!fs.existsSync(tempDir)) {
           fs.mkdirSync(tempDir, { recursive: true });
         }
       } catch (err) {
-        console.error("Error creating temporary directory for slide conversion:", err);
-        resolve({ success: false, error: "No se pudo crear el directorio de renderizado temporal." });
+        console.error(
+          "Error creating temporary directory for slide conversion:",
+          err,
+        );
+        resolve({
+          success: false,
+          error: "No se pudo crear el directorio de renderizado temporal.",
+        });
         return;
       }
 
@@ -1178,7 +1280,7 @@ try {
         ...process.env,
         _LUMIN_PPT_INPUT: filePath,
         _LUMIN_PPT_OUTPUT_DIR: tempDir,
-        _LUMIN_PPT_JSON: path.join(tempDir, "result.json")
+        _LUMIN_PPT_JSON: path.join(tempDir, "result.json"),
       };
 
       // Compile discrete powershell script to execute
@@ -1194,7 +1296,7 @@ try {
 
     # Initialize the PowerPoint COM Object
     $ppt = New-Object -ComObject PowerPoint.Application
-    
+
     # Make PowerPoint visible safely
     try {
         $ppt.Visible = -1
@@ -1208,18 +1310,18 @@ try {
     # Open presentation: Open(FileName, ReadOnly, Untitled, WithWindow)
     # Using integer literals: ReadOnly=-1, Untitled=0, WithWindow=-1
     $pres = $ppt.Presentations.Open($inputPath, -1, 0, -1)
-    
+
     # Save entire deck as individual PNG slide frames in the target directory
     # 18 is the PowerPoint constant for ppSaveAsPNG
     $pres.SaveAs($outputDir, 18)
-    
+
     # Collect metadata like Slide Title and full body text for synchronization
     $slideData = @()
     $slideCount = $pres.Slides.Count
     for ($i = 1; $i -le $slideCount; $i++) {
         $slide = $pres.Slides.Item($i)
         $title = ""
-        
+
         # Pull slide title shape if configured
         try {
             if ($slide.Shapes.HasTitle) {
@@ -1278,155 +1380,209 @@ try {
         success = $true
         slides = $slideData
     }
-    
+
     # Write JSON to a file to prevent stdout pollution
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
     [System.IO.File]::WriteAllText($jsonPath, $json)
 
 } catch {
-    try { 
-        $pres.Close() 
+    try {
+        $pres.Close()
     } catch {}
-    try { 
+    try {
         [System.Runtime.Interopservices.Marshal]::ReleaseComObject($pres) | Out-Null
     } catch {}
 
-    try { 
-        $ppt.Quit() 
+    try {
+        $ppt.Quit()
     } catch {}
-    try { 
+    try {
         [System.Runtime.Interopservices.Marshal]::ReleaseComObject($ppt) | Out-Null
     } catch {}
-    
+
     $res = @{
         success = $false
         error = $_.Exception.Message
     }
-    
+
     $json = ConvertTo-Json -InputObject $res -Depth 5 -Compress
     [System.IO.File]::WriteAllText($jsonPath, $json)
 }
 `;
 
       // Write code block out as a temporary file to avoid complex shell quoting and backslash issues in command line strings
-      const psScriptPath = path.join(app.getPath('temp'), `${presentationId}_script.ps1`);
-      
+      const psScriptPath = path.join(
+        app.getPath("temp"),
+        `${presentationId}_script.ps1`,
+      );
+
       try {
-        fs.writeFileSync(psScriptPath, psScript, 'utf8');
+        fs.writeFileSync(psScriptPath, psScript, "utf8");
       } catch (writeError) {
         console.error("Error writing temporary script file:", writeError);
-        resolve({ success: false, error: "Error de escritura temporal en disco." });
+        resolve({
+          success: false,
+          error: "Error de escritura temporal en disco.",
+        });
         return;
       }
 
       const runCmd = `powershell -NoProfile -ExecutionPolicy Bypass -File "${psScriptPath}"`;
-      
-      exec(runCmd, { env, maxBuffer: 25 * 1024 * 1024 }, (execError, stdout, stderr) => {
-        // Cleaning up temporary script
-        try {
-          if (fs.existsSync(psScriptPath)) {
-            fs.unlinkSync(psScriptPath);
-          }
-        } catch (cleanErr) {}
 
-        if (execError) {
-          console.error("PowerShell core script execution failed:", execError, stderr);
-          resolve({ success: false, error: `Error al abrir PowerPoint: ${execError.message}` });
-          return;
-        }
-
-        try {
-          // Parse resulting JSON structure from file
-          const resultJsonPath = path.join(tempDir, "result.json");
-          let psResult = { success: false, error: "Result JSON not found." };
-          if (fs.existsSync(resultJsonPath)) {
-            const rawJson = fs.readFileSync(resultJsonPath, "utf8").replace(/^\uFEFF/, "");
-            if (rawJson.trim()) {
-              psResult = JSON.parse(rawJson);
+      exec(
+        runCmd,
+        { env, maxBuffer: 25 * 1024 * 1024 },
+        (execError, stdout, stderr) => {
+          // Cleaning up temporary script
+          try {
+            if (fs.existsSync(psScriptPath)) {
+              fs.unlinkSync(psScriptPath);
             }
-          } else if (stdout.trim()) {
-            // Fallback to parse stdout if someone didn't write the file
-            psResult = JSON.parse(stdout.trim().replace(/^\uFEFF/, ""));
-          }
+          } catch (cleanErr) {}
 
-          if (!psResult.success) {
-            resolve({ success: false, error: psResult.error || "Microsoft PowerPoint lanzó un error durante el procesado." });
+          if (execError) {
+            console.error(
+              "PowerShell core script execution failed:",
+              execError,
+              stderr,
+            );
+            resolve({
+              success: false,
+              error: `Error al abrir PowerPoint: ${execError.message}`,
+            });
             return;
           }
 
-          // Scan temp folder and any subfolders recursively for the rendered slides images (handles different PowerPoint structures, languages or folders)
-          const getAllFilesRecursively = (dirPath) => {
-            let filesList = [];
-            const items = fs.readdirSync(dirPath);
-            for (const item of items) {
-              const fullPath = path.join(dirPath, item);
-              const stats = fs.statSync(fullPath);
-              if (stats.isDirectory()) {
-                filesList = filesList.concat(getAllFilesRecursively(fullPath));
-              } else {
-                filesList.push({ filename: item, fullPath });
+          try {
+            // Parse resulting JSON structure from file
+            const resultJsonPath = path.join(tempDir, "result.json");
+            let psResult = { success: false, error: "Result JSON not found." };
+            if (fs.existsSync(resultJsonPath)) {
+              const rawJson = fs
+                .readFileSync(resultJsonPath, "utf8")
+                .replace(/^\uFEFF/, "");
+              if (rawJson.trim()) {
+                psResult = JSON.parse(rawJson);
               }
+            } else if (stdout.trim()) {
+              // Fallback to parse stdout if someone didn't write the file
+              psResult = JSON.parse(stdout.trim().replace(/^\uFEFF/, ""));
             }
-            return filesList;
-          };
 
-          const allGraphicFiles = getAllFilesRecursively(tempDir)
-            .filter(fileItem => {
-              const ext = fileItem.filename.toLowerCase();
-              return ext.endsWith('.png') || ext.endsWith('.jpg') || ext.endsWith('.jpeg');
-            })
-            .map(fileItem => {
-              const digits = fileItem.filename.match(/\d+/);
-              const numericId = digits ? parseInt(digits[0], 10) : 0;
-              return { filename: fileItem.filename, fullPath: fileItem.fullPath, numericId };
-            })
-            .sort((a, b) => a.numericId - b.numericId);
+            if (!psResult.success) {
+              resolve({
+                success: false,
+                error:
+                  psResult.error ||
+                  "Microsoft PowerPoint lanzó un error durante el procesado.",
+              });
+              return;
+            }
 
-          // Build clean state matching slides with image pointers
-          const formattedSlides = psResult.slides.map((s, idx) => {
-            // Find appropriate frame matching this slide sequence (sorted arrays should match index offsets)
-            const slideImg = allGraphicFiles[idx] || allGraphicFiles.find(g => g.numericId === s.index);
-            const absoluteFileUri = slideImg 
-              ? `file:///${slideImg.fullPath.replace(/\\/g, '/')}` 
-              : undefined;
-
-            return {
-              title: s.title,
-              subtitle: s.bullets && s.bullets.length > 0 ? s.bullets[0] : undefined,
-              bullets: s.bullets && s.bullets.length > 1 ? s.bullets.slice(1) : (s.bullets || []),
-              image: absoluteFileUri,
-              bgColor: '#0f172a' // Let PowerPoint image background render itself!
+            // Scan temp folder and any subfolders recursively for the rendered slides images (handles different PowerPoint structures, languages or folders)
+            const getAllFilesRecursively = (dirPath) => {
+              let filesList = [];
+              const items = fs.readdirSync(dirPath);
+              for (const item of items) {
+                const fullPath = path.join(dirPath, item);
+                const stats = fs.statSync(fullPath);
+                if (stats.isDirectory()) {
+                  filesList = filesList.concat(
+                    getAllFilesRecursively(fullPath),
+                  );
+                } else {
+                  filesList.push({ filename: item, fullPath });
+                }
+              }
+              return filesList;
             };
-          });
 
-          if (formattedSlides.length === 0) {
-            resolve({ success: false, error: "PowerPoint se ha ejecutado pero no ha exportado diapositivas. ¿Está instalado PowerPoint?" });
-            return;
+            const allGraphicFiles = getAllFilesRecursively(tempDir)
+              .filter((fileItem) => {
+                const ext = fileItem.filename.toLowerCase();
+                return (
+                  ext.endsWith(".png") ||
+                  ext.endsWith(".jpg") ||
+                  ext.endsWith(".jpeg")
+                );
+              })
+              .map((fileItem) => {
+                const digits = fileItem.filename.match(/\d+/);
+                const numericId = digits ? parseInt(digits[0], 10) : 0;
+                return {
+                  filename: fileItem.filename,
+                  fullPath: fileItem.fullPath,
+                  numericId,
+                };
+              })
+              .sort((a, b) => a.numericId - b.numericId);
+
+            // Build clean state matching slides with image pointers
+            const formattedSlides = psResult.slides.map((s, idx) => {
+              // Find appropriate frame matching this slide sequence (sorted arrays should match index offsets)
+              const slideImg =
+                allGraphicFiles[idx] ||
+                allGraphicFiles.find((g) => g.numericId === s.index);
+              const absoluteFileUri = slideImg
+                ? `file:///${slideImg.fullPath.replace(/\\/g, "/")}`
+                : undefined;
+
+              return {
+                title: s.title,
+                subtitle:
+                  s.bullets && s.bullets.length > 0 ? s.bullets[0] : undefined,
+                bullets:
+                  s.bullets && s.bullets.length > 1
+                    ? s.bullets.slice(1)
+                    : s.bullets || [],
+                image: absoluteFileUri,
+                bgColor: "#0f172a", // Let PowerPoint image background render itself!
+              };
+            });
+
+            if (formattedSlides.length === 0) {
+              resolve({
+                success: false,
+                error:
+                  "PowerPoint se ha ejecutado pero no ha exportado diapositivas. ¿Está instalado PowerPoint?",
+              });
+              return;
+            }
+
+            resolve({
+              success: true,
+              slides: formattedSlides,
+              totalPages: formattedSlides.length,
+            });
+          } catch (jsonErr) {
+            console.error(
+              "Failed parsing PowerShell result JSON:",
+              jsonErr,
+              stdout,
+              stderr,
+            );
+            resolve({
+              success: false,
+              error:
+                "La automatización nativa de PowerPoint falló. STDOUT: " +
+                stdout.substring(0, 100) +
+                " STDERR: " +
+                stderr.substring(0, 100),
+            });
           }
-
-          resolve({
-            success: true,
-            slides: formattedSlides,
-            totalPages: formattedSlides.length
-          });
-
-        } catch (jsonErr) {
-          console.error("Failed parsing PowerShell result JSON:", jsonErr, stdout, stderr);
-          resolve({ 
-            success: false, 
-            error: "La automatización nativa de PowerPoint falló. STDOUT: " + stdout.substring(0, 100) + " STDERR: " + stderr.substring(0, 100) 
-          });
-        }
-      });
+        },
+      );
     });
   });
 
-  ipcMain.on('open-settings', () => {
-    shell.openExternal('ms-settings:display');
+  ipcMain.on("open-settings", () => {
+    shell.openExternal("ms-settings:display");
   });
 
-  ipcMain.on('launch-output', (event, { screenId, url }) => {
-    const isTimerWindow = (url && url.includes('mode=floating_timer')) || (screenId && screenId.startsWith('timer_'));
+  ipcMain.on("launch-output", (event, { screenId, url }) => {
+    const isTimerWindow =
+      (url && url.includes("mode=floating_timer")) ||
+      (screenId && screenId.startsWith("timer_"));
 
     if (isTimerWindow) {
       // Timer controller: compact, framed, always-on-top window centered on primary display
@@ -1444,12 +1600,12 @@ try {
         frame: true,
         resizable: true,
         alwaysOnTop: true,
-        title: 'LUMIN Timer Controller',
-        backgroundColor: '#000000',
+        title: "LUMIN Timer Controller",
+        backgroundColor: "#000000",
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
-          preload: path.join(__dirname, 'preload.cjs'),
+          preload: path.join(__dirname, "preload.cjs"),
           webSecurity: false,
         },
       });
@@ -1459,18 +1615,22 @@ try {
       if (isDev) {
         outputWindow.loadURL(`http://localhost:3000${url}`);
       } else {
-        outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url });
+        outputWindow.loadFile(path.join(__dirname, "../dist/index.html"), {
+          hash: url,
+        });
       }
 
-      outputWindows.set(screenId || 'primary', outputWindow);
+      outputWindows.set(screenId || "primary", outputWindow);
 
-      outputWindow.on('closed', () => {
-        outputWindows.delete(screenId || 'primary');
+      outputWindow.on("closed", () => {
+        outputWindows.delete(screenId || "primary");
       });
     } else {
       // Video output: fullscreen on the target display
       const displays = screen.getAllDisplays();
-      const targetDisplay = displays.find(d => d.id.toString() === screenId) || screen.getPrimaryDisplay();
+      const targetDisplay =
+        displays.find((d) => d.id.toString() === screenId) ||
+        screen.getPrimaryDisplay();
 
       const outputWindow = new BrowserWindow({
         x: targetDisplay.bounds.x,
@@ -1480,11 +1640,11 @@ try {
         fullscreen: true,
         frame: false,
         title: `LUMIN Output - ${targetDisplay.label}`,
-        backgroundColor: '#000000',
+        backgroundColor: "#000000",
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
-          preload: path.join(__dirname, 'preload.cjs'),
+          preload: path.join(__dirname, "preload.cjs"),
           webSecurity: false, // Allow loading local files
         },
       });
@@ -1492,19 +1652,21 @@ try {
       if (isDev) {
         outputWindow.loadURL(`http://localhost:3000${url}`);
       } else {
-        outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url });
+        outputWindow.loadFile(path.join(__dirname, "../dist/index.html"), {
+          hash: url,
+        });
       }
 
-      outputWindows.set(screenId || 'primary', outputWindow);
+      outputWindows.set(screenId || "primary", outputWindow);
 
-      outputWindow.on('closed', () => {
-        outputWindows.delete(screenId || 'primary');
+      outputWindow.on("closed", () => {
+        outputWindows.delete(screenId || "primary");
       });
     }
   });
 
-  ipcMain.on('close-output', (event, screenId) => {
-    const key = screenId || 'primary';
+  ipcMain.on("close-output", (event, screenId) => {
+    const key = screenId || "primary";
     const outputWindow = outputWindows.get(key);
     if (outputWindow && !outputWindow.isDestroyed()) {
       outputWindow.close();
