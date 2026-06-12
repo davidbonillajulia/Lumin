@@ -8,8 +8,56 @@ const os = require('os');
 // Native check if running in development
 const isDev = !app.isPackaged;
 
-// Carpeta de configuración en el directorio oficial de datos de usuario de Windows (APPDATA)
-const appDataDir = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME, 'Library/Application Support') : '/var/local');
+// Resolve appData directory safely for diagnosis logs
+let appDataDir = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME, 'Library/Application Support') : '/var/local');
+try {
+  if (app && typeof app.getPath === 'function') {
+    appDataDir = app.getPath('userData') || appDataDir;
+  }
+} catch (e) {
+  // Safe fallback if called too early
+}
+
+// Setup crash log folder and error logger to diagnose any silent Windows crashes
+const diagnosticDir = path.join(appDataDir, 'diagnostic_logs');
+const diagnosticLogFile = path.join(diagnosticDir, 'fatal_errors.txt');
+
+function logFatalError(source, err) {
+  const time = new Date().toISOString();
+  const errorDetails = err && err.stack ? err.stack : String(err);
+  const logMessage = `[${time}] [${source}] ERROR:\n${errorDetails}\n----------------------------------------\n`;
+  try {
+    if (!fs.existsSync(diagnosticDir)) {
+      fs.mkdirSync(diagnosticDir, { recursive: true });
+    }
+    fs.appendFileSync(diagnosticLogFile, logMessage, 'utf8');
+  } catch (writeErr) {
+    console.error("Failed to write to fatal_errors.txt:", writeErr);
+  }
+  
+  // Show a clear, native error dialog so the user knows exactly what failed to load
+  try {
+    dialog.showErrorBox(
+      `LUMIN - Error Crítico en Arranque (${source})`,
+      `El programa no pudo iniciarse correctamente.\n\n` +
+      `Se ha creado un reporte de diagnóstico detallado en:\n${diagnosticLogFile}\n\n` +
+      `Detalles del error:\n${err && err.message ? err.message : String(err)}`
+    );
+  } catch (dialogErr) {
+    console.error("Failed to show error box:", dialogErr);
+  }
+}
+
+// Intercept all unhandled errors in Electron main process to prevent silent hanging
+process.on('uncaughtException', (err) => {
+  logFatalError('uncaughtException', err);
+  app.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logFatalError('unhandledRejection', reason);
+});
+
 const configDir = path.join(appDataDir, 'LUMIN_Media_Server');
 const configPath = path.join(configDir, 'lumin_perf.json');
 
@@ -28,7 +76,8 @@ let savedPerfSettings = {
 try {
   if (fs.existsSync(configPath)) {
     const raw = fs.readFileSync(configPath, 'utf8');
-    savedPerfSettings = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    savedPerfSettings = Object.assign(savedPerfSettings, parsed);
   }
 } catch (err) {
   console.error("No se pudo cargar la configuración de rendimiento en Windows:", err);
@@ -157,8 +206,17 @@ if (!gotTheLock) {
       mainWindow.webContents.openDevTools();
     } else {
       mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-      // Check for updates on startup in production
-      autoUpdater.checkForUpdatesAndNotify();
+      // Check for updates on startup in production safely
+      try {
+        autoUpdater.on('error', (err) => {
+          console.error("Error in autoUpdater:", err);
+        });
+        autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+          console.error("Failed to check for updates synchronously:", err);
+        });
+      } catch (err) {
+        console.error("Failed to initialize or call autoUpdater:", err);
+      }
     }
 
     mainWindow.on('closed', () => {
