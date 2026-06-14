@@ -3615,6 +3615,27 @@ const VideoLayer = ({
               }}
               onError={(e) => {
                 console.warn("Video element error encountered in VideoLayer, retrying source...", e);
+                
+                // Self-healing: if the clip has a local path and we are in Electron, recover the URL
+                const hasPath = clip.path || (clip.file && clip.file.path);
+                if (hasPath && (window as any).electron) {
+                  try {
+                    const normalized = hasPath.replace(/\\/g, "/");
+                    const nativeUrl = `lumin-file:///${normalized}`;
+                    if (clip.url !== nativeUrl) {
+                      console.log("Self-healing video URL from path:", nativeUrl);
+                      if (onUpdateClip) {
+                        onUpdateClip(clip.id, { url: nativeUrl, path: hasPath });
+                      } else if (typeof updateClip === "function") {
+                        updateClip(clip.id, { url: nativeUrl, path: hasPath });
+                      }
+                      return;
+                    }
+                  } catch (err) {
+                    console.error("Self-healing URL resolution failed:", err);
+                  }
+                }
+
                 if (activeIsPlaying && videoRef.current) {
                   const currentSrc = videoRef.current.src;
                   if (currentSrc) {
@@ -11012,8 +11033,9 @@ export default function App() {
         }
         
         let newUrl = clip.url;
-        if (resolvedPath && (window as any).electron) {
-          const normalized = resolvedPath.replace(/\\/g, "/");
+        const targetPath = resolvedPath || clipPath;
+        if (targetPath && (window as any).electron) {
+          const normalized = targetPath.replace(/\\/g, "/");
           newUrl = `lumin-file:///${normalized}`;
         }
         
@@ -11043,8 +11065,9 @@ export default function App() {
           }
           
           let newUrl = f.url;
-          if (resolvedPath && (window as any).electron) {
-            const normalized = resolvedPath.replace(/\\/g, "/");
+          const targetPath = resolvedPath || clipPath;
+          if (targetPath && (window as any).electron) {
+            const normalized = targetPath.replace(/\\/g, "/");
             newUrl = `lumin-file:///${normalized}`;
           }
           
