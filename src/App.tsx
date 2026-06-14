@@ -8169,7 +8169,7 @@ const Library = React.memo(
 
           // Persistent path if in electron, otherwise temporary URL
           const url = (window as any).electron
-            ? (f as any).path || getFileUrl(f)
+            ? getFileUrl(f)
             : URL.createObjectURL(f);
 
           let thumbnail = undefined;
@@ -8189,6 +8189,7 @@ const Library = React.memo(
             type: type,
             url,
             file: f,
+            path: (f as any).path || undefined,
             thumbnail,
             addedAt: Date.now(),
           };
@@ -8323,6 +8324,8 @@ const Library = React.memo(
                           name: f.name,
                           url: f.url,
                           type: f.type,
+                          path: f.path || (f.file ? (f.file as any).path : undefined),
+                          file: f.file ? { path: (f.file as any).path || f.path, name: f.name } : null,
                         })),
                       ),
                     );
@@ -13055,12 +13058,16 @@ export default function App() {
         const filesData = JSON.parse(libraryFilesData);
         if (filesData.length > 0) {
           const fileData = filesData[0];
+          const clipPath = fileData.path || (fileData.file && fileData.file.path);
+          const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
           clip = {
             id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             name: fileData.name,
             thumbnail: fileData.url,
             url: fileData.url,
             type: getClipTypeFromFile(fileData.type, fileData.name),
+            file: clipFile,
+            path: clipPath,
             status: "idle",
             currentPage: 1,
             transform: { ...DEFAULT_TRANSFORM },
@@ -13151,6 +13158,7 @@ export default function App() {
       let url = "";
       let name = "";
       let type = "";
+      let itemPath = undefined;
 
       if (item instanceof File) {
         file = item;
@@ -13160,11 +13168,13 @@ export default function App() {
           window.electron && (file as any).path
             ? getFileUrl(file)
             : URL.createObjectURL(file);
+        itemPath = (file as any).path || undefined;
       } else {
         file = item.file;
         name = item.name;
         type = item.type;
         url = item.url;
+        itemPath = item.path || (file ? (file as any).path : undefined);
       }
 
       const clipType = getClipTypeFromFile(type, name);
@@ -13218,7 +13228,7 @@ export default function App() {
         url: url,
         type: clipType,
         file: file,
-        path: file ? (file as any).path : undefined,
+        path: itemPath || (file ? (file as any).path : undefined),
         status: "idle",
         currentPage: 1,
         transform: { ...DEFAULT_TRANSFORM },
@@ -13499,12 +13509,16 @@ export default function App() {
         const files = JSON.parse(libraryFilesStr);
         if (files.length > 0) {
           const fileData = files[0];
+          const clipPath = fileData.path || (fileData.file && fileData.file.path);
+          const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
           const clip: Clip = {
             id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             name: fileData.name,
             thumbnail: fileData.url,
             url: fileData.url,
             type: getClipTypeFromFile(fileData.type, fileData.name),
+            file: clipFile,
+            path: clipPath,
             status: "idle",
             currentPage: 1,
             transform: { ...DEFAULT_TRANSFORM },
@@ -13700,12 +13714,16 @@ export default function App() {
         const files = JSON.parse(libraryFilesStr);
         if (files.length > 0) {
           const fileData = files[0];
+          const clipPath = fileData.path || (fileData.file && fileData.file.path);
+          const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
           const clip: Clip = {
             id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             name: fileData.name,
             thumbnail: fileData.url,
             url: fileData.url,
             type: getClipTypeFromFile(fileData.type, fileData.name),
+            file: clipFile,
+            path: clipPath,
             status: "idle",
             currentPage: 1,
             transform: { ...DEFAULT_TRANSFORM },
@@ -13746,34 +13764,42 @@ export default function App() {
       if (found) clipsToClone = [found];
     } else if (libraryFilesData) {
       const filesData = JSON.parse(libraryFilesData);
-      clipsToClone = filesData.map((fileData: any) => ({
-        id: `temp-${Date.now()}-${Math.random()}`,
-        name: fileData.name,
-        thumbnail: fileData.url,
-        url: fileData.url,
-        type: getClipTypeFromFile(fileData.type, fileData.name),
-        status: "idle" as const,
-        currentPage: 1,
-        transform: { ...DEFAULT_TRANSFORM },
-        mask: "none" as const,
-        opacity: 1,
-        master: 1,
-        speed: 1,
-        volume: 1,
-        pan: 0,
-        blendMode: "Alpha" as const,
-        behavior: "Cortar" as const,
-        curve: "Lineal" as const,
-        filter: "none" as const,
-        brightness: 1,
-        contrast: 1,
-        saturation: 1,
-        colorBalance: { r: 1, g: 1, b: 1 },
-        isPlaying: true,
-        loop: false,
-      }));
+      clipsToClone = filesData.map((fileData: any) => {
+        const clipPath = fileData.path || (fileData.file && fileData.file.path);
+        const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
+        return {
+          id: `temp-${Date.now()}-${Math.random()}`,
+          name: fileData.name,
+          thumbnail: fileData.url,
+          url: fileData.url,
+          type: getClipTypeFromFile(fileData.type, fileData.name),
+          file: clipFile,
+          path: clipPath,
+          status: "idle" as const,
+          currentPage: 1,
+          transform: { ...DEFAULT_TRANSFORM },
+          mask: "none" as const,
+          opacity: 1,
+          master: 1,
+          speed: 1,
+          volume: 1,
+          pan: 0,
+          blendMode: "Alpha" as const,
+          behavior: "Cortar" as const,
+          curve: "Lineal" as const,
+          filter: "none" as const,
+          brightness: 1,
+          contrast: 1,
+          saturation: 1,
+          colorBalance: { r: 1, g: 1, b: 1 },
+          isPlaying: true,
+          loop: false,
+        };
+      });
     } else if (libraryFileData) {
       const fileData = JSON.parse(libraryFileData);
+      const clipPath = fileData.path || (fileData.file && fileData.file.path);
+      const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
       clipsToClone = [
         {
           id: `temp-${Date.now()}`,
@@ -13781,6 +13807,8 @@ export default function App() {
           thumbnail: fileData.url,
           url: fileData.url,
           type: getClipTypeFromFile(fileData.type, fileData.name),
+          file: clipFile,
+          path: clipPath,
           status: "idle" as const,
           currentPage: 1,
           transform: { ...DEFAULT_TRANSFORM },
@@ -13805,32 +13833,42 @@ export default function App() {
     } else if (e.dataTransfer.files.length > 0) {
       // Handle OS files
       const files = Array.from(e.dataTransfer.files);
-      clipsToClone = files.map((f) => ({
-        id: `temp-${Date.now()}-${Math.random()}`,
-        name: f.name,
-        thumbnail: URL.createObjectURL(f),
-        url: URL.createObjectURL(f),
-        type: getClipTypeFromFile(f.type, f.name),
-        status: "idle" as const,
-        currentPage: 1,
-        transform: { ...DEFAULT_TRANSFORM },
-        mask: "none" as const,
-        opacity: 1,
-        master: 1,
-        speed: 1,
-        volume: 1,
-        pan: 0,
-        blendMode: "Alpha" as const,
-        behavior: "Cortar" as const,
-        curve: "Lineal" as const,
-        filter: "none" as const,
-        brightness: 1,
-        contrast: 1,
-        saturation: 1,
-        colorBalance: { r: 1, g: 1, b: 1 },
-        isPlaying: true,
-        loop: true,
-      }));
+      clipsToClone = files.map((f) => {
+        const path = (window as any).electron && (f as any).path ? (f as any).path : undefined;
+        let pUrl = URL.createObjectURL(f);
+        if (path) {
+          const normalized = path.replace(/\\/g, "/");
+          pUrl = `lumin-file:///${normalized}`;
+        }
+        return {
+          id: `temp-${Date.now()}-${Math.random()}`,
+          name: f.name,
+          thumbnail: pUrl,
+          url: pUrl,
+          type: getClipTypeFromFile(f.type, f.name),
+          file: path ? { path, name: f.name } : f,
+          path: path,
+          status: "idle" as const,
+          currentPage: 1,
+          transform: { ...DEFAULT_TRANSFORM },
+          mask: "none" as const,
+          opacity: 1,
+          master: 1,
+          speed: 1,
+          volume: 1,
+          pan: 0,
+          blendMode: "Alpha" as const,
+          behavior: "Cortar" as const,
+          curve: "Lineal" as const,
+          filter: "none" as const,
+          brightness: 1,
+          contrast: 1,
+          saturation: 1,
+          colorBalance: { r: 1, g: 1, b: 1 },
+          isPlaying: true,
+          loop: true,
+        };
+      });
     }
 
     if (clipsToClone.length > 0) {
