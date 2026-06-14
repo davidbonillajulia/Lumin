@@ -191,6 +191,11 @@ declare global {
       readLuminFile?: (
         filePath: string,
       ) => Promise<{ success: boolean; data?: string; error?: string }>;
+      resolveValidPath?: (
+        absPath?: string,
+        relPath?: string,
+        projectPath?: string,
+      ) => Promise<string>;
       getSystemStats?: () => Promise<{ cpuUsage: number; usedMemBytes: number; totalMemBytes: number; }>;
       exitApp?: () => void;
       getStartFile?: () => Promise<string | null>;
@@ -325,6 +330,15 @@ const getRelativePath = (fromPath: string, toPath: string) => {
   try {
     const fromParts = fromPath.replace(/\\/g, "/").split("/");
     const toParts = toPath.replace(/\\/g, "/").split("/");
+
+    // On Windows, if drive letters differ (e.g. C: and D:), relative paths are impossible.
+    if (
+      fromParts[0] &&
+      toParts[0] &&
+      fromParts[0].toLowerCase() !== toParts[0].toLowerCase()
+    ) {
+      return undefined;
+    }
     
     // Remove the file name from the fromPath to get the directory of the project file
     fromParts.pop();
@@ -10971,58 +10985,33 @@ export default function App() {
         return absPath;
       };
 
-      // Helper function to reconstruct URL from path in native mode
-      const getUrlFromPath = (pathVal: string, relPath?: string) => {
-        try {
-          const targetPath = resolvePath(pathVal, relPath) || pathVal;
-          const normalized = targetPath.replace(/\\/g, "/");
-          return `lumin-file:///${normalized}`;
-        } catch (e) {
-          return null;
+      // Native fallback path resolution using our robust IPC check
+      const resolveValidPathNative = async (absPath?: string, relPath?: string): Promise<string | undefined> => {
+        if (!absPath) return undefined;
+        if ((window as any).electron?.resolveValidPath) {
+          try {
+            return await (window as any).electron.resolveValidPath(absPath, relPath, filePath);
+          } catch (e) {
+            console.error("Native path resolution failed, falling back:", e);
+          }
         }
+        return resolvePath(absPath, relPath) || absPath;
       };
 
-      // Re-estructurar files para la sesión local
-      // En modo nativo, regeneramos las URLs a partir de los paths absolutos guardados
-      const reconstructedFiles = parsedData.libraryFiles.map((f: any) => {
-        let newUrl = f.url;
-        const clipPath = f.path || (f.file && f.file.path);
-        const relPath = f.relativePath;
-        if (clipPath && (window as any).electron) {
-          const nativeUrl = getUrlFromPath(clipPath, relPath);
-          if (nativeUrl) newUrl = nativeUrl;
-        }
-        
-        let newThumbnail = f.thumbnail;
-        if (newThumbnail?.startsWith("blob:")) {
-          newThumbnail = undefined;
-        }
-
-        return {
-          id: f.id || `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          name: f.name,
-          type: f.type,
-          url: newUrl,
-          file: clipPath ? { path: resolvePath(clipPath, relPath) || clipPath, name: f.name } : null,
-          path: resolvePath(clipPath, relPath) || clipPath || undefined,
-          thumbnail: newThumbnail,
-        };
-      });
-
-      // Crear mapa de URLs antiguas a nuevas para actualizar clips
-      const urlMap: Record<string, string> = {};
-      parsedData.libraryFiles.forEach((oldF: any, idx: number) => {
-        urlMap[oldF.url] = reconstructedFiles[idx].url;
-      });
-
-      const getReconstructedClip = (clip: any) => {
+      const getReconstructedClipAsync = async (clip: any) => {
         if (!clip) return null;
-        let newUrl = urlMap[clip.url] || clip.url;
         const clipPath = clip.path || (clip.file && clip.file.path);
         const relPath = clip.relativePath;
-        if (clipPath && (window as any).electron) {
-          const nativeUrl = getUrlFromPath(clipPath, relPath);
-          if (nativeUrl) newUrl = nativeUrl;
+        
+        let resolvedPath = clipPath;
+        if (clipPath) {
+          resolvedPath = await resolveValidPathNative(clipPath, relPath);
+        }
+        
+        let newUrl = clip.url;
+        if (resolvedPath && (window as any).electron) {
+          const normalized = resolvedPath.replace(/\\/g, "/");
+          newUrl = `lumin-file:///${normalized}`;
         }
         
         let newThumbnail = clip.thumbnail;
@@ -11030,44 +11019,76 @@ export default function App() {
           newThumbnail = undefined;
         }
 
-        const resolvedAbsolutePath = clipPath ? (resolvePath(clipPath, relPath) || clipPath) : undefined;
-
         return {
           ...clip,
           url: newUrl,
-          file: resolvedAbsolutePath ? { path: resolvedAbsolutePath, name: clip.name } : null,
-          path: resolvedAbsolutePath || undefined,
+          file: resolvedPath ? { path: resolvedPath, name: clip.name } : null,
+          path: resolvedPath || undefined,
           thumbnail: newThumbnail,
         };
       };
 
-      // Actualizar URLs de los clips basándose en el mapa
-      const reconstructedClips = parsedData.clips.map((clip: any) =>
-        getReconstructedClip(clip),
+      // Re-estructurar files para la sesión local de forma asíncrona y nativa
+      const reconstructedFiles = await Promise.all(
+        parsedData.libraryFiles.map(async (f: any) => {
+          const clipPath = f.path || (f.file && f.file.path);
+          const relPath = f.relativePath;
+          
+          let resolvedPath = clipPath;
+          if (clipPath) {
+            resolvedPath = await resolveValidPathNative(clipPath, relPath);
+          }
+          
+          let newUrl = f.url;
+          if (resolvedPath && (window as any).electron) {
+            const normalized = resolvedPath.replace(/\\/g, "/");
+            newUrl = `lumin-file:///${normalized}`;
+          }
+          
+          let newThumbnail = f.thumbnail;
+          if (newThumbnail?.startsWith("blob:")) {
+            newThumbnail = undefined;
+          }
+
+          return {
+            id: f.id || `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            name: f.name,
+            type: f.type,
+            url: newUrl,
+            file: resolvedPath ? { path: resolvedPath, name: f.name } : null,
+            path: resolvedPath || undefined,
+            thumbnail: newThumbnail,
+          };
+        })
       );
 
-      // Actualizar deckClips (Record<string, Clip[]>)
+      // Reconstruir clips de la sesión
+      const reconstructedClips = await Promise.all(
+        parsedData.clips.map((clip: any) => getReconstructedClipAsync(clip))
+      );
+
+      // Reconstruir deckClips (Record<string, Clip[]>)
       const reconstructedDeckClips: Record<string, Clip[]> = {};
       if (
         parsedData.deckClips &&
         typeof parsedData.deckClips === "object" &&
         !Array.isArray(parsedData.deckClips)
       ) {
-        Object.entries(parsedData.deckClips).forEach(
-          ([deckName, clipsList]) => {
-            if (Array.isArray(clipsList)) {
-              reconstructedDeckClips[deckName] = clipsList.map((clip: any) =>
-                getReconstructedClip(clip),
-              ) as Clip[];
-            } else {
-              reconstructedDeckClips[deckName] = [];
-            }
-          },
-        );
+        for (const [deckName, clipsList] of Object.entries(parsedData.deckClips)) {
+          if (Array.isArray(clipsList)) {
+            const resolvedList = await Promise.all(
+              clipsList.map((clip: any) => getReconstructedClipAsync(clip))
+            );
+            reconstructedDeckClips[deckName] = resolvedList.filter(Boolean) as Clip[];
+          } else {
+            reconstructedDeckClips[deckName] = [];
+          }
+        }
       } else if (Array.isArray(parsedData.deckClips)) {
-        reconstructedDeckClips["Videos"] = parsedData.deckClips.map(
-          (clip: any) => getReconstructedClip(clip),
-        ) as Clip[];
+        const resolvedList = await Promise.all(
+          parsedData.deckClips.map((clip: any) => getReconstructedClipAsync(clip))
+        );
+        reconstructedDeckClips["Videos"] = resolvedList.filter(Boolean) as Clip[];
         reconstructedDeckClips["Imágenes"] = [];
         reconstructedDeckClips["PDF"] = [];
         reconstructedDeckClips["Video IN"] = [];
@@ -11079,23 +11100,29 @@ export default function App() {
       }
 
       // Reconstruir layers
-      const reconstructedLayers = (parsedData.layers || []).map(
-        (layer: any) => ({
-          ...layer,
-          slots: (layer.slots || []).map((clip: any) =>
-            getReconstructedClip(clip),
-          ),
-        }),
+      const reconstructedLayers = await Promise.all(
+        (parsedData.layers || []).map(async (layer: any) => {
+          const resolvedSlots = await Promise.all(
+            (layer.slots || []).map((clip: any) => getReconstructedClipAsync(clip))
+          );
+          return {
+            ...layer,
+            slots: resolvedSlots,
+          };
+        })
       );
 
       // Reconstruir playlists
-      const reconstructedPlaylists = (parsedData.playlists || []).map(
-        (playlist: any) => ({
-          ...playlist,
-          clips: (playlist.clips || []).map((clip: any) =>
-            getReconstructedClip(clip),
-          ),
-        }),
+      const reconstructedPlaylists = await Promise.all(
+        (parsedData.playlists || []).map(async (playlist: any) => {
+          const resolvedClips = await Promise.all(
+            (playlist.clips || []).map((clip: any) => getReconstructedClipAsync(clip))
+          );
+          return {
+            ...playlist,
+            clips: resolvedClips,
+          };
+        })
       );
 
       // Aplicar estados principales

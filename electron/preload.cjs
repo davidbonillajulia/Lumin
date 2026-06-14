@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electron', {
   selectPptFile: () => ipcRenderer.invoke('select-ppt-file'),
   writeLuminFile: (filePath, data) => ipcRenderer.invoke('write-lumin-file', { filePath, data }),
   readLuminFile: (filePath) => ipcRenderer.invoke('read-lumin-file', filePath),
+  resolveValidPath: (absPath, relPath, projectPath) => ipcRenderer.invoke('resolve-valid-path', { absPath, relPath, projectPath }),
   getWindowsVolume: () => ipcRenderer.invoke('get-windows-volume'),
   setWindowsVolume: (val) => ipcRenderer.invoke('set-windows-volume', val),
   getWindowsDevices: () => ipcRenderer.invoke('get-windows-devices'),

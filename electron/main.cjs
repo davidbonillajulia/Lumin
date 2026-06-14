@@ -356,6 +356,37 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle('resolve-valid-path', async (event, { absPath, relPath, projectPath }) => {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+
+      // 1. Check relative path if relPath and projectPath are provided
+      if (relPath && projectPath) {
+        const projectDir = path.dirname(projectPath);
+        const resolvedRelPath = path.resolve(projectDir, relPath);
+        if (fs.existsSync(resolvedRelPath)) {
+          return resolvedRelPath;
+        }
+      }
+
+      // 2. Fallback: check if the absolute path exists
+      if (absPath && fs.existsSync(absPath)) {
+        return absPath;
+      }
+
+      // 3. Fallback to resolved relPath or absPath
+      if (relPath && projectPath) {
+        const projectDir = path.dirname(projectPath);
+        return path.resolve(projectDir, relPath);
+      }
+      return absPath;
+    } catch (err) {
+      console.error("Error resolving valid path in main process:", err);
+      return absPath;
+    }
+  });
+
   ipcMain.handle('get-start-file', () => {
     const filePath = startLuminFilePath;
     startLuminFilePath = null; // Consume it so subsequent requests don't reload it
