@@ -1,0 +1,26 @@
+202:      onOpenLuminFile?: (callback: (path: string) => void) => () => void;
+3605:                      console.log("Self-healing video URL from path:", nativeUrl);
+3607:                        onUpdateClip(clip.id, { url: nativeUrl, path: hasPath });
+3609:                        updateClip(clip.id, { url: nativeUrl, path: hasPath });
+10384:      file?: File | { path: string; name: string } | null;
+10805:      file: filePath ? { path: filePath, name: clip.name } : null,
+10806:      path: filePath,
+10822:        file: filePath ? { path: filePath, name: clip.name } : null,
+10823:        path: filePath,
+10838:            path: fPath,
+10842:              ? { path: fileObjPath, name: f.file.name }
+10844:                ? { path: fPath, name: f.name }
+11075:          file: resolvedPath ? { path: resolvedPath, name: clip.name } : null,
+11076:          path: resolvedPath || undefined,
+11109:            file: resolvedPath ? { path: resolvedPath, name: f.name } : null,
+11110:            path: resolvedPath || undefined,
+11353:        file: { path: pdfPath, name: pdfName } as any,
+13110:          const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
+13287:        path: itemPath,
+13569:          const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
+13778:          const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
+13833:        const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
+13841:          path: clipPath,
+13866:      const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
+13875:          path: clipPath,
+13914:          path: path,

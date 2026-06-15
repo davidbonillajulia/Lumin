@@ -368,14 +368,25 @@ const getRelativePath = (fromPath: string, toPath: string) => {
   }
 };
 
+export const buildLuminFileUrl = (pathStr?: string): string | undefined => {
+  if (!pathStr) return undefined;
+  try {
+    const normalized = pathStr.replace(/\\/g, "/");
+    // URL encode the path segments so that special characters like '#' and '?' are preserved for the fast electron protocol stream
+    const encoded = normalized.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    return `lumin-file:///${encoded}`;
+  } catch (e) {
+    return undefined;
+  }
+};
+
 const getFileUrl = (file: File) => {
   const filePath = window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
   if (!filePath) return URL.createObjectURL(file);
 
   try {
-    // Normalizar barras de Windows a barras de URL
-    const normalized = filePath.replace(/\\/g, "/");
-    return `lumin-file:///${normalized}`;
+    const nativeUrl = buildLuminFileUrl(filePath);
+    return nativeUrl || URL.createObjectURL(file);
   } catch (err) {
     console.error(
       "Error formatting native file path, using ObjectURL fallback:",
@@ -3599,9 +3610,8 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                 const hasPath = clip.path || (clip.file && clip.file.path);
                 if (hasPath && (window as any).electron) {
                   try {
-                    const normalized = hasPath.replace(/\\/g, "/");
-                    const nativeUrl = `lumin-file:///${normalized}`;
-                    if (clip.url !== nativeUrl) {
+                    const nativeUrl = buildLuminFileUrl(hasPath) || "";
+                    if (clip.url !== nativeUrl && nativeUrl) {
                       console.log("Self-healing video URL from path:", nativeUrl);
                       if (onUpdateClip) {
                         onUpdateClip(clip.id, { url: nativeUrl, path: hasPath });
@@ -8183,13 +8193,15 @@ const Library = React.memo(
             thumbnail = url;
           }
 
+          const fileObjPath = window.electron?.getPathForFile ? window.electron.getPathForFile(f) : (f as any).path;
+
           return {
             id: `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             name: f.name,
             type: type,
             url,
             file: f,
-            path: (f as any).path || undefined,
+            path: fileObjPath || undefined,
             thumbnail,
             addedAt: Date.now(),
           };
@@ -8320,13 +8332,16 @@ const Library = React.memo(
                     e.dataTransfer.setData(
                       "libraryFiles",
                       JSON.stringify(
-                        filesToDrag.map((f) => ({
-                          name: f.name,
-                          url: f.url,
-                          type: f.type,
-                          path: f.path || (f.file ? (f.file as any).path : undefined),
-                          file: f.file ? { path: (f.file as any).path || f.path, name: f.name } : null,
-                        })),
+                        filesToDrag.map((f) => {
+                          const fileObjPath = f.file && f.file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f.file) : (f.file ? f.file.path : undefined);
+                          return {
+                            name: f.name,
+                            url: f.url,
+                            type: f.type,
+                            path: f.path || fileObjPath,
+                            file: f.file ? { path: fileObjPath || f.path, name: f.name } : null,
+                          };
+                        }),
                       ),
                     );
                   }}
@@ -10729,8 +10744,8 @@ export default function App() {
       (window as any).electron
     ) {
       try {
-        const normalized = obj.path.replace(/\\/g, "/");
-        obj.url = `lumin-file:///${normalized}`;
+        const nativeUrl = buildLuminFileUrl(obj.path);
+        if (nativeUrl) obj.url = nativeUrl;
       } catch {}
     }
 
@@ -10815,7 +10830,7 @@ export default function App() {
 
     const sanitizeClip = (clip: any) => {
       if (!clip) return null;
-      const fileObjPath = clip.file ? (window.electron?.getPathForFile ? window.electron.getPathForFile(clip.file) : clip.file.path) : undefined;
+      const fileObjPath = clip.file && clip.file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(clip.file) : (clip.file ? clip.file.path : undefined);
       const filePath = clip.path || fileObjPath;
       return {
         ...clip,
@@ -10828,7 +10843,7 @@ export default function App() {
     return JSON.stringify(
       {
         libraryFiles: libraryFiles.map((f: any) => {
-          const fileObjPath = f.file ? (window.electron?.getPathForFile ? window.electron.getPathForFile(f.file) : f.file.path) : undefined;
+          const fileObjPath = f.file && f.file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f.file) : (f.file ? f.file.path : undefined);
           const fPath = f.path || fileObjPath;
           return {
             id: f.id,
@@ -11060,8 +11075,8 @@ export default function App() {
         let newUrl = clip.url;
         const targetPath = resolvedPath || clipPath;
         if (targetPath && (window as any).electron) {
-          const normalized = targetPath.replace(/\\/g, "/");
-          newUrl = `lumin-file:///${normalized}`;
+          const nativeUrl = buildLuminFileUrl(targetPath);
+          if (nativeUrl) newUrl = nativeUrl;
         }
         
         let newThumbnail = clip.thumbnail;
@@ -11092,8 +11107,8 @@ export default function App() {
           let newUrl = f.url;
           const targetPath = resolvedPath || clipPath;
           if (targetPath && (window as any).electron) {
-            const normalized = targetPath.replace(/\\/g, "/");
-            newUrl = `lumin-file:///${normalized}`;
+            const nativeUrl = buildLuminFileUrl(targetPath);
+            if (nativeUrl) newUrl = nativeUrl;
           }
           
           let newThumbnail = f.thumbnail;
@@ -11344,7 +11359,7 @@ export default function App() {
       // 4. Importa pdf generado
       const pdfPath = conversionResult.pdfPath;
       const pdfName = baseName.replace(/\.[^/.]+$/, "") + ".pdf";
-      const fileUrl = `lumin-file:///${pdfPath.replace(/\\/g, "/")}`;
+      const fileUrl = buildLuminFileUrl(pdfPath) || "";
 
       const newFileItem = {
         name: pdfName,
@@ -13229,7 +13244,7 @@ export default function App() {
         name = item.name;
         type = item.type;
         url = item.url;
-        const fallbackPath = file ? (window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path) : undefined;
+        const fallbackPath = file && file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any)?.path;
         itemPath = item.path || fallbackPath;
       }
 
@@ -13898,11 +13913,11 @@ export default function App() {
       // Handle OS files
       const files = Array.from(e.dataTransfer.files);
       clipsToClone = files.map((f) => {
-        const path = (window as any).electron && (f as any).path ? (f as any).path : undefined;
+        const path = window.electron?.getPathForFile ? window.electron.getPathForFile(f) : ((window as any).electron && (f as any).path ? (f as any).path : undefined);
         let pUrl = URL.createObjectURL(f);
         if (path) {
-          const normalized = path.replace(/\\/g, "/");
-          pUrl = `lumin-file:///${normalized}`;
+          const nativeUrl = buildLuminFileUrl(path);
+          if (nativeUrl) pUrl = nativeUrl;
         }
         return {
           id: `temp-${Date.now()}-${Math.random()}`,
