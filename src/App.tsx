@@ -2919,6 +2919,9 @@ const VideoLayer = ({
   isVisuallyActive?: boolean;
   monitorId?: string;
 }) => {
+
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const cleanupTimeoutRef = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSrc = useRef<string>("");
   const onEndedRef = useRef(onEnded);
@@ -2971,27 +2974,31 @@ const VideoLayer = ({
 
   // CRITICAL: Delayed GPU decoder release on unmount to allow smooth AnimatePresence exit transitions.
   // This prevents instant black screen flashes during fade transitions.
-  useEffect(() => {
+    useEffect(() => {
     return () => {
-      const video = videoRef.current;
-      if (video) {
-        // Match the transition duration (with a small safety margin) instead of a hardcoded 2000ms delay.
-        // This prevents hardware decoders from stacking up during rapid switching.
-        const cleanDelay = Math.max(
-          100,
-          (transitionDuration || 0.4) * 1000 + 100,
-        );
-        setTimeout(() => {
-          try {
-            video.pause();
-            video.src = "";
-            video.removeAttribute("src");
-            video.load();
-          } catch (e) {}
-        }, cleanDelay);
-      }
-    };
-  }, [transitionDuration]);
+    const video = videoRef.current;
+
+    if (cleanupTimeoutRef.current) {
+      clearTimeout(cleanupTimeoutRef.current);
+    }
+
+    if (video) {
+      const cleanDelay = Math.max(
+        100,
+        (transitionDuration || 0.4) * 1000 + 100,
+      );
+
+      cleanupTimeoutRef.current = setTimeout(() => {
+        try {
+          video.pause();
+          video.src = "";
+          video.removeAttribute("src");
+          video.load();
+        } catch (e) {}
+      }, cleanDelay);
+    }
+  };
+}, [transitionDuration]);
 
   // Sync native video loop property directly when clip loop state changes
   useEffect(() => {
@@ -3017,8 +3024,149 @@ const VideoLayer = ({
   };
 
   useEffect(() => {
-    onEndedRef.current = onEnded;
-  }, [onEnded]);
+  const video = videoRef.current;
+  if (!video || clip.type !== "video") return;
+
+  const handleTimeUpdate = () => {
+    onTimeUpdate?.(video.currentTime);
+    onProgressUpdate?.(video.currentTime, video.duration || 0);
+
+    const now = Date.now();
+
+    if (now - lastBroadcastTimeRef.current >= 200) {
+      lastBroadcastTimeRef.current = now;
+
+      if (typeof window !== "undefined") {
+        if (!(window as any).__luminVideoTimes) {
+          (window as any).__luminVideoTimes = {};
+        }
+
+        (window as any).__luminVideoTimes[trackerId] = video.currentTime;
+
+        // ✅ SOLO MASTER REAL EMITE
+        const isMaster =
+            !isSlave &&
+            isClockSource &&   // 🔥 ESTE ES CLAVE
+            isProgram;
+          let ch = channelRef.current;
+            
+    if (isMaster) {
+          let ch = channelRef.current;
+
+          if (!ch && typeof BroadcastChannel !== "undefined") {
+            ch = new BroadcastChannel("lumin-output");
+            channelRef.current = ch;
+          }
+
+          if (ch) {
+            try {
+              ch.postMessage({
+          type: "VIDEO_TIME_UPDATE",
+          payload: {
+          trackerId,
+          clipId: clip.id,
+          currentTime: video.currentTime,
+          globalTime: performance.now() / 1000, // ✅ reloj global real
+          playing: !video.paused,
+          speed: clip.speed || 1
+          },
+              });
+            } catch {}
+          }
+        }
+      }
+    }
+
+    // ✅ playlist logic intacta
+    if (isPlaylistSequence && video.duration > 0) {
+      const remaining = video.duration - video.currentTime;
+      const threshold = transitionType === "cut" ? 0.15 : 0.35;
+
+      if (
+        remaining > 0 &&
+        remaining <= threshold &&
+        !earlyEndTriggered.current
+      ) {
+        earlyEndTriggered.current = true;
+        onEndedRef.current?.();
+      }
+    }
+  };
+
+const handleBroadcastMessage = (e: MessageEvent) => {
+
+  if (!isSlave) return;
+
+  if (e.data?.type !== "VIDEO_TIME_UPDATE") return;
+
+  const payload = e.data.payload;
+  if (!payload || payload.trackerId !== trackerId) return;
+
+  const vid = videoRef.current;
+  if (!vid || vid.readyState < 2) return;
+
+  const current = vid.currentTime;
+
+  const now = performance.now() / 1000;
+  const delta = now - payload.globalTime;
+
+  const target = payload.currentTime + delta * (payload.speed || 1);
+
+  const diff = target - current;
+
+  if (Math.abs(diff) < 0.02) return;
+
+  // ✅ SYNC
+  if (Math.abs(diff) > 0.8) {
+    vid.currentTime = target;
+  } else if (Math.abs(diff) > 0.08) {
+    const baseSpeed = payload.speed || 1;
+    const correction = diff * 0.25;
+
+    const newRate = Math.max(0.9, Math.min(1.1, baseSpeed + correction));
+    vid.playbackRate = newRate;
+
+    setTimeout(() => {
+      if (videoRef.current) {
+        videoRef.current.playbackRate = baseSpeed;
+      }
+    }, 120);
+  }
+
+  // ✅ PLAY / PAUSE
+  if (payload.playing !== undefined) {
+    if (payload.playing && vid.paused) {
+      vid.play().catch(() => {});
+    } else if (!payload.playing && !vid.paused) {
+      vid.pause();
+    }
+  }
+};
+
+
+  let ch = channelRef.current;
+
+  if (!ch && typeof BroadcastChannel !== "undefined") {
+    ch = new BroadcastChannel("lumin-output");
+    channelRef.current = ch;
+  }
+
+  if (ch) {
+    ch.addEventListener("message", handleBroadcastMessage);
+  }
+
+  video.addEventListener("timeupdate", handleTimeUpdate);
+
+  return () => {
+    video.removeEventListener("timeupdate", handleTimeUpdate);
+
+    if (channelRef.current) {
+      channelRef.current.removeEventListener("message", handleBroadcastMessage);
+      channelRef.current.close();
+      channelRef.current = null;
+    }
+  };
+}, [clip.id, trackerId]);
 
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
     videoRef.current = el;
@@ -3088,161 +3236,6 @@ const VideoLayer = ({
   useEffect(() => {
     onLevelChange?.(audioLevel);
   }, [audioLevel, onLevelChange]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video && clip.type === "video") {
-      const handleTimeUpdate = () => {
-        onTimeUpdate?.(video.currentTime);
-        onProgressUpdate?.(video.currentTime, video.duration || 0);
-
-        // Periodically record and broadcast time updates to keep other screens in sync
-        const now = Date.now();
-        if (now - lastBroadcastTimeRef.current >= 300) {
-          lastBroadcastTimeRef.current = now;
-          if (typeof window !== "undefined") {
-            if (!(window as any).__luminVideoTimes) {
-              (window as any).__luminVideoTimes = {};
-            }
-            (window as any).__luminVideoTimes[trackerId] = video.currentTime;
-            
-            // Both the master (controller) and active slave playing in the output can broadcast.
-            // If it is a master (not isSlave), only broadcast when actually visually active in the controller UI!
-            // If it is a slave, only broadcast when actually playing so we don't interfere when paused.
-            const shouldBroadcast = !isSlave ? isVisuallyActive : activeIsPlaying;
-            if (shouldBroadcast) {
-              const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
-              if (ch) {
-                if (!(window as any).__luminTimeChannel) (window as any).__luminTimeChannel = ch;
-                try {
-                  ch.postMessage({
-                    type: "VIDEO_TIME_UPDATE",
-                    payload: { trackerId, clipId: clip.id, currentTime: video.currentTime },
-                  });
-                } catch (err) {}
-              }
-            }
-          }
-        }
-
-        // Sequential Playback Stability
-        if (isPlaylistSequence && video.duration > 0) {
-          const remaining = video.duration - video.currentTime;
-          
-          // For sequences, we trigger slightly before the end to hide buffer delay
-          const threshold = transitionType === "cut" ? 0.15 : 0.35;
-
-          if (
-            remaining > 0 &&
-            remaining <= threshold &&
-            !earlyEndTriggered.current
-          ) {
-            earlyEndTriggered.current = true;
-            onEndedRef.current?.();
-          }
-        }
-      };
-
-      video.addEventListener("timeupdate", handleTimeUpdate);
-
-      const handleEndedNative = () => {
-        if (!earlyEndTriggered.current) {
-          earlyEndTriggered.current = true;
-          onEndedRef.current?.();
-        }
-      };
-      video.addEventListener("ended", handleEndedNative);
-
-      const handleMetadata = () => {
-        const savedTime = (window as any).__luminVideoTimes?.[trackerId];
-        if (savedTime !== undefined) {
-          video.currentTime = savedTime;
-        } else if (startTime !== undefined) {
-          video.currentTime = startTime;
-        } else if (clip.currentTime !== undefined) {
-          video.currentTime = clip.currentTime;
-        } else {
-          video.currentTime = 0;
-        }
-      };
-
-      const handleReady = () => {
-        if (activeIsPlaying) {
-          video.play().catch(() => {});
-        } else {
-          video.pause();
-        }
-      };
-
-      // Register or run instantly if already loaded:
-      if (video.readyState >= 1) {
-        // HAVE_METADATA
-        handleMetadata();
-      } else {
-        video.addEventListener("loadedmetadata", handleMetadata);
-      }
-
-      if (video.readyState >= 3) {
-        // HAVE_FUTURE_DATA
-        handleReady();
-      } else {
-        video.addEventListener("canplay", handleReady);
-      }
-
-      // If playing state changes:
-      if (activeIsPlaying) {
-        video.play().catch(() => {});
-      } else {
-        video.pause();
-      }
-
-      const handleBroadcastMessage = (e: MessageEvent) => {
-        if (e.data?.type === "VIDEO_TIME_UPDATE") {
-          const payload = e.data.payload;
-          if (payload && payload.trackerId === trackerId) {
-            if (isSlave && videoRef.current) {
-              const diff = Math.abs(videoRef.current.currentTime - payload.currentTime);
-              if (diff > 0.15) {
-                videoRef.current.currentTime = payload.currentTime;
-              }
-            } else if (!isSlave) {
-              // Main controller page tracking: keep our local video state memory in sync with real playback:
-              if (typeof window !== "undefined") {
-                if (!(window as any).__luminVideoTimes) {
-                  (window as any).__luminVideoTimes = {};
-                }
-                (window as any).__luminVideoTimes[trackerId] = payload.currentTime;
-              }
-              // If the master video element is currently NOT visually active, keep its video time
-              // strictly synchronized with the active slave to prevent jumping when transitioned active!
-              if (!isVisuallyActive && videoRef.current) {
-                const diff = Math.abs(videoRef.current.currentTime - payload.currentTime);
-                if (diff > 0.3) {
-                  videoRef.current.currentTime = payload.currentTime;
-                }
-              }
-            }
-          }
-        }
-      };
-
-      const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
-      if (ch) {
-        if (!(window as any).__luminTimeChannel) (window as any).__luminTimeChannel = ch;
-        ch.addEventListener("message", handleBroadcastMessage);
-      }
-
-      return () => {
-        video.removeEventListener("timeupdate", handleTimeUpdate);
-        video.removeEventListener("loadedmetadata", handleMetadata);
-        video.removeEventListener("canplay", handleReady);
-        video.removeEventListener("ended", handleEndedNative);
-        if (ch) {
-          ch.removeEventListener("message", handleBroadcastMessage);
-        }
-      };
-    }
-  }, [clip.id, clip.url, clip.isPlaying, isPlaying, isSlave, trackerId]);
 
   // Video IN (Capturadoras USB / HDMI en Windows)
   const streamRef = useRef<MediaStream | null>(null);
@@ -3377,20 +3370,6 @@ const VideoLayer = ({
       video.playbackRate = clip.speed || 1;
     }
   }, [clip.speed, clip.id]);
-
-  // Support real-time seeking tracking (Slave only - Authority ignores state sync to avoid loops)
-  useEffect(() => {
-    const video = videoRef.current;
-    if (
-      video &&
-      isSlave &&
-      clip.type === "video" &&
-      clip.currentTime !== undefined &&
-      Math.abs(video.currentTime - clip.currentTime) > 0.5
-    ) {
-      video.currentTime = clip.currentTime;
-    }
-  }, [clip.currentTime, clip.id, isSlave]);
 
   const colorBalance = clip.colorBalance || { r: 1, g: 1, b: 1 };
   const brightness = clip.brightness ?? 1;
@@ -9194,7 +9173,7 @@ const LayersSection = React.memo(
                                     onUpdateClip(c.id, { currentTime: 0 });
                                   });
                                 }
-                                const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+                                const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
                                 if (ch && clips) {
                                     clips.forEach((c) => {
                                       try {
@@ -10740,6 +10719,24 @@ export default function App() {
   };
 
   // HYDRATION: Ensure thumbnails and IDs exist after loading .lumin
+
+    const rebuildUrlFromPath = (obj: any) => {
+    if (!obj) return obj;
+
+    if (
+      (obj.url?.startsWith("blob:") || !obj.url) &&
+      obj.path &&
+      (window as any).electron
+    ) {
+      try {
+        const normalized = obj.path.replace(/\\/g, "/");
+        obj.url = `lumin-file:///${normalized}`;
+      } catch {}
+    }
+
+    return obj;
+  };
+
   useEffect(() => {
     let active = true;
     const hydrate = async () => {
@@ -10970,6 +10967,33 @@ export default function App() {
 
     try {
       const parsedData = JSON.parse(res.data);
+
+      // 🔥 REPARAR TODAS LAS URL
+      parsedData.clips = parsedData.clips?.map((clip: any) =>
+        rebuildUrlFromPath(clip)
+      );
+
+      parsedData.layers = parsedData.layers?.map((layer: any) => ({
+        ...layer,
+        slots: layer.slots?.map((clip: any) =>
+          rebuildUrlFromPath(clip)
+        ),
+      }));
+
+      if (parsedData.deckClips) {
+        Object.keys(parsedData.deckClips).forEach(key => {
+          parsedData.deckClips[key] = parsedData.deckClips[key].map((clip: any) =>
+            rebuildUrlFromPath(clip)
+          );
+        });
+      }
+
+      parsedData.playlists = parsedData.playlists?.map((pl: any) => ({
+        ...pl,
+        clips: pl.clips?.map((clip: any) =>
+          rebuildUrlFromPath(clip)
+        ),
+      }));
 
       // Validar estructura básica
       if (!parsedData.libraryFiles || !parsedData.clips || !parsedData.layers) {
@@ -12133,7 +12157,7 @@ export default function App() {
           }
           (window as any).__luminVideoTimes[programTrackerId] = 0;
         }
-        const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+        const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
         if (ch) {
           try {
             ch.postMessage({
@@ -12739,7 +12763,7 @@ export default function App() {
       }
       (window as any).__luminVideoTimes[layerTrackerId] = 0;
     }
-    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
     if (ch) {
       try {
         ch.postMessage({
@@ -12802,7 +12826,7 @@ export default function App() {
             }
             (window as any).__luminVideoTimes[nextTrackerId] = 0;
           }
-          const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+          const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
           if (ch) {
             try {
               ch.postMessage({
@@ -12831,7 +12855,7 @@ export default function App() {
               }
               (window as any).__luminVideoTimes[firstTrackerId] = 0;
             }
-            const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+            const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
             if (ch) {
               try {
                 ch.postMessage({
@@ -12886,7 +12910,7 @@ export default function App() {
         const next = prev.map(c => ({ ...c, currentTime: 0 }));
         return next;
       });
-      const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+      const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
       if (ch) {
         clips.forEach((c) => {
           try {
@@ -12908,7 +12932,7 @@ export default function App() {
           }
           (window as any).__luminVideoTimes[trackerId] = 0;
         }
-        const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+        const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
         if (ch) {
           try {
             ch.postMessage({
@@ -12929,7 +12953,7 @@ export default function App() {
             }
             (window as any).__luminVideoTimes[prevTrackerId] = 0;
           }
-          const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+          const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
           if (ch) {
             try {
               ch.postMessage({
@@ -13027,7 +13051,7 @@ export default function App() {
     clips.forEach((c) => {
       updateClip(c.id, { currentTime: 0 });
     });
-    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
     if (ch) {
       clips.forEach((c) => {
         try {
@@ -13084,33 +13108,39 @@ export default function App() {
           const clipPath = fileData.path || (fileData.file && fileData.file.path);
           const clipFile = fileData.file || (clipPath ? { path: clipPath, name: fileData.name } : null);
           clip = {
-            id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            name: fileData.name,
-            thumbnail: fileData.url,
-            url: fileData.url,
-            type: getClipTypeFromFile(fileData.type, fileData.name),
-            file: clipFile,
-            path: clipPath,
-            status: "idle",
-            currentPage: 1,
-            transform: { ...DEFAULT_TRANSFORM },
-            mask: "none",
-            opacity: 1,
-            master: 1,
-            speed: 1,
-            volume: 1,
-            pan: 0,
-            blendMode: "Alpha",
-            behavior: "Cortar",
-            curve: "Lineal",
-            filter: "none",
-            brightness: 1,
-            contrast: 1,
-            saturation: 1,
-            colorBalance: { r: 1, g: 1, b: 1 },
-            isPlaying: true,
-            loop: true,
-          };
+          id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          name: fileData.name,
+          thumbnail: fileData.url,
+          url: fileData.url,
+          type: getClipTypeFromFile(fileData.type, fileData.name),
+
+          file: {
+            ...clipFile,
+            path: (clipFile as any)?.path
+          },
+
+          path: (clipFile as any)?.path || clipPath || fileData.name,
+
+          status: "idle",
+          currentPage: 1,
+          transform: { ...DEFAULT_TRANSFORM },
+          mask: "none",
+          opacity: 1,
+          master: 1,
+          speed: 1,
+          volume: 1,
+          pan: 0,
+          blendMode: "Alpha",
+          behavior: "Cortar",
+          curve: "Lineal",
+          filter: "none",
+          brightness: 1,
+          contrast: 1,
+          saturation: 1,
+          colorBalance: { r: 1, g: 1, b: 1 },
+          isPlaying: true,
+          loop: true,
+        };
           setClips((prev) => [...prev, clip!]);
         }
       } catch (err) {}
@@ -13540,8 +13570,12 @@ export default function App() {
             thumbnail: fileData.url,
             url: fileData.url,
             type: getClipTypeFromFile(fileData.type, fileData.name),
-            file: clipFile,
-            path: clipPath,
+            file: {
+              ...clipFile,
+              path: (clipFile as any)?.path
+            },
+
+            path: (clipFile as any)?.path || clipPath || fileData.name,
             status: "idle",
             currentPage: 1,
             transform: { ...DEFAULT_TRANSFORM },
@@ -13662,7 +13696,7 @@ export default function App() {
     clips.forEach((c) => {
       updateClip(c.id, { currentTime: 0 });
     });
-    const ch = (window as any).__luminTimeChannel || (typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null);
+    const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
     if (ch) {
       clips.forEach((c) => {
         try {
@@ -13745,8 +13779,12 @@ export default function App() {
             thumbnail: fileData.url,
             url: fileData.url,
             type: getClipTypeFromFile(fileData.type, fileData.name),
-            file: clipFile,
-            path: clipPath,
+            file: {
+              ...clipFile,
+              path: (clipFile as any)?.path
+            },
+
+            path: (clipFile as any)?.path || clipPath || fileData.name,
             status: "idle",
             currentPage: 1,
             transform: { ...DEFAULT_TRANSFORM },
