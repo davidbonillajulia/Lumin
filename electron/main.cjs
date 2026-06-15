@@ -236,26 +236,39 @@ if (!gotTheLock) {
       try {
         const { pathToFileURL } = require('url');
         const urlStr = request.url;
-        let rawPath = "";
+        let decodedPath = "";
         
-        if (urlStr.startsWith('lumin-file://')) {
-          rawPath = urlStr.slice(13); // slice off 'lumin-file://'
-        } else if (urlStr.startsWith('lumin-file:')) {
-          rawPath = urlStr.slice(11); // slice off 'lumin-file:'
-        } else {
+        try {
           const urlObj = new URL(urlStr);
-          rawPath = urlObj.pathname;
+          decodedPath = decodeURIComponent(urlObj.pathname);
+        } catch (e) {
+          // Fallback to manual slice if URL parsing has an issue (e.g. malformed custom protocols)
+          let rawPath = urlStr;
+          if (rawPath.startsWith('lumin-file://')) {
+            rawPath = rawPath.slice(13);
+          } else if (rawPath.startsWith('lumin-file:')) {
+            rawPath = rawPath.slice(11);
+          }
+          decodedPath = decodeURIComponent(rawPath);
         }
-        
-        let decodedPath = decodeURIComponent(rawPath);
         
         // On Windows or paths with a "/C:" style drive letter prefix, remove the leading slash
         if (decodedPath.startsWith('/') && (process.platform === 'win32' || decodedPath.match(/^\/[a-zA-Z]:/))) {
           decodedPath = decodedPath.slice(1);
         }
         
-        const fileUrl = pathToFileURL(decodedPath).toString();
-        return net.fetch(fileUrl);
+        // Ensure backslashes are normalized on Windows before putting into pathToFileURL
+        const nativePath = process.platform === 'win32' ? decodedPath.replace(/\//g, '\\') : decodedPath;
+        const fileUrl = pathToFileURL(nativePath).toString();
+        
+        // CRITICAL: We pass request.method and request.headers.
+        // This includes the standard 'Range' request header from the <video> tag,
+        // allowing net.fetch to return '206 Partial Content' chunks and enable video streaming/playback.
+        return net.fetch(fileUrl, {
+          method: request.method,
+          headers: request.headers,
+          bypassCustomProtocolHandlers: true
+        });
       } catch (err) {
         console.error("Error serving lumin-file in protocol handler:", err);
         return new Response("Not Found", { status: 404 });
