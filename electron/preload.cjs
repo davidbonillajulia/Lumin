@@ -1,6 +1,7 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electron', {
+  getPathForFile: (file) => webUtils?.getPathForFile ? webUtils.getPathForFile(file) : file.path,
   getScreens: () => ipcRenderer.invoke('get-screens'),
   launchOutput: (data) => ipcRenderer.send('launch-output', data),
   closeOutput: (screenId) => ipcRenderer.send('close-output', screenId),

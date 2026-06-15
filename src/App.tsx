@@ -369,7 +369,7 @@ const getRelativePath = (fromPath: string, toPath: string) => {
 };
 
 const getFileUrl = (file: File) => {
-  const filePath = (file as any).path;
+  const filePath = window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
   if (!filePath) return URL.createObjectURL(file);
 
   try {
@@ -10815,8 +10815,8 @@ export default function App() {
 
     const sanitizeClip = (clip: any) => {
       if (!clip) return null;
-      const filePath =
-        clip.path || (clip.file ? (clip.file as any).path : undefined);
+      const fileObjPath = clip.file ? (window.electron?.getPathForFile ? window.electron.getPathForFile(clip.file) : clip.file.path) : undefined;
+      const filePath = clip.path || fileObjPath;
       return {
         ...clip,
         file: filePath ? { path: filePath, name: clip.name } : null,
@@ -10828,7 +10828,8 @@ export default function App() {
     return JSON.stringify(
       {
         libraryFiles: libraryFiles.map((f: any) => {
-          const fPath = f.path || (f.file ? (f.file as any).path : undefined);
+          const fileObjPath = f.file ? (window.electron?.getPathForFile ? window.electron.getPathForFile(f.file) : f.file.path) : undefined;
+          const fPath = f.path || fileObjPath;
           return {
             id: f.id,
             name: f.name,
@@ -10838,7 +10839,7 @@ export default function App() {
             relativePath: getRel(fPath),
             thumbnail: f.thumbnail || undefined,
             file: f.file
-              ? { path: (f.file as any).path, name: f.file.name }
+              ? { path: fileObjPath, name: f.file.name }
               : fPath
                 ? { path: fPath, name: f.name }
                 : null,
@@ -13217,17 +13218,19 @@ export default function App() {
         file = item;
         name = file.name;
         type = file.type;
+        const localPath = window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
         url =
-          window.electron && (file as any).path
+          window.electron && localPath
             ? getFileUrl(file)
             : URL.createObjectURL(file);
-        itemPath = (file as any).path || undefined;
+        itemPath = localPath || undefined;
       } else {
         file = item.file;
         name = item.name;
         type = item.type;
         url = item.url;
-        itemPath = item.path || (file ? (file as any).path : undefined);
+        const fallbackPath = file ? (window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path) : undefined;
+        itemPath = item.path || fallbackPath;
       }
 
       const clipType = getClipTypeFromFile(type, name);
@@ -13281,7 +13284,7 @@ export default function App() {
         url: url,
         type: clipType,
         file: file,
-        path: itemPath || (file ? (file as any).path : undefined),
+        path: itemPath,
         status: "idle",
         currentPage: 1,
         transform: { ...DEFAULT_TRANSFORM },
