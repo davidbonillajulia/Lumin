@@ -88,6 +88,7 @@ protocol.registerSchemesAsPrivileged([
   { 
     scheme: 'lumin-file', 
     privileges: { 
+      standard: true,
       bypassCSP: true, 
       secure: true, 
       supportFetchAPI: true, 
@@ -234,11 +235,22 @@ if (!gotTheLock) {
     protocol.handle('lumin-file', (request) => {
       try {
         const { pathToFileURL } = require('url');
-        const urlObj = new URL(request.url);
-        let decodedPath = decodeURIComponent(urlObj.pathname);
+        const urlStr = request.url;
+        let rawPath = "";
         
-        // On Windows, the pathname returned by URL starts with a slash, e.g., "/C:/path/to/file"
-        if (process.platform === 'win32' && decodedPath.startsWith('/')) {
+        if (urlStr.startsWith('lumin-file://')) {
+          rawPath = urlStr.slice(13); // slice off 'lumin-file://'
+        } else if (urlStr.startsWith('lumin-file:')) {
+          rawPath = urlStr.slice(11); // slice off 'lumin-file:'
+        } else {
+          const urlObj = new URL(urlStr);
+          rawPath = urlObj.pathname;
+        }
+        
+        let decodedPath = decodeURIComponent(rawPath);
+        
+        // On Windows or paths with a "/C:" style drive letter prefix, remove the leading slash
+        if (decodedPath.startsWith('/') && (process.platform === 'win32' || decodedPath.match(/^\/[a-zA-Z]:/))) {
           decodedPath = decodedPath.slice(1);
         }
         
