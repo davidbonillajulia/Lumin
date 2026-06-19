@@ -64,6 +64,7 @@ import {
   Mic,
   XCircle,
   FileVideo,
+  AlertCircle,
 } from "lucide-react";
 import { motion, AnimatePresence, animate, Reorder } from "motion/react";
 
@@ -2937,6 +2938,7 @@ const VideoLayer = ({
   const lastSrc = useRef<string>("");
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
+  const [hasError, setHasError] = useState(false);
   const [firstFrameRendered, setFirstFrameRendered] = useState(
     clip.type !== "video" && clip.type !== "videoinput",
   );
@@ -3548,7 +3550,13 @@ const handleBroadcastMessage = (e: MessageEvent) => {
             aria-hidden="true"
           />
         )}
-        {clip.type === "video" || clip.type === "videoinput" ? (
+        {hasError ? (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-red-900/40 border border-red-500/50 p-4 text-center aspect-video">
+            <AlertCircle size={32} className="text-red-500 mb-2" />
+            <p className="text-white font-medium text-sm">Media no encontrada</p>
+            <p className="text-red-200 text-xs max-w-xs mt-1">Este archivo local no está disponible en esta sesión. Vuelve a añadirlo a la biblioteca.</p>
+          </div>
+        ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
             <video
               ref={videoRefCallback}
@@ -3604,8 +3612,14 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                 }
               }}
               onError={(e) => {
-                console.warn("Video element error encountered in VideoLayer, retrying source...", e);
+                const currentSrc = videoRef.current?.src || "";
+                console.warn("Video element error encountered in VideoLayer", e, currentSrc);
                 
+                // Si la fuente ya está vacía, no hacemos nada
+                if (!currentSrc || currentSrc === window.location.href) {
+                  return;
+                }
+
                 // Self-healing: if the clip has a local path and we are in Electron, recover the URL
                 const hasPath = clip.path || (clip.file && clip.file.path);
                 if (hasPath && (window as any).electron) {
@@ -3625,11 +3639,25 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                   }
                 }
 
-                if (activeIsPlaying && videoRef.current) {
-                  const currentSrc = videoRef.current.src;
+                // If it's a blob URL that failed from a previous session on the web, trying to load it will infinite loop.
+                if (currentSrc.startsWith("blob:") || !currentSrc.startsWith("http")) {
+                  console.warn("Media source dead. Marking as errored.");
+                  setHasError(true);
+                  if (videoRef.current) {
+                    videoRef.current.removeAttribute("src"); // Stop it from auto retrying forever
+                  }
+                  return;
+                }
+
+                if (activeIsPlaying && videoRef.current && !hasError) {
                   if (currentSrc) {
-                    videoRef.current.load();
-                    videoRef.current.play().catch(() => {});
+                    // Solo recargar si no es un blob (asumiendo streaming hls o algo así)
+                    setTimeout(() => {
+                      if (videoRef.current) {
+                        videoRef.current.load();
+                        videoRef.current.play().catch(() => {});
+                      }
+                    }, 2000);
                   }
                 }
               }}
