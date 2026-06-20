@@ -381,7 +381,7 @@ export const buildLuminFileUrl = (pathStr?: string): string | undefined => {
 };
 
 const getFileUrl = (file: File) => {
-  const filePath = (file as any).path;
+  const filePath = window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
   if (!filePath) return URL.createObjectURL(file);
 
   try {
@@ -8221,7 +8221,7 @@ const Library = React.memo(
             thumbnail = url;
           }
 
-          const fileObjPath = (f as any).path;
+          const fileObjPath = f instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f) : (f as any).path;
 
           return {
             id: `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -11007,6 +11007,10 @@ export default function App() {
       const parsedData = JSON.parse(res.data);
 
       // 🔥 REPARAR TODAS LAS URL
+      parsedData.libraryFiles = parsedData.libraryFiles?.map((f: any) =>
+        rebuildUrlFromPath(f)
+      );
+
       parsedData.clips = parsedData.clips?.map((clip: any) =>
         rebuildUrlFromPath(clip)
       );
@@ -13255,7 +13259,7 @@ export default function App() {
         file = item;
         name = file.name;
         type = file.type;
-        const localPath = (file as any).path;
+        const localPath = file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
         url =
           window.electron && localPath
             ? getFileUrl(file)
@@ -13266,7 +13270,7 @@ export default function App() {
         name = item.name;
         type = item.type;
         url = item.url;
-        const fallbackPath = (file as any)?.path;
+        const fallbackPath = file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any)?.path;
         itemPath = item.path || fallbackPath;
       }
 
@@ -13935,7 +13939,7 @@ export default function App() {
       // Handle OS files
       const files = Array.from(e.dataTransfer.files);
       clipsToClone = files.map((f) => {
-        const path = (f as any).path;
+        const path = f instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f) : (f as any).path;
         let pUrl = URL.createObjectURL(f);
         if (path) {
           const nativeUrl = buildLuminFileUrl(path);
