@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('electron', {
   getSystemStats: () => ipcRenderer.invoke('get-system-stats'),
   exitApp: () => ipcRenderer.send('exit-app'),
   getStartFile: () => ipcRenderer.invoke('get-start-file'),
+  checkFFmpeg: () => ipcRenderer.invoke('check-ffmpeg'),
+  transcodeToIntra: (inputPath, outputPath) => ipcRenderer.invoke('transcode-to-intra', { inputPath, outputPath }),
   onOpenLuminFile: (callback) => {
     const subscription = (event, path) => callback(path);
     ipcRenderer.on('open-lumin-file', subscription);

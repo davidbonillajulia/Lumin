@@ -8150,6 +8150,9 @@ interface LibraryProps {
   setLibraryFiles: React.Dispatch<React.SetStateAction<any[]>>;
   selectedLibraryUrls: Set<string>;
   setSelectedLibraryUrls: React.Dispatch<React.SetStateAction<Set<string>>>;
+  setLayers: React.Dispatch<React.SetStateAction<any[]>>;
+  setPlaylists: React.Dispatch<React.SetStateAction<any[]>>;
+  setClips: React.Dispatch<React.SetStateAction<any[]>>;
 }
 
 const Library = React.memo(
@@ -8160,6 +8163,9 @@ const Library = React.memo(
     setLibraryFiles,
     selectedLibraryUrls,
     setSelectedLibraryUrls,
+    setLayers,
+    setPlaylists,
+    setClips,
   }: LibraryProps) => {
     const [folders, setFolders] = useState<
       { id: string; name: string; active: boolean }[]
@@ -8173,6 +8179,124 @@ const Library = React.memo(
     const [viewMode, setViewMode] = useState<"list" | "grid">("grid");
     const [searchQuery, setSearchQuery] = useState("");
     const libraryInputRef = useRef<HTMLInputElement>(null);
+
+    const [transcodingFiles, setTranscodingFiles] = useState<Record<string, { progress: number; status: 'idle' | 'converting' | 'success' | 'err'; error?: string }>>({});
+
+    const handleOptimiseVideo = async (file: any) => {
+      if (!file.path) return;
+      const inputPath = file.path;
+      const lastDot = inputPath.lastIndexOf('.');
+      const ext = lastDot !== -1 ? inputPath.substring(lastDot) : '.mp4';
+      const basePath = lastDot !== -1 ? inputPath.substring(0, lastDot) : inputPath;
+      const outputPath = `${basePath}_gop1${ext}`;
+
+      setTranscodingFiles(prev => ({
+        ...prev,
+        [file.url]: { progress: 0, status: 'converting' }
+      }));
+
+      let currentPct = 0;
+      const progressInterval = setInterval(() => {
+        currentPct = Math.min(95, currentPct + Math.floor(Math.random() * 8) + 4);
+        setTranscodingFiles(prev => {
+          if (!prev[file.url] || prev[file.url].status !== 'converting') {
+            clearInterval(progressInterval);
+            return prev;
+          }
+          return {
+            ...prev,
+            [file.url]: { ...prev[file.url], progress: currentPct }
+          };
+        });
+      }, 400);
+
+      try {
+        const result = await (window as any).electron.transcodeToIntra(inputPath, outputPath);
+        clearInterval(progressInterval);
+
+        if (result && result.success) {
+          setTranscodingFiles(prev => ({
+            ...prev,
+            [file.url]: { progress: 100, status: 'success' }
+          }));
+
+          const nativeUrl = buildLuminFileUrl(result.outputPath) || "";
+
+          setLibraryFiles(prev => prev.map(f => {
+            if (f.url === file.url) {
+              return {
+                ...f,
+                url: nativeUrl,
+                path: result.outputPath,
+                name: f.name.replace(/\.[^/.]+$/, "") + " (Optimal GOP-1)",
+                isOptimized: true
+              };
+            }
+            return f;
+          }));
+
+          // Hot swap layer slots
+          setLayers(prevLayers => prevLayers.map(l => ({
+            ...l,
+            slots: l.slots.map(slot => {
+              if (slot && slot.path === inputPath) {
+                return {
+                  ...slot,
+                  url: nativeUrl,
+                  path: result.outputPath,
+                  name: slot.name.replace(/\.[^/.]+$/, "") + " (Optimal GOP-1)",
+                  isOptimized: true
+                };
+              }
+              return slot;
+            })
+          })));
+
+          // Hot swap playlist clips
+          setPlaylists(prevPlaylists => prevPlaylists.map(playlist => ({
+            ...playlist,
+            clips: playlist.clips.map(clip => {
+              if (clip && clip.path === inputPath) {
+                return {
+                  ...clip,
+                  url: nativeUrl,
+                  path: result.outputPath,
+                  name: clip.name.replace(/\.[^/.]+$/, "") + " (Optimal GOP-1)",
+                  isOptimized: true
+                };
+              }
+              return clip;
+            })
+          })));
+
+          // Hot swap basic clips pool
+          setClips(prevClips => prevClips.map(clip => {
+            if (clip && clip.path === inputPath) {
+              return {
+                ...clip,
+                url: nativeUrl,
+                path: result.outputPath,
+                name: clip.name.replace(/\.[^/.]+$/, "") + " (Optimal GOP-1)",
+                isOptimized: true
+              };
+            }
+            return clip;
+          }));
+
+        } else {
+          setTranscodingFiles(prev => ({
+            ...prev,
+            [file.url]: { progress: 0, status: 'err', error: result?.error || 'Error Desconocido' }
+          }));
+        }
+      } catch (err: any) {
+        clearInterval(progressInterval);
+        setTranscodingFiles(prev => ({
+          ...prev,
+          [file.url]: { progress: 0, status: 'err', error: err.message || err }
+        }));
+      }
+    };
 
     const activeFolder = folders.find((f) => f.active)?.id || "todos";
 
@@ -14727,6 +14851,9 @@ export default function App() {
                   setLibraryFiles={setLibraryFiles}
                   selectedLibraryUrls={selectedLibraryUrls}
                   setSelectedLibraryUrls={setSelectedLibraryUrls}
+                  setLayers={setLayers}
+                  setPlaylists={setPlaylists}
+                  setClips={setClips}
                 />
               </div>
 

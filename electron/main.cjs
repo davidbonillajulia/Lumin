@@ -440,6 +440,45 @@ if (!gotTheLock) {
     return filePath;
   });
 
+  ipcMain.handle('check-ffmpeg', () => {
+    return new Promise((resolve) => {
+      exec('ffmpeg -version', (err, stdout) => {
+        if (err) {
+          resolve({ available: false, error: err.message });
+        } else {
+          const firstLine = stdout.split('\n')[0];
+          resolve({ available: true, version: firstLine });
+        }
+      });
+    });
+  });
+
+  ipcMain.handle('transcode-to-intra', (event, { inputPath, outputPath }) => {
+    return new Promise((resolve) => {
+      const dir = path.dirname(outputPath);
+      if (!fs.existsSync(dir)) {
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+        } catch (err) {
+          resolve({ success: false, error: `No se pudo crear el directorio de destino: ${err.message}` });
+          return;
+        }
+      }
+
+      // Converted with H.264 Intra-frame (GOP=1) and tune=zerolatency for 0ms seek
+      const cmd = `ffmpeg -y -i "${inputPath}" -c:v libx264 -g 1 -keyint_min 1 -pix_fmt yuv420p -tune zerolatency -crf 18 -preset superfast -c:a aac -b:a 192k "${outputPath}"`;
+      
+      exec(cmd, (err, stdout, stderr) => {
+        if (err) {
+          console.error("Error running ffmpeg transcoding in main process:", err, stderr);
+          resolve({ success: false, error: err.message || stderr });
+        } else {
+          resolve({ success: true, outputPath });
+        }
+      });
+    });
+  });
+
   ipcMain.on('exit-app', () => {
     app.exit(0);
   });
