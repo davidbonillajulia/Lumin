@@ -380,20 +380,13 @@ export const buildLuminFileUrl = (pathStr?: string): string | undefined => {
   }
 };
 
-const getFileUrl = (file: File) => {
-  const filePath = window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
-  if (!filePath) return URL.createObjectURL(file);
-
-  try {
-    const nativeUrl = buildLuminFileUrl(filePath);
-    return nativeUrl || URL.createObjectURL(file);
-  } catch (err) {
-    console.error(
-      "Error formatting native file path, using ObjectURL fallback:",
-      err,
-    );
-    return URL.createObjectURL(file);
+const getFileUrl = (file: any) => {
+  const filePath = file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
+  if (!filePath) {
+    console.error("No se pudo obtener la ruta del archivo:", file.name);
+    return "";
   }
+  return buildLuminFileUrl(filePath);
 };
 
 const extractVideoThumbnail = (videoUrl: string): Promise<string> => {
@@ -2938,6 +2931,11 @@ const VideoLayer = ({
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
   const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [clip.url]);
+
   const [firstFrameRendered, setFirstFrameRendered] = useState(
     clip.type !== "video" && clip.type !== "videoinput",
   );
@@ -3593,7 +3591,11 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                 setIsReady(true);
                 setFirstFrameRendered(true);
                 if (activeIsPlaying && videoRef.current) {
-                  videoRef.current.play().catch(() => {});
+                  videoRef.current.play().then(() => {
+                    console.log("Video playing successfully:", clip.url);
+                  }).catch((err) => {
+                    console.error("Video play() rejected for:", clip.url, err);
+                  });
                 }
               }}
               onCanPlay={() => {
@@ -3603,24 +3605,29 @@ const handleBroadcastMessage = (e: MessageEvent) => {
               onPlaying={() => setFirstFrameRendered(true)}
               onWaiting={() => {
                 if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
-                  videoRef.current.play().catch(() => {});
+                  videoRef.current.play().catch((err) => console.error("Video play() rejected on waiting:", clip.url, err));
                 }
               }}
               onStalled={() => {
                 if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
-                  videoRef.current.play().catch(() => {});
+                  videoRef.current.play().catch((err) => console.error("Video play() rejected on stalled:", clip.url, err));
                 }
               }}
               onError={(e) => {
                 const currentSrc = videoRef.current?.src || "";
-                console.warn("Video element error encountered in VideoLayer", e, currentSrc);
+                console.error("Error de carga (onerror) en el `<video>` para el clip:", {
+                  clipUrl: clip.url,
+                  clipPath: clip.path || clip.file?.path,
+                  currentSrc: currentSrc,
+                  errorEvent: e
+                });
                 
                 // Si la fuente ya está vacía, no hacemos nada
                 if (!currentSrc || currentSrc === window.location.href) {
                   return;
                 }
 
-                // Self-healing: if the clip has a local path and we are in Electron, recover the URL
+                // Self-healing: try to force the correct URL
                 const hasPath = clip.path || (clip.file && clip.file.path);
                 if (hasPath && (window as any).electron) {
                   try {
@@ -3639,7 +3646,7 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                   }
                 }
 
-                // If it's a blob URL that failed from a previous session on the web, trying to load it will infinite loop.
+                // Never retry broken blobs as they're from another session
                 if (currentSrc.startsWith("blob:") || (!currentSrc.startsWith("http") && !currentSrc.startsWith("lumin-file:"))) {
                   console.warn("Media source dead. Marking as errored.");
                   setHasError(true);
@@ -3651,11 +3658,10 @@ const handleBroadcastMessage = (e: MessageEvent) => {
 
                 if (activeIsPlaying && videoRef.current && !hasError) {
                   if (currentSrc) {
-                    // Solo recargar si no es un blob (asumiendo streaming hls o algo así)
                     setTimeout(() => {
                       if (videoRef.current) {
                         videoRef.current.load();
-                        videoRef.current.play().catch(() => {});
+                        videoRef.current.play().catch((err) => console.error("Recarga automática de vídeo falló:", err));
                       }
                     }, 2000);
                   }
@@ -10766,15 +10772,20 @@ export default function App() {
     const rebuildUrlFromPath = (obj: any) => {
     if (!obj) return obj;
 
-    if (
-      (obj.url?.startsWith("blob:") || !obj.url) &&
-      obj.path &&
-      (window as any).electron
-    ) {
+    if (obj.path) {
       try {
         const nativeUrl = buildLuminFileUrl(obj.path);
-        if (nativeUrl) obj.url = nativeUrl;
-      } catch {}
+        console.log("Restaurando clip:", {
+          ruta_guardada: obj.path,
+          url_final: nativeUrl,
+          nombre: obj.name
+        });
+        if (nativeUrl) {
+          obj.url = nativeUrl;
+        }
+      } catch (err) {
+        console.error("Error reconstruyendo URL para:", obj.path, err);
+      }
     }
 
     return obj;
@@ -10791,10 +10802,10 @@ export default function App() {
             updated.id = `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             changed = true;
           }
-          // Repair broken object URLs if they are from a previous session
-          if ((updated.url?.startsWith("blob:") || !updated.url) && (window as any).electron && updated.path) {
+          // Update URL from path if available
+          if (updated.path) {
             const nativeUrl = buildLuminFileUrl(updated.path);
-            if (nativeUrl) {
+            if (nativeUrl && updated.url !== nativeUrl) {
               updated.url = nativeUrl;
               changed = true;
             }
@@ -10833,17 +10844,6 @@ export default function App() {
     return () => { active = false; };
   }, [libraryFiles.length]); // Run when count changes or on load
 
-  const sanitizeClipForSave = (clip: any) => {
-    if (!clip) return null;
-    const filePath =
-      clip.path || (clip.file ? (clip.file as any).path : undefined);
-    return {
-      ...clip,
-      file: filePath ? { path: filePath, name: clip.name } : null,
-      path: filePath,
-    };
-  };
-
   const getLuminStateData = (projectFilePath?: string | null) => {
     const getRel = (absPath?: string) => {
       if (!absPath || !projectFilePath) return undefined;
@@ -10854,11 +10854,15 @@ export default function App() {
       if (!clip) return null;
       const fileObjPath = clip.file ? clip.file.path : undefined;
       const filePath = clip.path || fileObjPath;
+      
+      const cleanClip = { ...clip };
+      delete cleanClip.file;
+      delete cleanClip.url;
+      delete cleanClip.relativePath;
+      
       return {
-        ...clip,
-        file: filePath ? { path: filePath, name: clip.name } : null,
+        ...cleanClip,
         path: filePath,
-        relativePath: getRel(filePath),
       };
     };
 
@@ -10867,19 +10871,13 @@ export default function App() {
         libraryFiles: libraryFiles.map((f: any) => {
           const fileObjPath = f.file ? f.file.path : undefined;
           const fPath = f.path || fileObjPath;
+          
           return {
             id: f.id,
             name: f.name,
             type: f.type,
-            url: f.url,
             path: fPath,
-            relativePath: getRel(fPath),
             thumbnail: f.thumbnail || undefined,
-            file: f.file
-              ? { path: fileObjPath, name: f.file.name }
-              : fPath
-                ? { path: fPath, name: f.name }
-                : null,
           };
         }),
         clips: clips.map(sanitizeClip),
@@ -11102,7 +11100,15 @@ export default function App() {
         const targetPath = resolvedPath || clipPath;
         if (targetPath && (window as any).electron) {
           const nativeUrl = buildLuminFileUrl(targetPath);
-          if (nativeUrl) newUrl = nativeUrl;
+          if (nativeUrl) {
+            newUrl = nativeUrl;
+            console.log("Restaurando clip asíncrono:", {
+              ruta_guardada: clipPath,
+              ruta_restaurada: targetPath,
+              url_final: nativeUrl,
+              nombre: clip.name
+            });
+          }
         }
         
         let newThumbnail = clip.thumbnail;
@@ -11134,7 +11140,15 @@ export default function App() {
           const targetPath = resolvedPath || clipPath;
           if (targetPath && (window as any).electron) {
             const nativeUrl = buildLuminFileUrl(targetPath);
-            if (nativeUrl) newUrl = nativeUrl;
+            if (nativeUrl) {
+              newUrl = nativeUrl;
+              console.log("Restaurando libraryFile:", {
+                ruta_guardada: clipPath,
+                ruta_restaurada: targetPath,
+                url_final: nativeUrl,
+                nombre: f.name
+              });
+            }
           }
           
           let newThumbnail = f.thumbnail;
