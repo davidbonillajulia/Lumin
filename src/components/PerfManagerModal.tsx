@@ -383,45 +383,30 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                 <div className="bg-obs-surface p-4 rounded border border-obs-border space-y-4">
                   <span className="text-[10px] text-white font-black uppercase tracking-wider flex items-center gap-1.5">
                     <Settings size={12} className="text-obs-accent" />
-                    CONFIGURACIÓN DEL MOTOR DE VÍDEO Y API GRÁFICA
+                    CONFIGURACIÓN BÁSICA DEL RENDERIZADO
                   </span>
 
-                  <div className="grid grid-cols-3 gap-3">
-                    {/* Motor Selector */}
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[8.5px] text-obs-text font-black uppercase">Motor de Video Principal</span>
-                      <select
-                        id="perf-engine-select"
-                        value={localSettings.engine}
-                        onChange={(e) => setLocalSettings(p => ({ ...p, engine: e.target.value }))}
-                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer"
-                      >
-                        <option value="native_bypass">C++ Native Bypass (DirectX 12/Vulkan)</option>
-                        <option value="native_chromium">Chromium Overlay (Legacy Electron)</option>
-                      </select>
-                      <span className="text-[7.5px] text-obs-muted">Bypass de Electron para 0ms latencia</span>
-                    </div>
-
+                  <div className="grid grid-cols-2 gap-4">
                     {/* Backend Select */}
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[8.5px] text-obs-text font-black uppercase">Backend Gráfico GPU</span>
+                    <div className="flex flex-col gap-1.55">
+                      <span className="text-[8.5px] text-obs-text font-black uppercase">API Gráfica de Render (Backend GPU)</span>
                       <select
                         id="perf-backend-select"
                         value={localSettings.renderingBackend}
                         onChange={(e) => setLocalSettings(p => ({ ...p, renderingBackend: e.target.value }))}
-                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer"
+                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer w-full"
                       >
-                        <option value="vulkan">Vulkan Native API (Stable Mapping)</option>
-                        <option value="directx12">Direct3D 12 Ultimate (V-Sync Core)</option>
-                        <option value="directx11">Direct3D 11 (Legacy Direct3D)</option>
-                        <option value="opengl">OpenGL Desktop (NVIDIA/AMD Driver)</option>
+                        <option value="vulkan">Vulkan Native API (Máximo Rendimiento)</option>
+                        <option value="directx12">Direct3D 12 Ultimate (Ultra-Baja Latencia)</option>
+                        <option value="directx11">Direct3D 11 (Compatibilidad Estándar)</option>
+                        <option value="opengl">OpenGL Desktop (Sistemas Heredados)</option>
                       </select>
-                      <span className="text-[7.5px] text-obs-muted">Aceleración por hardware nativa</span>
+                      <span className="text-[7.5px] text-obs-muted">Controlador directo de bajo nivel para la tarjeta de video externa.</span>
                     </div>
 
                     {/* Hardware Decoder Select */}
                     <div className="flex flex-col gap-1.5">
-                      <span className="text-[8.5px] text-obs-text font-black uppercase">Descompresión HW</span>
+                      <span className="text-[8.5px] text-obs-text font-black uppercase">Decodificación de Video (Hardware)</span>
                       <select
                         id="perf-decoder-select"
                         value={localSettings.gpuDecoding}
@@ -433,84 +418,73 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                             nvdecEnabled: val === 'nvdec'
                           }));
                         }}
-                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer"
+                        className="bg-obs-dark-1 border border-obs-border rounded px-2.5 py-1.5 text-[8.5px] font-bold text-white focus:outline-none focus:border-obs-accent focus:ring-1 focus:ring-obs-accent cursor-pointer w-full"
                       >
-                        <option value="nvdec">FFmpeg + NVDEC (NVIDIA CUDA ASIC)</option>
-                        <option value="d3d11">FFmpeg + D3D11VA (DirectX Standard)</option>
-                        <option value="dxva2">DXVA2 (Windows Legacy Core)</option>
-                        <option value="software">Software (Multi-thread CPU)</option>
+                        <option value="nvdec">NVIDIA NVDEC (Hardware Directo CUDA)</option>
+                        <option value="d3d11">Intel/AMD/Nvidia D3D11VA (Estándar Windows)</option>
+                        <option value="dxva2">DXVA2 (Motor Heredado de Windows)</option>
+                        <option value="software">Software (Cálculo Puro por CPU - Sin Aceleración)</option>
                       </select>
-                      <span className="text-[7.5px] text-obs-muted">Descompresión directa en el chip</span>
+                      <span className="text-[7.5px] text-obs-muted">Procesador físico encargado de descomprimir los códecs de video en tiempo real.</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-
-                  {/* Option: Texturas persistentes en VRAM */}
-                  <div className="bg-obs-surface p-3.5 rounded border border-obs-border flex flex-col justify-between">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[9px] text-white uppercase font-black">Texturas Persistentes en VRAM</span>
-                      <p className="text-[8px] text-obs-muted leading-relaxed">Mantiene los marcos decodificados y texturas de clips activos directamente en la memoria del hardware gráfico.</p>
+                <div className="bg-obs-surface p-4 rounded border border-obs-border space-y-3">
+                  <div className="flex justify-between items-center">
+                    <div className="flex flex-col gap-1 w-3/4">
+                      <span className="text-[9.5px] text-white uppercase font-black tracking-wide flex items-center gap-1.5">
+                        <Sparkles size={12} className="text-obs-accent" />
+                        Modo Ultra-Baja Latencia (C++ Bypass)
+                      </span>
+                      <p className="text-[8px] text-obs-muted leading-relaxed">
+                        Habilita la sincronización asíncrona de subprocesos, la transferencia directa de texturas con Zero-Copy de DMA, la retención persistente de fotogramas en VRAM y el programador multi-hilo independiente del motor de Resolume. El video en salida se independiza del sistema UI, evitando stuttering al realizar operaciones simultáneas.
+                      </p>
                     </div>
-                    <div className="mt-3.5 flex justify-between items-center">
-                      <span className="text-[8px] text-obs-muted font-bold uppercase">Estado: {localSettings.persistentVram ? 'BLOQUEADO VRAM' : 'DESACTIVADO'}</span>
-                      <button
-                        onClick={() => setLocalSettings(p => ({ ...p, persistentVram: !p.persistentVram }))}
-                        className={`w-7 h-4 rounded-full p-0.5 transition-colors shrink-0 ${localSettings.persistentVram ? 'bg-obs-accent' : 'bg-obs-border'}`}
-                      >
-                        <div className={`w-3 h-3 rounded-full bg-white transition-transform ${localSettings.persistentVram ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-                      </button>
+                    <button
+                      onClick={() => {
+                        const nextValue = !localSettings.independentScheduler;
+                        setLocalSettings(p => ({
+                          ...p,
+                          independentScheduler: nextValue,
+                          persistentVram: nextValue,
+                          zeroCopyUpload: nextValue,
+                          tripleBuffering: nextValue,
+                          framePacingSync: nextValue,
+                          engine: nextValue ? "native_bypass" : "native_chromium"
+                        }));
+                      }}
+                      className={`w-10 h-5.5 rounded-full p-0.5 transition-colors shrink-0 ${localSettings.independentScheduler ? 'bg-obs-accent' : 'bg-obs-border'}`}
+                    >
+                      <div className={`w-4.5 h-4.5 rounded-full bg-white transition-transform ${localSettings.independentScheduler ? 'translate-x-[18px]' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                  <div className="pt-2 border-t border-obs-border/30 grid grid-cols-4 gap-2 text-[7.5px] text-obs-muted font-mono uppercase bg-obs-dark-1/50 p-2 rounded">
+                    <div className="flex flex-col">
+                      <span>C++ Playout Bypass</span>
+                      <span className={localSettings.engine === 'native_bypass' ? 'text-obs-accent font-bold' : 'text-stone-500'}>
+                        {localSettings.engine === 'native_bypass' ? 'ACTIVO' : 'INACTIVO'}
+                      </span>
+                    </div>
+                    <div className="flex flex-col border-l border-obs-border/30 pl-2">
+                      <span>Persistent VRAM</span>
+                      <span className={localSettings.persistentVram ? 'text-obs-accent font-bold' : 'text-stone-500'}>
+                        {localSettings.persistentVram ? 'BLOQUEADO' : 'LIBERADO'}
+                      </span>
+                    </div>
+                    <div className="flex flex-col border-l border-obs-border/30 pl-2">
+                      <span>DMA Zero-Copy</span>
+                      <span className={localSettings.zeroCopyUpload ? 'text-obs-accent font-bold' : 'text-stone-500'}>
+                        {localSettings.zeroCopyUpload ? 'DIRECTO' : 'HEREDADO'}
+                      </span>
+                    </div>
+                    <div className="flex flex-col border-l border-obs-border/30 pl-2">
+                      <span>Scheduler Asíncrono</span>
+                      <span className={localSettings.independentScheduler ? 'text-obs-accent font-bold' : 'text-stone-500'}>
+                        {localSettings.independentScheduler ? 'UI BYPASS' : 'UI SYNC'}
+                      </span>
                     </div>
                   </div>
-
-                  {/* Option: Zero-copy texture upload */}
-                  <div className="bg-obs-surface p-3.5 rounded border border-obs-border flex flex-col justify-between">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[9px] text-white uppercase font-black">Zero-Copy Texture Upload</span>
-                      <p className="text-[8px] text-obs-muted leading-relaxed">Inserta los marcos de video directo desde la descompresión sin copias redundantes en memoria intermedia host.</p>
-                    </div>
-                    <div className="mt-3.5 flex justify-between items-center">
-                      <span className="text-[8px] text-obs-muted font-bold uppercase">Estado: {localSettings.zeroCopyUpload ? 'COMPLETO' : 'MINIMAL'}</span>
-                      <button
-                        onClick={() => setLocalSettings(p => ({ ...p, zeroCopyUpload: !p.zeroCopyUpload }))}
-                        className={`w-7 h-4 rounded-full p-0.5 transition-colors shrink-0 ${localSettings.zeroCopyUpload ? 'bg-obs-accent' : 'bg-obs-border'}`}
-                      >
-                        <div className={`w-3 h-3 rounded-full bg-white transition-transform ${localSettings.zeroCopyUpload ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Option: Triple Buffering & Frame pacing */}
-                  <div className="bg-obs-surface p-3.5 rounded border border-obs-border flex flex-col justify-between">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[9px] text-white uppercase font-black">Triple Buffering & Lock Pacing</span>
-                      <p className="text-[8px] text-obs-muted leading-relaxed">Evita el parpadeo en flujos con desfase térmico o variaciones en refresco de pantalla externa.</p>
-                    </div>
-                    <div className="mt-3.5 flex justify-between items-center">
-                      <span className="text-[8px] text-obs-muted font-bold uppercase">Triple Buffer Activo</span>
-                      <button
-                        onClick={() => setLocalSettings(p => ({ ...p, tripleBuffering: !p.tripleBuffering }))}
-                        className={`w-7 h-4 rounded-full p-0.5 transition-colors shrink-0 ${localSettings.tripleBuffering ? 'bg-obs-accent' : 'bg-obs-border'}`}
-                      >
-                        <div className={`w-3 h-3 rounded-full bg-white transition-transform ${localSettings.tripleBuffering ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Option: Scheduler independiente */}
-                <div className="bg-obs-surface p-3.5 rounded border border-obs-border my-2 flex justify-between items-center">
-                  <div className="flex flex-col gap-1 w-2/3">
-                    <span className="text-[9px] text-white uppercase font-black">Scheduler de Render Multi-hilo Independiente (UI Bypass)</span>
-                    <p className="text-[8px] text-obs-muted leading-relaxed">Separa la cadencia gráfica del hilo principal del software de la web. Si el inspector de UI se cuelga, el video en salida sigue sonando y fluyendo a 60 FPS inquebrantables.</p>
-                  </div>
-                  <button
-                    onClick={() => setLocalSettings(p => ({ ...p, independentScheduler: !p.independentScheduler }))}
-                    className={`w-7 h-4 rounded-full p-0.5 transition-colors shrink-0 ${localSettings.independentScheduler ? 'bg-obs-accent' : 'bg-obs-border'}`}
-                  >
-                    <div className={`w-3 h-3 rounded-full bg-white transition-transform ${localSettings.independentScheduler ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-                  </button>
                 </div>
               </div>
             )}

@@ -13408,7 +13408,21 @@ export default function App() {
       let type = "";
       let itemPath = undefined;
 
-      if (item instanceof File || (item && (item.name || item.path))) {
+      if (item && !(item instanceof File) && (item.url || item.file?.path)) {
+        file = item.file;
+        name = item.name || "";
+        type = item.type || "";
+        url = item.url || "";
+        let fallbackPath = (file as any)?.path;
+        if (file instanceof File && (window as any).electron?.getPathForFile) {
+          try {
+            fallbackPath = (window as any).electron.getPathForFile(file);
+          } catch (e) {
+            console.error("Error in getPathForFile fallback in handleAddClips:", name, e);
+          }
+        }
+        itemPath = item.path || fallbackPath;
+      } else if (item instanceof File || (item && (item.name || item.path))) {
         file = item instanceof File ? item : null;
         name = item.name || "";
         type = item.type || "";
@@ -13426,10 +13440,10 @@ export default function App() {
             : (file ? URL.createObjectURL(file) : "");
         itemPath = localPath || undefined;
       } else {
-        file = item.file;
-        name = item.name;
-        type = item.type;
-        url = item.url;
+        file = item?.file;
+        name = item?.name || "";
+        type = item?.type || "";
+        url = item?.url || "";
         let fallbackPath = (file as any)?.path;
         if (file instanceof File && (window as any).electron?.getPathForFile) {
           try {
@@ -13438,7 +13452,7 @@ export default function App() {
             console.error("Error in getPathForFile fallback in handleAddClips:", name, e);
           }
         }
-        itemPath = item.path || fallbackPath;
+        itemPath = item?.path || fallbackPath;
       }
 
       const clipType = getClipTypeFromFile(type, name);
@@ -15251,10 +15265,12 @@ export default function App() {
                                   VRAM Persistente
                                 </span>
                                 <span
-                                  className={`${window.electron?.isElectron ? "text-obs-accent" : "text-obs-muted"} font-bold`}
+                                  className={`${window.electron?.isElectron ? (perfSettings?.persistentVram ? "text-obs-accent" : "text-red-400") : "text-obs-muted"} font-bold`}
                                 >
                                   {window.electron?.isElectron
-                                    ? "ACTIVO D3D12"
+                                    ? (perfSettings?.persistentVram 
+                                        ? `ACTIVO (${(perfSettings?.renderingBackend || "vulkan").toUpperCase()})` 
+                                        : "DESACTIVADO")
                                     : "ESTÁNDAR (WEB)"}
                                 </span>
                               </div>
@@ -15263,10 +15279,13 @@ export default function App() {
                                   Decodificador GPU
                                 </span>
                                 <span
-                                  className={`${window.electron?.isElectron ? "text-emerald-400" : "text-obs-muted"} font-bold`}
+                                  className={`${window.electron?.isElectron ? (perfSettings?.gpuDecoding !== "software" ? "text-emerald-400" : "text-amber-400") : "text-obs-muted"} font-bold`}
                                 >
                                   {window.electron?.isElectron
-                                    ? "NVDEC (HW CUDA)"
+                                    ? (perfSettings?.gpuDecoding === "nvdec" ? "NVDEC (HW NV_CUDA)" :
+                                       perfSettings?.gpuDecoding === "d3d11" ? "D3D11VA (HW DXVA)" :
+                                       perfSettings?.gpuDecoding === "dxva2" ? "DXVA2 (HW LEGACY)" :
+                                       "SOFTWARE (CPU)")
                                     : "GENÉRICO HWA"}
                                 </span>
                               </div>
@@ -15275,10 +15294,10 @@ export default function App() {
                                   Chromium Render Bypass
                                 </span>
                                 <span
-                                  className={`${window.electron?.isElectron ? "text-emerald-400" : "text-obs-muted"} font-bold`}
+                                  className={`${window.electron?.isElectron ? (perfSettings?.engine === "native_bypass" ? "text-emerald-400" : "text-amber-400") : "text-obs-muted"} font-bold`}
                                 >
                                   {window.electron?.isElectron
-                                    ? "COMPLETO"
+                                    ? (perfSettings?.engine === "native_bypass" ? "COMPLETO (UI BYPASS)" : "PARCIAL (CHROMIUM OVERLAY)")
                                     : "NO DISPONIBLE"}
                                 </span>
                               </div>
