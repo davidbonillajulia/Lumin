@@ -381,9 +381,16 @@ export const buildLuminFileUrl = (pathStr?: string): string | undefined => {
 };
 
 const getFileUrl = (file: any) => {
-  const filePath = file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
+  let filePath = (file as any)?.path;
+  if ((window as any).electron?.getPathForFile) {
+    try {
+      filePath = (window as any).electron.getPathForFile(file);
+    } catch (e) {
+      console.error("Error in getPathForFile for file:", file?.name, e);
+    }
+  }
   if (!filePath) {
-    console.error("No se pudo obtener la ruta del archivo:", file.name);
+    console.error("No se pudo obtener la ruta del archivo:", file?.name);
     return "";
   }
   return buildLuminFileUrl(filePath);
@@ -2931,6 +2938,7 @@ const VideoLayer = ({
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [loadKey, setLoadKey] = useState(0);
 
   useEffect(() => {
     setHasError(false);
@@ -2953,6 +2961,19 @@ const VideoLayer = ({
     }
     return `clip_${clip.id}`;
   }, [layerId, outputId, clip.id]);
+
+  useEffect(() => {
+    const handleProjectLoaded = () => {
+      console.log(`[VideoLayer LOG] Evento 'lumin-project-loaded' capturado para trackerId: ${trackerId}. Incrementando loadKey para remonte de:`, clip.name);
+      setLoadKey((prev) => prev + 1);
+      setHasError(false);
+      setIsReady(false);
+    };
+    window.addEventListener("lumin-project-loaded", handleProjectLoaded);
+    return () => {
+      window.removeEventListener("lumin-project-loaded", handleProjectLoaded);
+    };
+  }, [trackerId, clip.name]);
 
   const activeIsPlaying = isPlaying !== undefined ? isPlaying : (clip.isPlaying !== false);
 
@@ -3557,6 +3578,7 @@ const handleBroadcastMessage = (e: MessageEvent) => {
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
             <video
+              key={loadKey}
               ref={videoRefCallback}
               src={clip.type === "video" ? clip.url : undefined}
               className={`w-full h-full ${!isProgram || clip.fitToScale ? "object-contain" : "object-none"}`}
@@ -3590,11 +3612,26 @@ const handleBroadcastMessage = (e: MessageEvent) => {
               onLoadedData={() => {
                 setIsReady(true);
                 setFirstFrameRendered(true);
+                const savedPath = clip.path || (clip.file && clip.file.path);
+                console.log("[VideoLayer LOG] video.onLoadedData disparado:", {
+                  nombre: clip.name,
+                  id: clip.id,
+                  ruta_guardada: savedPath || "Ninguna",
+                  ruta_restaurada: savedPath || "Ninguna",
+                  url_final: videoRef.current?.src || clip.url,
+                  activeIsPlaying
+                });
+
                 if (activeIsPlaying && videoRef.current) {
                   videoRef.current.play().then(() => {
-                    console.log("Video playing successfully:", clip.url);
+                    console.log("[VideoLayer LOG] video.play() SUCCESS resultado para:", clip.name, {
+                      url: videoRef.current?.src || clip.url
+                    });
                   }).catch((err) => {
-                    console.error("Video play() rejected for:", clip.url, err);
+                    console.error("[VideoLayer LOG] video.play() REJECTED play() rejected para:", clip.name, {
+                      url: videoRef.current?.src || clip.url,
+                      error: err
+                    });
                   });
                 }
               }}
@@ -3605,20 +3642,23 @@ const handleBroadcastMessage = (e: MessageEvent) => {
               onPlaying={() => setFirstFrameRendered(true)}
               onWaiting={() => {
                 if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
-                  videoRef.current.play().catch((err) => console.error("Video play() rejected on waiting:", clip.url, err));
+                  videoRef.current.play().catch((err) => console.error("[VideoLayer LOG] video.play() rejected on waiting:", clip.url, err));
                 }
               }}
               onStalled={() => {
                 if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
-                  videoRef.current.play().catch((err) => console.error("Video play() rejected on stalled:", clip.url, err));
+                  videoRef.current.play().catch((err) => console.error("[VideoLayer LOG] video.play() rejected on stalled:", clip.url, err));
                 }
               }}
               onError={(e) => {
                 const currentSrc = videoRef.current?.src || "";
-                console.error("Error de carga (onerror) en el `<video>` para el clip:", {
-                  clipUrl: clip.url,
-                  clipPath: clip.path || clip.file?.path,
-                  currentSrc: currentSrc,
+                const savedPath = clip.path || (clip.file && clip.file.path);
+                console.error("[VideoLayer LOG] errores de carga (onerror) en `<video>`:", {
+                  nombre: clip.name,
+                  id: clip.id,
+                  ruta_guardada: savedPath || "Ninguna",
+                  ruta_restaurada: savedPath || "Ninguna",
+                  url_final: currentSrc || clip.url,
                   errorEvent: e
                 });
                 
@@ -3633,7 +3673,7 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                   try {
                     const nativeUrl = buildLuminFileUrl(hasPath) || "";
                     if (clip.url !== nativeUrl && nativeUrl) {
-                      console.log("Self-healing video URL from path:", nativeUrl);
+                      console.log("[VideoLayer LOG] Autocorrección de URL usando path absoluto:", nativeUrl);
                       if (onUpdateClip) {
                         onUpdateClip(clip.id, { url: nativeUrl, path: hasPath });
                       } else if (typeof updateClip === "function") {
@@ -3642,7 +3682,7 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                       return;
                     }
                   } catch (err) {
-                    console.error("Self-healing URL resolution failed:", err);
+                    console.error("[VideoLayer LOG] Autocorrección fallida:", err);
                   }
                 }
 
@@ -8227,7 +8267,14 @@ const Library = React.memo(
             thumbnail = url;
           }
 
-          const fileObjPath = f instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f) : (f as any).path;
+          let fileObjPath = (f as any)?.path;
+          if ((window as any).electron?.getPathForFile) {
+            try {
+              fileObjPath = (window as any).electron.getPathForFile(f);
+            } catch (e) {
+              console.error("Error in getPathForFile for library load:", f?.name, e);
+            }
+          }
 
           return {
             id: `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -11004,37 +11051,6 @@ export default function App() {
     try {
       const parsedData = JSON.parse(res.data);
 
-      // 🔥 REPARAR TODAS LAS URL
-      parsedData.libraryFiles = parsedData.libraryFiles?.map((f: any) =>
-        rebuildUrlFromPath(f)
-      );
-
-      parsedData.clips = parsedData.clips?.map((clip: any) =>
-        rebuildUrlFromPath(clip)
-      );
-
-      parsedData.layers = parsedData.layers?.map((layer: any) => ({
-        ...layer,
-        slots: layer.slots?.map((clip: any) =>
-          rebuildUrlFromPath(clip)
-        ),
-      }));
-
-      if (parsedData.deckClips) {
-        Object.keys(parsedData.deckClips).forEach(key => {
-          parsedData.deckClips[key] = parsedData.deckClips[key].map((clip: any) =>
-            rebuildUrlFromPath(clip)
-          );
-        });
-      }
-
-      parsedData.playlists = parsedData.playlists?.map((pl: any) => ({
-        ...pl,
-        clips: pl.clips?.map((clip: any) =>
-          rebuildUrlFromPath(clip)
-        ),
-      }));
-
       // Validar estructura básica
       if (!parsedData.libraryFiles || !parsedData.clips || !parsedData.layers) {
         throw new Error(
@@ -11042,75 +11058,32 @@ export default function App() {
         );
       }
 
-      // Helper function to resolve relative paths against the project file directory
-      const resolvePath = (absPath: string, relPath?: string) => {
-        if (!absPath) return null;
-        if (relPath && (window as any).electron) {
-          try {
-            // Get folder path where .lumin file is located
-            const projectDir = filePath.substring(0, Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/")));
-            const isWindows = filePath.includes("\\");
-            const separator = isWindows ? "\\" : "/";
-            
-            const relSegments = relPath.replace(/\\/g, "/").split("/");
-            let dirSegments = projectDir.replace(/\\/g, "/").split("/");
-            
-            for (const segment of relSegments) {
-              if (segment === ".") {
-                continue;
-              } else if (segment === "..") {
-                dirSegments.pop();
-              } else {
-                dirSegments.push(segment);
-              }
-            }
-            
-            return dirSegments.join(separator);
-          } catch (e) {
-            // Fallback to saved absolute path
-          }
-        }
-        return absPath;
-      };
+      console.log(`[LUMIN Project Loader] Iniciando carga de proyecto nativo: ${filePath}`);
 
-      // Native fallback path resolution using our robust IPC check
-      const resolveValidPathNative = async (absPath?: string, relPath?: string): Promise<string | undefined> => {
-        if (!absPath) return undefined;
-        if ((window as any).electron?.resolveValidPath) {
-          try {
-            return await (window as any).electron.resolveValidPath(absPath, relPath, filePath);
-          } catch (e) {
-            console.error("Native path resolution failed, falling back:", e);
-          }
-        }
-        return resolvePath(absPath, relPath) || absPath;
-      };
-
-      const getReconstructedClipAsync = async (clip: any) => {
+      // Función para reconstruir un clip con logs detallados
+      const reconstructClipDirectly = (clip: any) => {
         if (!clip) return null;
-        const clipPath = clip.path || (clip.file && clip.file.path);
-        const relPath = clip.relativePath;
         
-        let resolvedPath = clipPath;
-        if (clipPath) {
-          resolvedPath = await resolveValidPathNative(clipPath, relPath);
-        }
-        
-        let newUrl = clip.url;
-        const targetPath = resolvedPath || clipPath;
-        if (targetPath && (window as any).electron) {
-          const nativeUrl = buildLuminFileUrl(targetPath);
+        const savedPath = clip.path; // Ruta absoluta guardada
+        const restoredPath = savedPath; // Restaurada directa (Windows absoluta)
+        let finalUrl = clip.url;
+
+        if (savedPath && (window as any).electron) {
+          const nativeUrl = buildLuminFileUrl(savedPath);
           if (nativeUrl) {
-            newUrl = nativeUrl;
-            console.log("Restaurando clip asíncrono:", {
-              ruta_guardada: clipPath,
-              ruta_restaurada: targetPath,
-              url_final: nativeUrl,
-              nombre: clip.name
-            });
+            finalUrl = nativeUrl;
           }
         }
-        
+
+        console.log("[LUMIN Project Loader LOG] Clip restaurado:", {
+          nombre: clip.name,
+          id: clip.id,
+          tipo: clip.type,
+          ruta_guardada: savedPath || "Ninguna",
+          ruta_restaurada: restoredPath || "Ninguna",
+          url_final: finalUrl || "Ninguna"
+        });
+
         let newThumbnail = clip.thumbnail;
         if (newThumbnail?.startsWith("blob:")) {
           newThumbnail = undefined;
@@ -11118,62 +11091,53 @@ export default function App() {
 
         return {
           ...clip,
-          url: newUrl,
-          file: resolvedPath ? { path: resolvedPath, name: clip.name } : null,
-          path: resolvedPath || undefined,
+          url: finalUrl,
+          path: restoredPath || undefined,
+          file: restoredPath ? { path: restoredPath, name: clip.name } : null,
           thumbnail: newThumbnail,
         };
       };
 
-      // Re-estructurar files para la sesión local de forma asíncrona y nativa
-      const reconstructedFiles = await Promise.all(
-        parsedData.libraryFiles.map(async (f: any) => {
-          const clipPath = f.path || (f.file && f.file.path);
-          const relPath = f.relativePath;
-          
-          let resolvedPath = clipPath;
-          if (clipPath) {
-            resolvedPath = await resolveValidPathNative(clipPath, relPath);
-          }
-          
-          let newUrl = f.url;
-          const targetPath = resolvedPath || clipPath;
-          if (targetPath && (window as any).electron) {
-            const nativeUrl = buildLuminFileUrl(targetPath);
-            if (nativeUrl) {
-              newUrl = nativeUrl;
-              console.log("Restaurando libraryFile:", {
-                ruta_guardada: clipPath,
-                ruta_restaurada: targetPath,
-                url_final: nativeUrl,
-                nombre: f.name
-              });
-            }
-          }
-          
-          let newThumbnail = f.thumbnail;
-          if (newThumbnail?.startsWith("blob:")) {
-            newThumbnail = undefined;
-          }
+      // 1. Reconstruir libraryFiles
+      const reconstructedFiles = (parsedData.libraryFiles || []).map((f: any) => {
+        const savedPath = f.path;
+        let finalUrl = f.url;
 
-          return {
-            id: f.id || `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            name: f.name,
-            type: f.type,
-            url: newUrl,
-            file: resolvedPath ? { path: resolvedPath, name: f.name } : null,
-            path: resolvedPath || undefined,
-            thumbnail: newThumbnail,
-          };
-        })
-      );
+        if (savedPath && (window as any).electron) {
+          const nativeUrl = buildLuminFileUrl(savedPath);
+          if (nativeUrl) {
+            finalUrl = nativeUrl;
+          }
+        }
 
-      // Reconstruir clips de la sesión
-      const reconstructedClips = await Promise.all(
-        parsedData.clips.map((clip: any) => getReconstructedClipAsync(clip))
-      );
+        console.log("[LUMIN Project Loader LOG] LibraryFile restaurado:", {
+          nombre: f.name,
+          id: f.id,
+          ruta_guardada: savedPath || "Ninguna",
+          ruta_restaurada: savedPath || "Ninguna",
+          url_final: finalUrl || "Ninguna"
+        });
 
-      // Reconstruir deckClips (Record<string, Clip[]>)
+        let newThumbnail = f.thumbnail;
+        if (newThumbnail?.startsWith("blob:")) {
+          newThumbnail = undefined;
+        }
+
+        return {
+          id: f.id || `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          name: f.name,
+          type: f.type,
+          url: finalUrl,
+          path: savedPath || undefined,
+          file: savedPath ? { path: savedPath, name: f.name } : null,
+          thumbnail: newThumbnail,
+        };
+      });
+
+      // 2. Reconstruir clips de la sesión
+      const reconstructedClips = (parsedData.clips || []).map(reconstructClipDirectly).filter(Boolean);
+
+      // 3. Reconstruir deckClips (Record<string, Clip[]>)
       const reconstructedDeckClips: Record<string, Clip[]> = {};
       if (
         parsedData.deckClips &&
@@ -11182,19 +11146,17 @@ export default function App() {
       ) {
         for (const [deckName, clipsList] of Object.entries(parsedData.deckClips)) {
           if (Array.isArray(clipsList)) {
-            const resolvedList = await Promise.all(
-              clipsList.map((clip: any) => getReconstructedClipAsync(clip))
-            );
-            reconstructedDeckClips[deckName] = resolvedList.filter(Boolean) as Clip[];
+            reconstructedDeckClips[deckName] = clipsList
+              .map(reconstructClipDirectly)
+              .filter(Boolean) as Clip[];
           } else {
             reconstructedDeckClips[deckName] = [];
           }
         }
       } else if (Array.isArray(parsedData.deckClips)) {
-        const resolvedList = await Promise.all(
-          parsedData.deckClips.map((clip: any) => getReconstructedClipAsync(clip))
-        );
-        reconstructedDeckClips["Videos"] = resolvedList.filter(Boolean) as Clip[];
+        reconstructedDeckClips["Videos"] = parsedData.deckClips
+          .map(reconstructClipDirectly)
+          .filter(Boolean) as Clip[];
         reconstructedDeckClips["Imágenes"] = [];
         reconstructedDeckClips["PDF"] = [];
         reconstructedDeckClips["Video IN"] = [];
@@ -11205,31 +11167,17 @@ export default function App() {
         reconstructedDeckClips["Video IN"] = [];
       }
 
-      // Reconstruir layers
-      const reconstructedLayers = await Promise.all(
-        (parsedData.layers || []).map(async (layer: any) => {
-          const resolvedSlots = await Promise.all(
-            (layer.slots || []).map((clip: any) => getReconstructedClipAsync(clip))
-          );
-          return {
-            ...layer,
-            slots: resolvedSlots,
-          };
-        })
-      );
+      // 4. Reconstruir layers
+      const reconstructedLayers = (parsedData.layers || []).map((layer: any) => ({
+        ...layer,
+        slots: (layer.slots || []).map(reconstructClipDirectly).filter(Boolean),
+      }));
 
-      // Reconstruir playlists
-      const reconstructedPlaylists = await Promise.all(
-        (parsedData.playlists || []).map(async (playlist: any) => {
-          const resolvedClips = await Promise.all(
-            (playlist.clips || []).map((clip: any) => getReconstructedClipAsync(clip))
-          );
-          return {
-            ...playlist,
-            clips: resolvedClips,
-          };
-        })
-      );
+      // 5. Reconstruir playlists
+      const reconstructedPlaylists = (parsedData.playlists || []).map((playlist: any) => ({
+        ...playlist,
+        clips: (playlist.clips || []).map(reconstructClipDirectly).filter(Boolean),
+      }));
 
       // Aplicar estados principales
       setLibraryFiles(reconstructedFiles);
@@ -11250,6 +11198,19 @@ export default function App() {
         setOutputTransitionTargets(parsedData.outputTransitionTargets);
       if (parsedData.outputOffStates)
         setOutputOffStates(parsedData.outputOffStates);
+      if (parsedData.masterVolume !== undefined)
+        setMasterVolume(parsedData.masterVolume);
+      if (parsedData.playlists) setPlaylists(reconstructedPlaylists);
+      if (parsedData.pipLayers) setPipLayers(parsedData.pipLayers);
+      if (parsedData.allScreenSettings)
+        setAllScreenSettings(parsedData.allScreenSettings);
+      if (parsedData.outputs) setOutputs(parsedData.outputs);
+      if (parsedData.outputPrograms)
+        setOutputPrograms(parsedData.outputPrograms);
+      if (parsedData.outputTransitionTargets)
+        setOutputTransitionTargets(parsedData.outputTransitionTargets);
+      if (parsedData.outputOffStates)
+        setOutputOffStates(parsedData.outputOffStates);
       if (parsedData.layerOutputs) setLayerOutputs(parsedData.layerOutputs);
 
       // Restaurar variables globales
@@ -11258,9 +11219,9 @@ export default function App() {
       if (parsedData.programVolume !== undefined)
         setProgramVolume(parsedData.programVolume);
       if (parsedData.selectedAudioInput !== undefined)
-        setSelectedAudioInput("none");
+        setSelectedAudioInput(parsedData.selectedAudioInput);
       if (parsedData.selectedAudioOutput !== undefined)
-        setSelectedAudioOutput("none");
+        setSelectedAudioOutput(parsedData.selectedAudioOutput);
       if (parsedData.audioVolumes !== undefined)
         setAudioVolumes(parsedData.audioVolumes);
       if (parsedData.mutedFaders !== undefined)
@@ -11285,6 +11246,12 @@ export default function App() {
 
       setCurrentLuminPath(filePath);
       showCustomAlert("Proyecto Cargado", `Proyecto cargado con éxito: ${filePath}`, "success");
+
+      // Forzar recarga completa de todos los elementos <video> detectando que el proyecto se ha restaurado
+      setTimeout(() => {
+        console.log("[LUMIN Project Loader LOG] Despachando evento 'lumin-project-loaded' para forzar remonte de reproductores.");
+        window.dispatchEvent(new CustomEvent("lumin-project-loaded"));
+      }, 50);
 
       // Broadcast the newly hydrated state model to keep secondary output/timer screens completely in sync
       setTimeout(() => {
@@ -11317,7 +11284,12 @@ export default function App() {
         });
       }, 300);
     } catch (err: any) {
-      showCustomAlert("Error de Procesamiento", "Error al procesar el archivo LUMIN: " + err.message, "error");
+      console.error("[LUMIN Project Loader] Error importando proyecto:", err);
+      showCustomAlert(
+        "Error de Carga",
+        "No se pudo cargar el estado del archivo `.lumin`: " + err.message,
+        "error",
+      );
     }
   };
 
@@ -13269,22 +13241,36 @@ export default function App() {
       let type = "";
       let itemPath = undefined;
 
-      if (item instanceof File) {
-        file = item;
-        name = file.name;
-        type = file.type;
-        const localPath = file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
+      if (item instanceof File || (item && (item.name || item.path))) {
+        file = item instanceof File ? item : null;
+        name = item.name || "";
+        type = item.type || "";
+        let localPath = (item as any)?.path;
+        if ((window as any).electron?.getPathForFile) {
+          try {
+            localPath = (window as any).electron.getPathForFile(item);
+          } catch (e) {
+            console.error("Error in getPathForFile in handleAddClips:", name, e);
+          }
+        }
         url =
           window.electron && localPath
-            ? getFileUrl(file)
-            : URL.createObjectURL(file);
+            ? getFileUrl(item)
+            : (file ? URL.createObjectURL(file) : "");
         itemPath = localPath || undefined;
       } else {
         file = item.file;
         name = item.name;
         type = item.type;
         url = item.url;
-        const fallbackPath = file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any)?.path;
+        let fallbackPath = (file as any)?.path;
+        if (file && (window as any).electron?.getPathForFile) {
+          try {
+            fallbackPath = (window as any).electron.getPathForFile(file);
+          } catch (e) {
+            console.error("Error in getPathForFile fallback in handleAddClips:", name, e);
+          }
+        }
         itemPath = item.path || fallbackPath;
       }
 
@@ -13953,7 +13939,14 @@ export default function App() {
       // Handle OS files
       const files = Array.from(e.dataTransfer.files);
       clipsToClone = files.map((f) => {
-        const path = f instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f) : (f as any).path;
+        let path = (f as any)?.path;
+        if ((window as any).electron?.getPathForFile) {
+          try {
+            path = (window as any).electron.getPathForFile(f);
+          } catch (e) {
+            console.error("Error in getPathForFile for OS file drop:", f?.name, e);
+          }
+        }
         let pUrl = URL.createObjectURL(f);
         if (path) {
           const nativeUrl = buildLuminFileUrl(path);
