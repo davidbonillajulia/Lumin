@@ -92,7 +92,8 @@ protocol.registerSchemesAsPrivileged([
       bypassCSP: true, 
       secure: true, 
       supportFetchAPI: true, 
-      stream: true 
+      stream: true,
+      corsEnabled: true
     } 
   }
 ]);
@@ -252,9 +253,9 @@ if (!gotTheLock) {
           decodedPath = decodeURIComponent(rawPath);
         }
         
-        // On Windows or paths with a "/C:" style drive letter prefix, remove the leading slash
-        if (decodedPath.startsWith('/') && (process.platform === 'win32' || decodedPath.match(/^\/[a-zA-Z]:/))) {
-          decodedPath = decodedPath.slice(1);
+        // On Windows or paths with a "/C:" style drive letter prefix, remove the leading slashes
+        if (process.platform === 'win32' || decodedPath.match(/^\/+([a-zA-Z]:)/)) {
+          decodedPath = decodedPath.replace(/^\/+/, '');
         }
         
         // Ensure backslashes are normalized on Windows before putting into pathToFileURL

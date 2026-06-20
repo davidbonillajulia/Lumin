@@ -373,8 +373,7 @@ export const buildLuminFileUrl = (pathStr?: string): string | undefined => {
   if (!pathStr) return undefined;
   try {
     const normalized = pathStr.replace(/\\/g, "/");
-    // URL encode the path segments so that special characters like '#' and '?' are preserved for the fast electron protocol stream
-    const encoded = normalized.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    const encoded = normalized.split('/').map(segment => encodeURIComponent(segment)).join('/').replace(/%3A/gi, ':');
     return `lumin-file:///${encoded}`;
   } catch (e) {
     return undefined;
@@ -382,7 +381,7 @@ export const buildLuminFileUrl = (pathStr?: string): string | undefined => {
 };
 
 const getFileUrl = (file: File) => {
-  const filePath = window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
+  const filePath = (file as any).path;
   if (!filePath) return URL.createObjectURL(file);
 
   try {
@@ -3551,10 +3550,11 @@ const handleBroadcastMessage = (e: MessageEvent) => {
           />
         )}
         {hasError ? (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-red-900/40 border border-red-500/50 p-4 text-center aspect-video">
+          <div className="w-full h-full flex flex-col items-center justify-center bg-red-900/40 border border-red-500/50 p-4 text-center aspect-video overflow-hidden">
             <AlertCircle size={32} className="text-red-500 mb-2" />
-            <p className="text-white font-medium text-sm">Media no encontrada</p>
-            <p className="text-red-200 text-xs max-w-xs mt-1">Este archivo local no está disponible en esta sesión. Vuelve a añadirlo a la biblioteca.</p>
+            <p className="text-white font-medium text-sm">Error de reproducción</p>
+            <p className="text-red-200 text-xs max-w-xs mt-1 break-all">URL: {clip.url?.slice(0, 50)}...</p>
+            <p className="text-red-200 text-xs max-w-xs mt-1">Este archivo no se puede cargar. Puede que su sesión haya expirado (blob) o el formato no sea soportado.</p>
           </div>
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
@@ -3640,7 +3640,7 @@ const handleBroadcastMessage = (e: MessageEvent) => {
                 }
 
                 // If it's a blob URL that failed from a previous session on the web, trying to load it will infinite loop.
-                if (currentSrc.startsWith("blob:") || !currentSrc.startsWith("http")) {
+                if (currentSrc.startsWith("blob:") || (!currentSrc.startsWith("http") && !currentSrc.startsWith("lumin-file:"))) {
                   console.warn("Media source dead. Marking as errored.");
                   setHasError(true);
                   if (videoRef.current) {
@@ -8221,7 +8221,7 @@ const Library = React.memo(
             thumbnail = url;
           }
 
-          const fileObjPath = window.electron?.getPathForFile ? window.electron.getPathForFile(f) : (f as any).path;
+          const fileObjPath = (f as any).path;
 
           return {
             id: `lib_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -8361,7 +8361,7 @@ const Library = React.memo(
                       "libraryFiles",
                       JSON.stringify(
                         filesToDrag.map((f) => {
-                          const fileObjPath = f.file && f.file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f.file) : (f.file ? f.file.path : undefined);
+                          const fileObjPath = f.file ? f.file.path : undefined;
                           return {
                             name: f.name,
                             url: f.url,
@@ -10793,13 +10793,7 @@ export default function App() {
           }
           // Repair broken object URLs if they are from a previous session
           if ((updated.url?.startsWith("blob:") || !updated.url) && (window as any).electron && updated.path) {
-            const urlFromPath = (p: string) => {
-              try {
-                const normalized = p.replace(/\\/g, "/");
-                return `lumin-file:///${normalized}`;
-              } catch (e) { return null; }
-            };
-            const nativeUrl = urlFromPath(updated.path);
+            const nativeUrl = buildLuminFileUrl(updated.path);
             if (nativeUrl) {
               updated.url = nativeUrl;
               changed = true;
@@ -10858,7 +10852,7 @@ export default function App() {
 
     const sanitizeClip = (clip: any) => {
       if (!clip) return null;
-      const fileObjPath = clip.file && clip.file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(clip.file) : (clip.file ? clip.file.path : undefined);
+      const fileObjPath = clip.file ? clip.file.path : undefined;
       const filePath = clip.path || fileObjPath;
       return {
         ...clip,
@@ -10871,7 +10865,7 @@ export default function App() {
     return JSON.stringify(
       {
         libraryFiles: libraryFiles.map((f: any) => {
-          const fileObjPath = f.file && f.file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(f.file) : (f.file ? f.file.path : undefined);
+          const fileObjPath = f.file ? f.file.path : undefined;
           const fPath = f.path || fileObjPath;
           return {
             id: f.id,
@@ -13261,7 +13255,7 @@ export default function App() {
         file = item;
         name = file.name;
         type = file.type;
-        const localPath = window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any).path;
+        const localPath = (file as any).path;
         url =
           window.electron && localPath
             ? getFileUrl(file)
@@ -13272,7 +13266,7 @@ export default function App() {
         name = item.name;
         type = item.type;
         url = item.url;
-        const fallbackPath = file && file instanceof File && window.electron?.getPathForFile ? window.electron.getPathForFile(file) : (file as any)?.path;
+        const fallbackPath = (file as any)?.path;
         itemPath = item.path || fallbackPath;
       }
 
@@ -13941,7 +13935,7 @@ export default function App() {
       // Handle OS files
       const files = Array.from(e.dataTransfer.files);
       clipsToClone = files.map((f) => {
-        const path = window.electron?.getPathForFile ? window.electron.getPathForFile(f) : ((window as any).electron && (f as any).path ? (f as any).path : undefined);
+        const path = (f as any).path;
         let pUrl = URL.createObjectURL(f);
         if (path) {
           const nativeUrl = buildLuminFileUrl(path);
