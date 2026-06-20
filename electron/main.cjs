@@ -237,21 +237,31 @@ if (!gotTheLock) {
       try {
         const { pathToFileURL } = require('url');
         const urlStr = request.url;
-        let decodedPath = "";
-        
-        try {
-          const urlObj = new URL(urlStr);
-          decodedPath = decodeURIComponent(urlObj.pathname);
-        } catch (e) {
-          // Fallback to manual slice if URL parsing has an issue (e.g. malformed custom protocols)
-          let rawPath = urlStr;
-          if (rawPath.startsWith('lumin-file://')) {
-            rawPath = rawPath.slice(13);
-          } else if (rawPath.startsWith('lumin-file:')) {
-            rawPath = rawPath.slice(11);
-          }
-          decodedPath = decodeURIComponent(rawPath);
+        console.log("[Lumin protocol] Incoming URL:", urlStr);
+
+        let rawPath = urlStr;
+        // Strip query parameters and hash to get the pure path context
+        const queryIndex = rawPath.indexOf('?');
+        if (queryIndex !== -1) {
+          rawPath = rawPath.slice(0, queryIndex);
         }
+        const hashIndex = rawPath.indexOf('#');
+        if (hashIndex !== -1) {
+          rawPath = rawPath.slice(0, hashIndex);
+        }
+
+        // Manually strip the custom scheme prefix rather than using new URL pathname,
+        // because standard URL parsers can omit the drive letter on Windows (treating it as a host)
+        if (rawPath.startsWith('lumin-file:///')) {
+          rawPath = rawPath.slice(13);
+        } else if (rawPath.startsWith('lumin-file://')) {
+          rawPath = rawPath.slice(12);
+        } else if (rawPath.startsWith('lumin-file:')) {
+          rawPath = rawPath.slice(11);
+        }
+
+        let decodedPath = decodeURIComponent(rawPath);
+        console.log("[Lumin protocol] Stripped and decoded raw path:", decodedPath);
         
         // On Windows or paths with a "/C:" style drive letter prefix, remove the leading slashes
         if (process.platform === 'win32' || decodedPath.match(/^\/+([a-zA-Z]:)/)) {
@@ -260,7 +270,10 @@ if (!gotTheLock) {
         
         // Ensure backslashes are normalized on Windows before putting into pathToFileURL
         const nativePath = process.platform === 'win32' ? decodedPath.replace(/\//g, '\\') : decodedPath;
+        console.log("[Lumin protocol] Native path determined:", nativePath);
+
         const fileUrl = pathToFileURL(nativePath).toString();
+        console.log("[Lumin protocol] Mapping to local file URL:", fileUrl);
         
         // CRITICAL: We pass request.method and request.headers.
         // This includes the standard 'Range' request header from the <video> tag,
