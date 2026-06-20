@@ -382,7 +382,7 @@ export const buildLuminFileUrl = (pathStr?: string): string | undefined => {
 
 const getFileUrl = (file: any) => {
   let filePath = (file as any)?.path;
-  if ((window as any).electron?.getPathForFile) {
+  if (file instanceof File && (window as any).electron?.getPathForFile) {
     try {
       filePath = (window as any).electron.getPathForFile(file);
     } catch (e) {
@@ -8268,7 +8268,7 @@ const Library = React.memo(
           }
 
           let fileObjPath = (f as any)?.path;
-          if ((window as any).electron?.getPathForFile) {
+          if (f instanceof File && (window as any).electron?.getPathForFile) {
             try {
               fileObjPath = (window as any).electron.getPathForFile(f);
             } catch (e) {
@@ -13246,7 +13246,7 @@ export default function App() {
         name = item.name || "";
         type = item.type || "";
         let localPath = (item as any)?.path;
-        if ((window as any).electron?.getPathForFile) {
+        if (item instanceof File && (window as any).electron?.getPathForFile) {
           try {
             localPath = (window as any).electron.getPathForFile(item);
           } catch (e) {
@@ -13264,7 +13264,7 @@ export default function App() {
         type = item.type;
         url = item.url;
         let fallbackPath = (file as any)?.path;
-        if (file && (window as any).electron?.getPathForFile) {
+        if (file instanceof File && (window as any).electron?.getPathForFile) {
           try {
             fallbackPath = (window as any).electron.getPathForFile(file);
           } catch (e) {
@@ -13940,7 +13940,7 @@ export default function App() {
       const files = Array.from(e.dataTransfer.files);
       clipsToClone = files.map((f) => {
         let path = (f as any)?.path;
-        if ((window as any).electron?.getPathForFile) {
+        if (f instanceof File && (window as any).electron?.getPathForFile) {
           try {
             path = (window as any).electron.getPathForFile(f);
           } catch (e) {
