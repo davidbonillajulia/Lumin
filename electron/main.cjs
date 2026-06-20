@@ -267,6 +267,14 @@ if (!gotTheLock) {
         if (process.platform === 'win32' || decodedPath.match(/^\/+([a-zA-Z]:)/)) {
           decodedPath = decodedPath.replace(/^\/+/, '');
         }
+
+        // On Windows, check if the path starts with a drive letter missing a colon, e.g. "c/Users" -> "c:/Users"
+        if (process.platform === 'win32') {
+          if (decodedPath.match(/^([a-zA-Z])([\/\\].*)/)) {
+            decodedPath = decodedPath.replace(/^([a-zA-Z])([\/\\].*)/, '$1:$2');
+            console.log("[Lumin protocol] Restored drive letter colon for Windows:", decodedPath);
+          }
+        }
         
         // Ensure backslashes are normalized on Windows before putting into pathToFileURL
         const nativePath = process.platform === 'win32' ? decodedPath.replace(/\//g, '\\') : decodedPath;
