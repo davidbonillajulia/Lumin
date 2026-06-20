@@ -10952,6 +10952,8 @@ export default function App() {
         outputOffStates,
         masterVolume,
         programVolume,
+        usbInVolume,
+        usbOutVolume,
         selectedAudioInput,
         selectedAudioOutput,
         audioVolumes,
@@ -10966,6 +10968,7 @@ export default function App() {
         isTransmitting,
         currentDeck,
         isDarkMode,
+        launchedScreens,
       },
       null,
       2,
@@ -11168,10 +11171,19 @@ export default function App() {
       }
 
       // 4. Reconstruir layers
-      const reconstructedLayers = (parsedData.layers || []).map((layer: any) => ({
-        ...layer,
-        slots: (layer.slots || []).map(reconstructClipDirectly).filter(Boolean),
-      }));
+      const reconstructedLayers = (parsedData.layers || []).map((layer: any) => {
+        let rawSlots = (layer.slots || []).map((slot: any) => slot ? reconstructClipDirectly(slot) : null);
+        while (rawSlots.length < 10) {
+          rawSlots.push(null);
+        }
+        if (rawSlots.length > 10) {
+          rawSlots = rawSlots.slice(0, 10);
+        }
+        return {
+          ...layer,
+          slots: rawSlots,
+        };
+      });
 
       // 5. Reconstruir playlists
       const reconstructedPlaylists = (parsedData.playlists || []).map((playlist: any) => ({
@@ -11214,18 +11226,31 @@ export default function App() {
       if (parsedData.layerOutputs) setLayerOutputs(parsedData.layerOutputs);
 
       // Restaurar variables globales
-      if (parsedData.masterVolume !== undefined)
+      if (parsedData.masterVolume !== undefined) {
         setMasterVolume(parsedData.masterVolume);
+        (window.electron as any)?.setWindowsVolume?.(parsedData.masterVolume).catch(() => {});
+      }
       if (parsedData.programVolume !== undefined)
         setProgramVolume(parsedData.programVolume);
+      if (parsedData.usbInVolume !== undefined) {
+        setUsbInVolume(parsedData.usbInVolume);
+      }
+      if (parsedData.usbOutVolume !== undefined) {
+        setUsbOutVolume(parsedData.usbOutVolume);
+        (window.electron as any)?.setWindowsVolume?.(parsedData.usbOutVolume).catch(() => {});
+      }
       if (parsedData.selectedAudioInput !== undefined)
         setSelectedAudioInput(parsedData.selectedAudioInput);
       if (parsedData.selectedAudioOutput !== undefined)
         setSelectedAudioOutput(parsedData.selectedAudioOutput);
       if (parsedData.audioVolumes !== undefined)
         setAudioVolumes(parsedData.audioVolumes);
-      if (parsedData.mutedFaders !== undefined)
+      if (parsedData.mutedFaders !== undefined) {
         setMutedFaders(parsedData.mutedFaders);
+        if (parsedData.mutedFaders["Master"] !== undefined) {
+          (window.electron as any)?.setWindowsMute?.(parsedData.mutedFaders["Master"]).catch(() => {});
+        }
+      }
       if (parsedData.crossfaderValue !== undefined)
         setCrossfaderValue(parsedData.crossfaderValue);
       if (parsedData.previewClipId !== undefined)
@@ -11243,6 +11268,18 @@ export default function App() {
         setCurrentDeck(parsedData.currentDeck);
       if (parsedData.isDarkMode !== undefined)
         setIsDarkMode(parsedData.isDarkMode);
+
+      if (parsedData.launchedScreens !== undefined) {
+        setLaunchedScreens(parsedData.launchedScreens);
+        Object.entries(parsedData.launchedScreens).forEach(([screenKey, isLaunched]) => {
+          if (isLaunched) {
+            setTimeout(() => {
+              console.log(`[LUMIN Project Loader] Restaurando ventana de salida automática para: ${screenKey}`);
+              launchOutputScreen(screenKey);
+            }, 1000);
+          }
+        });
+      }
 
       setCurrentLuminPath(filePath);
       showCustomAlert("Proyecto Cargado", `Proyecto cargado con éxito: ${filePath}`, "success");
@@ -12580,69 +12617,31 @@ export default function App() {
     }));
   };
 
-  const handleLaunchOutput = () => {
+  function launchOutputScreen(screenIdStr: string) {
+    const screenId = (screenIdStr === "default" || screenIdStr === "primary") ? null : screenIdStr;
+    const screenKey = screenId || "default";
+
     const selectedScreen = externalScreens.find(
-      (s) => s.id === selectedScreenId,
+      (s) => s.id === screenId,
     );
 
-    // Check if window is already open
-    const screenKey = selectedScreenId || "default";
-    const existingWin = outputWindowsRef.current[screenKey];
-    const isAlreadyLaunched = launchedScreens[screenKey];
-
-    if (isAlreadyLaunched || (existingWin && !existingWin.closed)) {
-      // Close standard web window
-      if (existingWin && !existingWin.closed) {
-        try {
-          existingWin.close();
-        } catch (e) {
-          console.error("Error closing window ref:", e);
-        }
-      }
-      outputWindowsRef.current[screenKey] = null;
-
-      // Close in Electron if available
-      if (
-        window.electron &&
-        (window.electron.closeOutput || window.electron.launchOutput)
-      ) {
-        if (typeof window.electron.closeOutput === "function") {
-          window.electron.closeOutput(selectedScreenId || "primary");
-        } else {
-          // Fallback legacy behavior if IPC not registered or just toggle state
-          console.warn(
-            "Electron closeOutput is not exposed yet. State toggled.",
-          );
-        }
-      }
-
-      setLaunchedScreens((prev) => ({ ...prev, [screenKey]: false }));
-
-      // Notify output channels if any
-      outputChannel.current?.postMessage({
-        type: "CLOSE_WINDOW",
-        payload: { screenId: selectedScreenId },
+    // Check if running in Electron
+    if (window.electron && window.electron.launchOutput) {
+      window.electron.launchOutput({
+        screenId: screenId || "primary",
+        url: `/?mode=output${screenId ? `&screenId=${screenId}` : ""}`,
       });
+      setIsTransmitting(true);
+      setIsLive(true);
+      setLaunchedScreens((prev) => ({ ...prev, [screenKey]: true }));
       return;
     }
 
     // Construct the URL
     const url = new URL(window.location.href);
     url.searchParams.set("mode", "output");
-    if (selectedScreenId) {
-      url.searchParams.set("screenId", selectedScreenId);
-    }
-
-    // Check if running in Electron
-    if (window.electron && window.electron.launchOutput) {
-      window.electron.launchOutput({
-        screenId: selectedScreenId || "primary",
-        url: `/?mode=output${selectedScreenId ? `&screenId=${selectedScreenId}` : ""}`,
-      });
-      setIsTransmitting(true);
-      setIsLive(true);
-      setLaunchedScreens((prev) => ({ ...prev, [screenKey]: true }));
-      return;
+    if (screenId) {
+      url.searchParams.set("screenId", screenId);
     }
 
     // Features for a clean output window
@@ -12714,6 +12713,50 @@ export default function App() {
     } catch (err) {
       console.error("Error al lanzar salida:", err);
     }
+  }
+
+  const handleLaunchOutput = () => {
+    const screenKey = selectedScreenId || "default";
+    const existingWin = outputWindowsRef.current[screenKey];
+    const isAlreadyLaunched = launchedScreens[screenKey];
+
+    if (isAlreadyLaunched || (existingWin && !existingWin.closed)) {
+      // Close standard web window
+      if (existingWin && !existingWin.closed) {
+        try {
+          existingWin.close();
+        } catch (e) {
+          console.error("Error closing window ref:", e);
+        }
+      }
+      outputWindowsRef.current[screenKey] = null;
+
+      // Close in Electron if available
+      if (
+        window.electron &&
+        (window.electron.closeOutput || window.electron.launchOutput)
+      ) {
+        if (typeof window.electron.closeOutput === "function") {
+          window.electron.closeOutput(selectedScreenId || "primary");
+        } else {
+          // Fallback legacy behavior if IPC not registered or just toggle state
+          console.warn(
+            "Electron closeOutput is not exposed yet. State toggled.",
+          );
+        }
+      }
+
+      setLaunchedScreens((prev) => ({ ...prev, [screenKey]: false }));
+
+      // Notify output channels if any
+      outputChannel.current?.postMessage({
+        type: "CLOSE_WINDOW",
+        payload: { screenId: selectedScreenId },
+      });
+      return;
+    }
+
+    launchOutputScreen(selectedScreenId || "default");
   };
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(
     null,
