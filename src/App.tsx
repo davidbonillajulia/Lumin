@@ -901,6 +901,7 @@ const ClipCard = React.memo(
     isDarkMode,
     isSelected,
     onDelete,
+    onUpdateClip,
   }: {
     clip: Clip;
     onSelect: () => void;
@@ -908,6 +909,7 @@ const ClipCard = React.memo(
     isDarkMode: boolean;
     isSelected: boolean;
     onDelete?: () => void;
+    onUpdateClip?: (id: string, updates: Partial<Clip>) => void;
   }) => (
     <div
       draggable
@@ -940,6 +942,7 @@ const ClipCard = React.memo(
               <PPTSlideRenderer
                 clip={clip}
                 pageNumber={clip.currentPage || 1}
+                onUpdateClip={onUpdateClip || updateClip}
                 isThumbnail={true}
               />
             ) : (
@@ -2989,47 +2992,64 @@ const VideoLayer = ({
         loopMode: "native_seamless",
         highResOptimization: true,
         maxThreads: 4,
+        optimizeCockpitPreview: true,
       },
     [perfSettings],
   );
 
+  const shouldOptimizeBypass = useMemo(() => {
+    return (
+      activePerf.optimizeCockpitPreview !== false &&
+      isTransmitting &&
+      isProgram &&
+      !isSlave &&
+      (clip.type === "video" || clip.type === "videoinput")
+    );
+  }, [activePerf.optimizeCockpitPreview, isTransmitting, isProgram, isSlave, clip.type]);
+
   useEffect(() => {
-    if (clip.type === "video" || clip.type === "videoinput") {
-      setFirstFrameRendered(false);
-    } else {
+    if (shouldOptimizeBypass) {
       setFirstFrameRendered(true);
+      setIsReady(true);
+      onReady?.();
+    } else {
+      if (clip.type === "video" || clip.type === "videoinput") {
+        setFirstFrameRendered(false);
+      } else {
+        setFirstFrameRendered(true);
+      }
     }
     earlyEndTriggered.current = false;
     earlyLoopTriggered.current = false;
-  }, [clip.id, clip.url, clip.type]);
+  }, [clip.id, clip.url, clip.type, shouldOptimizeBypass, onReady]);
 
   // CRITICAL: Delayed GPU decoder release on unmount to allow smooth AnimatePresence exit transitions.
   // This prevents instant black screen flashes during fade transitions.
-    useEffect(() => {
+  useEffect(() => {
     return () => {
-    const video = videoRef.current;
+      const video = videoRef.current;
 
-    if (cleanupTimeoutRef.current) {
-      clearTimeout(cleanupTimeoutRef.current);
-    }
+      if (cleanupTimeoutRef.current) {
+        clearTimeout(cleanupTimeoutRef.current);
+      }
 
-    if (video) {
-      const cleanDelay = Math.max(
-        100,
-        (transitionDuration || 0.4) * 1000 + 100,
-      );
+      if (video) {
+        const cleanDelay = Math.max(
+          100,
+          (transitionDuration || 0.4) * 1000 + 100,
+        );
 
-      cleanupTimeoutRef.current = setTimeout(() => {
-        try {
-          video.pause();
-          video.src = "";
-          video.removeAttribute("src");
-          video.load();
-        } catch (e) {}
-      }, cleanDelay);
-    }
-  };
-}, [transitionDuration]);
+        cleanupTimeoutRef.current = setTimeout(() => {
+          try {
+            video.pause();
+            video.src = "";
+            video.removeAttribute("src");
+            video.load();
+          } catch (e) {}
+        }, cleanDelay);
+      }
+    };
+  }, [transitionDuration]);
 
   // Sync native video loop property directly when clip loop state changes
   useEffect(() => {
@@ -3043,10 +3063,10 @@ const VideoLayer = ({
 
   // Report first frame rendered when state becomes true
   useEffect(() => {
-    if (firstFrameRendered) {
+    if (!shouldOptimizeBypass && firstFrameRendered) {
       onReady?.();
     }
-  }, [firstFrameRendered, onReady]);
+  }, [firstFrameRendered, shouldOptimizeBypass, onReady]);
 
   const handleEnded = () => {
     if (earlyEndTriggered.current) return;
@@ -3054,150 +3074,249 @@ const VideoLayer = ({
     onEndedRef.current?.();
   };
 
+  // Telemetry Heartbeats Emitter Effect
   useEffect(() => {
-  const video = videoRef.current;
-  if (!video || clip.type !== "video") return;
+    const video = videoRef.current;
+    const isVideo = clip.type === "video" || clip.type === "videoinput";
+    
+    // Only register/broadcast if we're actually rendering a video OR if we're actively bypassed
+    if (!isVideo) return;
 
-  const handleTimeUpdate = () => {
-    onTimeUpdate?.(video.currentTime);
-    onProgressUpdate?.(video.currentTime, video.duration || 0);
+    const emitHeartbeat = () => {
+      let isPlaying = false;
+      if (shouldOptimizeBypass) {
+        isPlaying = activeIsPlaying;
+      } else if (video) {
+        isPlaying = !video.paused && video.currentTime > 0;
+      }
 
-    const now = Date.now();
+      let testCh = channelRef.current;
+      if (!testCh && typeof BroadcastChannel !== "undefined") {
+        testCh = new BroadcastChannel("lumin-output");
+        channelRef.current = testCh;
+      }
 
-    if (now - lastBroadcastTimeRef.current >= 200) {
-      lastBroadcastTimeRef.current = now;
+      const isOutputWindow = typeof window !== "undefined" && window.location.search.includes("mode=output") || isSlave;
 
-      if (typeof window !== "undefined") {
-        if (!(window as any).__luminVideoTimes) {
-          (window as any).__luminVideoTimes = {};
-        }
+      if (testCh) {
+        try {
+          testCh.postMessage({
+            type: "TELEMETRY_HEARTBEAT",
+            payload: {
+              trackerId,
+              isOutputWindow,
+              playing: isPlaying,
+              timestamp: Date.now()
+            }
+          });
+        } catch {}
+      }
 
-        (window as any).__luminVideoTimes[trackerId] = video.currentTime;
+      try {
+        window.dispatchEvent(
+          new CustomEvent("lumin-decoder-telemetry", {
+            detail: {
+              trackerId,
+              isOutputWindow,
+              playing: isPlaying
+            }
+          })
+        );
+      } catch {}
+    };
 
-        // ✅ SOLO MASTER REAL EMITE
-        const isMaster =
-            !isSlave &&
-            isClockSource &&   // 🔥 ESTE ES CLAVE
-            isProgram;
-          let ch = channelRef.current;
-            
-    if (isMaster) {
-          let ch = channelRef.current;
+    if (video) {
+      video.addEventListener("loadedmetadata", emitHeartbeat);
+      video.addEventListener("play", emitHeartbeat);
+      video.addEventListener("playing", emitHeartbeat);
+      video.addEventListener("pause", emitHeartbeat);
+      video.addEventListener("ended", emitHeartbeat);
+    }
 
-          if (!ch && typeof BroadcastChannel !== "undefined") {
-            ch = new BroadcastChannel("lumin-output");
-            channelRef.current = ch;
+    const timer = setInterval(emitHeartbeat, 1000);
+    emitHeartbeat();
+
+    return () => {
+      if (video) {
+        video.removeEventListener("loadedmetadata", emitHeartbeat);
+        video.removeEventListener("play", emitHeartbeat);
+        video.removeEventListener("playing", emitHeartbeat);
+        video.removeEventListener("pause", emitHeartbeat);
+        video.removeEventListener("ended", emitHeartbeat);
+      }
+      clearInterval(timer);
+
+      // Report stopped on unmount
+      let testCh = channelRef.current;
+      if (testCh) {
+        try {
+          testCh.postMessage({
+            type: "TELEMETRY_HEARTBEAT",
+            payload: { trackerId, playing: false }
+          });
+        } catch {}
+      }
+      try {
+        window.dispatchEvent(
+          new CustomEvent("lumin-decoder-telemetry", {
+            detail: { trackerId, playing: false }
+          })
+        );
+      } catch {}
+    };
+  }, [clip.id, trackerId, shouldOptimizeBypass, isSlave, activeIsPlaying]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!shouldOptimizeBypass && (!video || clip.type !== "video")) return;
+
+    const handleTimeUpdate = () => {
+      if (!video) return;
+      onTimeUpdate?.(video.currentTime);
+      onProgressUpdate?.(video.currentTime, video.duration || 0);
+
+      const now = Date.now();
+
+      if (now - lastBroadcastTimeRef.current >= 200) {
+        lastBroadcastTimeRef.current = now;
+
+        if (typeof window !== "undefined") {
+          if (!(window as any).__luminVideoTimes) {
+            (window as any).__luminVideoTimes = {};
           }
 
-          if (ch) {
-            try {
-              ch.postMessage({
-          type: "VIDEO_TIME_UPDATE",
-          payload: {
-          trackerId,
-          clipId: clip.id,
-          currentTime: video.currentTime,
-          globalTime: performance.now() / 1000, // ✅ reloj global real
-          playing: !video.paused,
-          speed: clip.speed || 1
-          },
-              });
-            } catch {}
+          (window as any).__luminVideoTimes[trackerId] = video.currentTime;
+
+          const isOutputWindow = typeof window !== "undefined" && window.location.search.includes("mode=output");
+          const isMaster =
+            (isOutputWindow && activePerf.optimizeCockpitPreview && isClockSource && isProgram) ||
+            (!isOutputWindow && !isSlave && isClockSource && isProgram);
+          let ch = channelRef.current;
+              
+          if (isMaster) {
+            if (!ch && typeof BroadcastChannel !== "undefined") {
+              ch = new BroadcastChannel("lumin-output");
+              channelRef.current = ch;
+            }
+
+            if (ch) {
+              try {
+                ch.postMessage({
+                  type: "VIDEO_TIME_UPDATE",
+                  payload: {
+                    trackerId,
+                    clipId: clip.id,
+                    currentTime: video.currentTime,
+                    duration: video.duration || 0,
+                    globalTime: performance.now() / 1000,
+                    playing: !video.paused,
+                    speed: clip.speed || 1
+                  },
+                });
+              } catch {}
+            }
           }
         }
       }
-    }
 
-    // ✅ playlist logic intacta
-    if (isPlaylistSequence && video.duration > 0) {
-      const remaining = video.duration - video.currentTime;
-      const threshold = transitionType === "cut" ? 0.15 : 0.35;
+      // playlist logic intact
+      if (isPlaylistSequence && video.duration > 0) {
+        const remaining = video.duration - video.currentTime;
+        const threshold = transitionType === "cut" ? 0.15 : 0.35;
 
-      if (
-        remaining > 0 &&
-        remaining <= threshold &&
-        !earlyEndTriggered.current
-      ) {
-        earlyEndTriggered.current = true;
-        onEndedRef.current?.();
+        if (
+          remaining > 0 &&
+          remaining <= threshold &&
+          !earlyEndTriggered.current
+        ) {
+          earlyEndTriggered.current = true;
+          onEndedRef.current?.();
+        }
       }
-    }
-  };
+    };
 
-const handleBroadcastMessage = (e: MessageEvent) => {
+    const handleBroadcastMessage = (e: MessageEvent) => {
+      if (e.data?.type !== "VIDEO_TIME_UPDATE") return;
 
-  if (!isSlave) return;
+      const payload = e.data.payload;
+      if (!payload || payload.clipId !== clip.id) return;
 
-  if (e.data?.type !== "VIDEO_TIME_UPDATE") return;
-
-  const payload = e.data.payload;
-  if (!payload || payload.trackerId !== trackerId) return;
-
-  const vid = videoRef.current;
-  if (!vid || vid.readyState < 2) return;
-
-  const current = vid.currentTime;
-
-  const now = performance.now() / 1000;
-  const delta = now - payload.globalTime;
-
-  const target = payload.currentTime + delta * (payload.speed || 1);
-
-  const diff = target - current;
-
-  if (Math.abs(diff) < 0.02) return;
-
-  // ✅ SYNC
-  if (Math.abs(diff) > 0.8) {
-    vid.currentTime = target;
-  } else if (Math.abs(diff) > 0.08) {
-    const baseSpeed = payload.speed || 1;
-    const correction = diff * 0.25;
-
-    const newRate = Math.max(0.9, Math.min(1.1, baseSpeed + correction));
-    vid.playbackRate = newRate;
-
-    setTimeout(() => {
-      if (videoRef.current) {
-        videoRef.current.playbackRate = baseSpeed;
+      if (shouldOptimizeBypass) {
+        onTimeUpdate?.(payload.currentTime);
+        onProgressUpdate?.(payload.currentTime, payload.duration || 0);
+        return;
       }
-    }, 120);
-  }
 
-  // ✅ PLAY / PAUSE
-  if (payload.playing !== undefined) {
-    if (payload.playing && vid.paused) {
-      vid.play().catch(() => {});
-    } else if (!payload.playing && !vid.paused) {
-      vid.pause();
+      if (!isSlave) return;
+
+      const vid = videoRef.current;
+      if (!vid || vid.readyState < 2) return;
+
+      const current = vid.currentTime;
+
+      const now = performance.now() / 1000;
+      const delta = now - payload.globalTime;
+
+      const target = payload.currentTime + delta * (payload.speed || 1);
+
+      const diff = target - current;
+
+      if (Math.abs(diff) < 0.02) return;
+
+      // SYNC
+      if (Math.abs(diff) > 0.8) {
+        vid.currentTime = target;
+      } else if (Math.abs(diff) > 0.08) {
+        const baseSpeed = payload.speed || 1;
+        const correction = diff * 0.25;
+
+        const newRate = Math.max(0.9, Math.min(1.1, baseSpeed + correction));
+        vid.playbackRate = newRate;
+
+        setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.playbackRate = baseSpeed;
+          }
+        }, 120);
+      }
+
+      // PLAY / PAUSE
+      if (payload.playing !== undefined) {
+        if (payload.playing && vid.paused) {
+          vid.play().catch(() => {});
+        } else if (!payload.playing && !vid.paused) {
+          vid.pause();
+        }
+      }
+    };
+
+    let ch = channelRef.current;
+
+    if (!ch && typeof BroadcastChannel !== "undefined") {
+      ch = new BroadcastChannel("lumin-output");
+      channelRef.current = ch;
     }
-  }
-};
 
-
-  let ch = channelRef.current;
-
-  if (!ch && typeof BroadcastChannel !== "undefined") {
-    ch = new BroadcastChannel("lumin-output");
-    channelRef.current = ch;
-  }
-
-  if (ch) {
-    ch.addEventListener("message", handleBroadcastMessage);
-  }
-
-  video.addEventListener("timeupdate", handleTimeUpdate);
-
-  return () => {
-    video.removeEventListener("timeupdate", handleTimeUpdate);
-
-    if (channelRef.current) {
-      channelRef.current.removeEventListener("message", handleBroadcastMessage);
-      channelRef.current.close();
-      channelRef.current = null;
+    if (ch) {
+      ch.addEventListener("message", handleBroadcastMessage);
     }
-  };
-}, [clip.id, trackerId]);
+
+    if (video) {
+      video.addEventListener("timeupdate", handleTimeUpdate);
+    }
+
+    return () => {
+      if (video) {
+        video.removeEventListener("timeupdate", handleTimeUpdate);
+      }
+
+      if (channelRef.current) {
+        channelRef.current.removeEventListener("message", handleBroadcastMessage);
+        channelRef.current.close();
+        channelRef.current = null;
+      }
+    };
+  }, [clip.id, trackerId, shouldOptimizeBypass, isSlave, activePerf.optimizeCockpitPreview, isClockSource, isProgram]);
 
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
     videoRef.current = el;
@@ -3574,6 +3693,20 @@ const handleBroadcastMessage = (e: MessageEvent) => {
             <p className="text-white font-medium text-sm">Error de reproducción</p>
             <p className="text-red-200 text-xs max-w-xs mt-1 break-all">URL: {clip.url?.slice(0, 50)}...</p>
             <p className="text-red-200 text-xs max-w-xs mt-1">Este archivo no se puede cargar. Puede que su sesión haya expirado (blob) o el formato no sea soportado.</p>
+          </div>
+        ) : shouldOptimizeBypass ? (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-1/90 border border-obs-border/50 p-4 text-center aspect-video overflow-hidden relative">
+            <div className="absolute inset-0 opacity-40 bg-cover bg-center filter blur-md" style={{ backgroundImage: clip.thumbnail ? `url(${clip.thumbnail})` : undefined }} />
+            <div className="relative z-10 flex flex-col items-center">
+              <div className="flex items-center gap-2 mb-2 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full animate-pulse">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                <span className="text-[9px] font-black tracking-widest text-emerald-400 font-sans">BYPASS / EN TRANSMISIÓN</span>
+              </div>
+              <span className="text-white text-[11px] font-bold uppercase tracking-wide truncate max-w-[220px] font-sans">{clip.name}</span>
+              <span className="text-obs-accent text-[8px] uppercase tracking-wider font-mono mt-0.5 blur-[0.1px]">
+                OPTIMIZACION PIPELINE (0% GPU EXTRA)
+              </span>
+            </div>
           </div>
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
@@ -8435,7 +8568,7 @@ const Library = React.memo(
           f.type.startsWith("video") &&
           f.type !== "videoinput") ||
         (activeFolder === "image" && f.type.startsWith("image")) ||
-        (activeFolder === "pdf" && f.type.includes("pdf")) ||
+        (activeFolder === "pdf" && (f.type.includes("pdf") || f.type.includes("ppt") || f.type.includes("powerpoint") || f.name.toLowerCase().endsWith(".ppt") || f.name.toLowerCase().endsWith(".pptx"))) ||
         (activeFolder === "videoin" && f.type === "videoinput");
       return matchesSearch && matchesFolder;
     });
@@ -12010,7 +12143,10 @@ export default function App() {
   const [perfSettings, setPerfSettings] = useState(() => {
     try {
       const saved = localStorage.getItem("lumin_perf_settings");
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { optimizeCockpitPreview: true, ...parsed };
+      }
     } catch {}
     return {
       gpuDecoding: "nvdec", // 'd3d11' | 'dxva2' | 'nvdec' | 'vaapi' | 'software'
@@ -12041,6 +12177,7 @@ export default function App() {
       timeoutRecovery: true,
       dynamicDecoderRestart: true,
       advancedPerfLogs: true,
+      optimizeCockpitPreview: true,
     };
   });
 
@@ -12070,6 +12207,68 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("lumin_perf_settings", JSON.stringify(perfSettings));
   }, [perfSettings]);
+
+  const [activeDecoders, setActiveDecoders] = useState<Record<string, { isOutput: boolean; timestamp: number }>>({});
+
+  useEffect(() => {
+    const handleTelemetryMessage = (trackerId: string, isOutputWindow: boolean, playing: boolean) => {
+      setActiveDecoders(prev => {
+        const next = { ...prev };
+        if (playing) {
+          next[trackerId] = {
+            isOutput: isOutputWindow,
+            timestamp: Date.now()
+          };
+        } else {
+          delete next[trackerId];
+        }
+        return next;
+      });
+    };
+
+    const handleBroadcast = (event: MessageEvent) => {
+      if (event.data?.type === "TELEMETRY_HEARTBEAT") {
+        const { trackerId, isOutputWindow, playing } = event.data.payload || {};
+        if (trackerId) {
+          handleTelemetryMessage(trackerId, !!isOutputWindow, !!playing);
+        }
+      }
+    };
+
+    const handleLocalCustom = (event: Event) => {
+      const customEv = event as CustomEvent;
+      const { trackerId, isOutputWindow, playing } = customEv.detail || {};
+      if (trackerId) {
+        handleTelemetryMessage(trackerId, !!isOutputWindow, !!playing);
+      }
+    };
+
+    const ch = new BroadcastChannel("lumin-output");
+    ch.addEventListener("message", handleBroadcast);
+    window.addEventListener("lumin-decoder-telemetry" as any, handleLocalCustom);
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setActiveDecoders(prev => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [id, info] of Object.entries(next)) {
+          if (now - info.timestamp > 1500) {
+            delete next[id];
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+
+    return () => {
+      ch.removeEventListener("message", handleBroadcast);
+      ch.close();
+      window.removeEventListener("lumin-decoder-telemetry" as any, handleLocalCustom);
+      clearInterval(interval);
+    };
+  }, []);
   // libraryFiles declaration moved up to fix hosting
   const [selectedLibraryUrls, setSelectedLibraryUrls] = useState<Set<string>>(
     new Set(),
@@ -15301,6 +15500,30 @@ export default function App() {
                                     : "NO DISPONIBLE"}
                                 </span>
                               </div>
+                              <div className="flex justify-between items-center border-t border-obs-text/5 pt-1.5">
+                                <span className="text-obs-muted">
+                                  Vídeos en Reproducción (Decoders)
+                                </span>
+                                <span className="text-emerald-400 font-bold">
+                                  {Object.keys(activeDecoders).length} ACTIVO(S)
+                                </span>
+                              </div>
+                              {Object.keys(activeDecoders).length > 0 && (
+                                <div className="border-t border-obs-text/5 pt-1 pb-1 pl-2 space-y-1 text-[6px] uppercase font-mono">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-obs-muted">├─ Cockpit (Previsualización)</span>
+                                    <span className="text-white font-bold">
+                                      {Object.values(activeDecoders).filter(d => !d.isOutput).length} activo(s)
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-obs-muted">└─ Salida Externa (Emisión)</span>
+                                    <span className="text-obs-accent font-bold">
+                                      {Object.values(activeDecoders).filter(d => d.isOutput).length} activo(s)
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
