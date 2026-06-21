@@ -512,12 +512,13 @@ const FluidTimeDisplay = ({
     if (outputId && outputId !== "none" && layers && layerOutputs) {
       for (const l of layers) {
         const isTargetOutput = !layerOutputs[l.id] || layerOutputs[l.id] === "all" || layerOutputs[l.id] === outputId;
-        if (l.activeClipId && l.isVisible !== false && isTargetOutput) {
-          const clip = clips?.find((c) => c.id === l.activeClipId);
+        const lState = getLayerActiveState(l, outputId);
+        if (lState.activeClipId && l.isVisible !== false && isTargetOutput) {
+          const clip = clips?.find((c) => c.id === lState.activeClipId);
           if (clip && (clip.type === "video" || clip.type === "videoinput")) {
             return {
-              resolvedClipId: l.activeClipId,
-              resolvedTrackerId: `layer_${outputId}_${l.id}_${l.activeClipId}`,
+              resolvedClipId: lState.activeClipId,
+              resolvedTrackerId: `layer_${outputId}_${l.id}_${lState.activeClipId}`,
             };
           }
         }
@@ -556,10 +557,12 @@ const FluidTimeDisplay = ({
           let displayTime = 0;
           const isRealOutputScreen = outputId && outputId !== "preview" && outputId !== "none";
           const video = isRealOutputScreen
-            ? ((resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
+            ? ((monitorId && resolvedTrackerId && (window as any).__luminVideos?.[`monitor_${monitorId}_${resolvedTrackerId}`]) ||
+               (resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
                (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
                (outputId && (window as any).__luminVideos?.[outputId]))
-            : ((resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
+            : ((monitorId && resolvedTrackerId && (window as any).__luminVideos?.[`monitor_${monitorId}_${resolvedTrackerId}`]) ||
+               (resolvedTrackerId && (window as any).__luminVideos?.[resolvedTrackerId]) ||
                (outputId && resolvedClipId && (window as any).__luminVideos?.[`${outputId}_${resolvedClipId}`]) ||
                (resolvedClipId && (window as any).__luminVideos?.[resolvedClipId]) ||
                (monitorId && (window as any).__luminVideos?.[monitorId]) ||
@@ -1367,7 +1370,7 @@ const ScaleToFit = ({
                 layer.playbackMode === "single"
                   ? layer.loopVideo !== false
                   : layer.playbackMode === "column"
-                    ? layer.loop !== false
+                    ? true
                     : false
               }
               isPlaylistSequence={layer.playbackMode === "sequence"}
@@ -1926,9 +1929,7 @@ const Monitor = React.memo(
                                     updateClip={updateClip}
                                     perfSettings={perfSettings}
                                     isSlave={isSlave}
-                                    allowClockAuthority={
-                                      !hasGlobalSource && index === 0
-                                    }
+                                    allowClockAuthority={true}
                                     outputId={resolvedOutputId}
                                     monitorId={monitorId}
                                     isVisuallyActive={isVisuallyActive}
@@ -3235,6 +3236,9 @@ const handleBroadcastMessage = (e: MessageEvent) => {
       if (monitorId) {
         (window as any).__luminVideos = (window as any).__luminVideos || {};
         (window as any).__luminVideos[monitorId] = el;
+        if (trackerId) {
+          (window as any).__luminVideos[`monitor_${monitorId}_${trackerId}`] = el;
+        }
       }
       if (outputId) {
         (window as any).__luminVideos = (window as any).__luminVideos || {};
@@ -3262,6 +3266,9 @@ const handleBroadcastMessage = (e: MessageEvent) => {
       if (video) {
         if (monitorId && (window as any).__luminVideos?.[monitorId] === video) {
           delete (window as any).__luminVideos[monitorId];
+        }
+        if (monitorId && trackerId && (window as any).__luminVideos?.[`monitor_${monitorId}_${trackerId}`] === video) {
+          delete (window as any).__luminVideos[`monitor_${monitorId}_${trackerId}`];
         }
         if (outputId && (window as any).__luminVideos?.[outputId] === video) {
           delete (window as any).__luminVideos[outputId];
@@ -9354,35 +9361,7 @@ const LayersSection = React.memo(
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setActiveLayerTriggers((prev) => ({
-                                  ...prev,
-                                  [layer.id]: "stop",
-                                }));
-                                onProgressUpdate?.(0, 0);
-                                onUpdateLayer(layer.id, {
-                                  isPlaying: false,
-                                  activeClipId: null,
-                                  activeSlotIndex: null,
-                                });
-                                if (typeof window !== "undefined") {
-                                  (window as any).__luminVideoTimes = {};
-                                }
-                                if (clips && onUpdateClip) {
-                                  clips.forEach((c) => {
-                                    onUpdateClip(c.id, { currentTime: 0 });
-                                  });
-                                }
-                                const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
-                                if (ch && clips) {
-                                    clips.forEach((c) => {
-                                      try {
-                                        ch.postMessage({
-                                          type: "VIDEO_TIME_UPDATE",
-                                          payload: { clipId: c.id, currentTime: 0 },
-                                        });
-                                      } catch (err) {}
-                                    });
-                                }
+                                onTriggerClip(layer.id, -1, "single");
                               }}
                               className={`w-[18px] h-[18px] border flex items-center justify-center rounded-[1px] transition-colors ${!layer.isPlaying && !layer.activeClipId ? "border-red-500 bg-red-500 text-white" : "border-white/80 bg-white text-black hover:bg-gray-200"}`}
                               title="Stop Layer"
@@ -13014,7 +12993,20 @@ export default function App() {
 
         let nextState: any = null;
 
-        if (layer.playbackMode === "single") {
+        if (layer.playbackMode === "column") {
+          if (layer.loop === false) {
+            sideEffectStop = true;
+            nextState = {
+              activeClipId: null,
+              activeSlotIndex: null,
+              sequenceCounter: (layerState.sequenceCounter || 0) + 1,
+              isPlaying: false,
+            };
+          } else {
+            // Let the native loop handle it fluidly without incrementing sequenceCounter!
+            return layer;
+          }
+        } else if (layer.playbackMode === "single") {
           if (layer.loopVideo === false) {
             sideEffectStop = true;
             nextState = {
@@ -13144,23 +13136,39 @@ export default function App() {
     const linkedOutputId = layerOutputs[layerId] || "1";
 
     if (isStopClick) {
-      if (typeof window !== "undefined") {
-        (window as any).__luminVideoTimes = {};
-      }
-      setClips(prev => {
-        const next = prev.map(c => ({ ...c, currentTime: 0 }));
-        return next;
-      });
-      const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
-      if (ch) {
-        clips.forEach((c) => {
-          try {
-            ch.postMessage({
-              type: "VIDEO_TIME_UPDATE",
-              payload: { clipId: c.id, currentTime: 0 },
-            });
-          } catch (err) {}
+      if (typeof window !== "undefined" && (window as any).__luminVideoTimes) {
+        Object.keys((window as any).__luminVideoTimes).forEach((key) => {
+          if (key.includes(`_${layerId}_`)) {
+            (window as any).__luminVideoTimes[key] = 0;
+          }
         });
+      }
+      if (targetLayer) {
+        setClips((prev) =>
+          prev.map((c) => {
+            const isInLayer = targetLayer.slots.some((s) => s?.id === c.id);
+            if (isInLayer) {
+              return { ...c, currentTime: 0 };
+            }
+            return c;
+          }),
+        );
+        const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
+        if (ch) {
+          targetLayer.slots.forEach((s) => {
+            if (s) {
+              ["1", "2", "3", "4", "5", "all", linkedOutputId].forEach((oid) => {
+                const trackerId = `layer_${oid}_${layerId}_${s.id}`;
+                try {
+                  ch.postMessage({
+                    type: "VIDEO_TIME_UPDATE",
+                    payload: { trackerId, clipId: s.id, currentTime: 0 },
+                  });
+                } catch (err) {}
+              });
+            }
+          });
+        }
       }
     } else if (targetLayer) {
       const clip = targetLayer.slots[slotIdx];
@@ -13214,10 +13222,9 @@ export default function App() {
       setLastSwitchTime(now);
     }
 
-    if (mode !== "single") {
-      setActiveColumnTrigger(null);
-      setColumnUIStates({});
-    }
+    setActiveColumnTrigger(null);
+    setColumnUIStates({});
+
     setLayers((prev) =>
       prev.map((l) => {
         if (l.id !== layerId) return l;
@@ -13288,58 +13295,129 @@ export default function App() {
     setLayers((prev) =>
       prev.map((layer) => {
         const clip = layer.slots[colIdx];
+        const linkedOutputId = layerOutputs[layer.id] || "1";
+        const outputStates = { ...(layer.outputStates || {}) };
+
         if (clip) {
+          const targetStates = ["1", "2", "3", "4", "5", "all", linkedOutputId];
+          targetStates.forEach((oid) => {
+            const trackerId = `layer_${oid}_${layer.id}_${clip.id}`;
+            if (typeof window !== "undefined") {
+              if (!(window as any).__luminVideoTimes) {
+                (window as any).__luminVideoTimes = {};
+              }
+              (window as any).__luminVideoTimes[trackerId] = 0;
+            }
+            const ch = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null;
+            if (ch) {
+              try {
+                ch.postMessage({
+                  type: "VIDEO_TIME_UPDATE",
+                  payload: { trackerId, clipId: clip.id, currentTime: 0 },
+                });
+              } catch (err) {}
+            }
+
+            outputStates[oid] = {
+              activeClipId: clip.id,
+              activeSlotIndex: colIdx,
+              sequenceCounter: ((layer.outputStates?.[oid]?.sequenceCounter ?? layer.sequenceCounter ?? 0) + 1),
+              isPlaying: true,
+            };
+          });
+
           return {
             ...layer,
             activeClipId: clip.id,
             activeSlotIndex: colIdx,
             isPlaying: true,
             playbackMode: "column",
+            sequenceCounter: (layer.sequenceCounter || 0) + 1,
+            outputStates,
+          };
+        } else {
+          const targetStates = ["1", "2", "3", "4", "5", "all", linkedOutputId];
+          targetStates.forEach((oid) => {
+            outputStates[oid] = {
+              activeClipId: null,
+              activeSlotIndex: null,
+              sequenceCounter: (layer.outputStates?.[oid]?.sequenceCounter ?? layer.sequenceCounter ?? 0),
+              isPlaying: false,
+            };
+          });
+
+          return {
+            ...layer,
+            activeClipId: null,
+            activeSlotIndex: colIdx,
+            isPlaying: false,
+            playbackMode: "column",
+            outputStates,
           };
         }
-        return {
-          ...layer,
-          activeClipId: null,
-          activeSlotIndex: colIdx,
-          isPlaying: false,
-        };
       }),
     );
   };
 
   const handleColumnStop = (colIdx: number) => {
-    if (typeof window !== "undefined") {
-      (window as any).__luminVideoTimes = {};
-    }
-    clips.forEach((c) => {
-      updateClip(c.id, { currentTime: 0 });
-    });
-    const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
-    if (ch) {
-      clips.forEach((c) => {
-        try {
-          ch.postMessage({
-            type: "VIDEO_TIME_UPDATE",
-            payload: { clipId: c.id, currentTime: 0 },
-          });
-        } catch (err) {}
-      });
-    }
-
     setActiveColumnTrigger(null);
-    setColumnUIStates({});
+    setColumnUIStates({ [colIdx]: "stop" });
     setLayers((prev) =>
       prev.map((layer) => {
         const clip = layer.slots[colIdx];
-        if (clip && layer.activeClipId === clip.id) {
+        const linkedOutputId = layerOutputs[layer.id] || "1";
+        const outputStates = { ...(layer.outputStates || {}) };
+        const targetStates = ["1", "2", "3", "4", "5", "all", linkedOutputId];
+
+        if (clip) {
+          if (typeof window !== "undefined" && (window as any).__luminVideoTimes) {
+            targetStates.forEach((oid) => {
+              const trackerId = `layer_${oid}_${layer.id}_${clip.id}`;
+              (window as any).__luminVideoTimes[trackerId] = 0;
+            });
+          }
+          updateClip(clip.id, { currentTime: 0 });
+          const ch = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lumin-output") : null;
+          if (ch) {
+            targetStates.forEach((oid) => {
+              const trackerId = `layer_${oid}_${layer.id}_${clip.id}`;
+              try {
+                ch.postMessage({
+                  type: "VIDEO_TIME_UPDATE",
+                  payload: { trackerId, clipId: clip.id, currentTime: 0 },
+                });
+              } catch (err) {}
+            });
+          }
+        }
+
+        targetStates.forEach((oid) => {
+          const lState = layer.outputStates?.[oid];
+          if ((clip && lState?.activeClipId === clip.id) || lState?.activeSlotIndex === colIdx) {
+            outputStates[oid] = {
+              activeClipId: null,
+              activeSlotIndex: null,
+              sequenceCounter: lState?.sequenceCounter ?? layer.sequenceCounter ?? 0,
+              isPlaying: false,
+            };
+          }
+        });
+
+        const isPrimaryActive = (clip && layer.activeClipId === clip.id) || layer.activeSlotIndex === colIdx;
+        if (isPrimaryActive) {
+          setActiveLayerTriggers((p) => ({ ...p, [layer.id]: "stop" }));
           return {
             ...layer,
             activeClipId: null,
             activeSlotIndex: null,
             isPlaying: false,
+            outputStates,
           };
         }
-        return layer;
+        return {
+          ...layer,
+          outputStates,
+        };
       }),
     );
   };
