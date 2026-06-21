@@ -229,7 +229,34 @@ interface Layer {
   loopVideo?: boolean;
   playbackMode?: "single" | "sequence" | "column";
   sequenceCounter?: number;
+  outputStates?: Record<
+    string,
+    {
+      activeClipId: string | null;
+      activeSlotIndex: number | null;
+      sequenceCounter: number;
+      isPlaying: boolean;
+    }
+  >;
 }
+
+const getLayerActiveState = (layer: any, outputId: string | undefined): {
+  activeClipId: string | null;
+  activeSlotIndex: number | null;
+  sequenceCounter: number;
+  isPlaying: boolean;
+} => {
+  const oid = outputId || "1";
+  if (layer.outputStates && layer.outputStates[oid]) {
+    return layer.outputStates[oid];
+  }
+  return {
+    activeClipId: layer.activeClipId,
+    activeSlotIndex: layer.activeSlotIndex,
+    sequenceCounter: layer.sequenceCounter || 0,
+    isPlaying: layer.isPlaying ?? false,
+  };
+};
 
 interface PiPLayer {
   id: string;
@@ -901,7 +928,6 @@ const ClipCard = React.memo(
     isDarkMode,
     isSelected,
     onDelete,
-    onUpdateClip,
   }: {
     clip: Clip;
     onSelect: () => void;
@@ -909,7 +935,6 @@ const ClipCard = React.memo(
     isDarkMode: boolean;
     isSelected: boolean;
     onDelete?: () => void;
-    onUpdateClip?: (id: string, updates: Partial<Clip>) => void;
   }) => (
     <div
       draggable
@@ -942,7 +967,6 @@ const ClipCard = React.memo(
               <PPTSlideRenderer
                 clip={clip}
                 pageNumber={clip.currentPage || 1}
-                onUpdateClip={onUpdateClip || updateClip}
                 isThumbnail={true}
               />
             ) : (
@@ -1226,8 +1250,10 @@ const ScaleToFit = ({
     onLevelChange?: (level: number) => void;
     monitorId?: string;
   }) => {
-    const activeClip = layer.activeClipId ? clips?.find((c) => c.id === layer.activeClipId) : null;
-    const initialKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
+    const oid = outputId || "1";
+    const layerState = getLayerActiveState(layer, oid);
+    const activeClip = layerState.activeClipId ? clips?.find((c) => c.id === layerState.activeClipId) : null;
+    const initialKey = activeClip ? `${activeClip.id}-${layerState.sequenceCounter || 0}` : null;
     const [busA, setBusA] = useState<{ clip: Clip; key: string } | null>(() => {
       return activeClip
         ? { clip: activeClip, key: initialKey! }
@@ -1238,7 +1264,7 @@ const ScaleToFit = ({
     const [activeKey, setActiveKey] = useState<string | null>(initialKey);
 
     useEffect(() => {
-      const currentKey = activeClip ? `${activeClip.id}-${layer.sequenceCounter || 0}` : null;
+      const currentKey = activeClip ? `${activeClip.id}-${layerState.sequenceCounter || 0}` : null;
       if (currentKey !== activeKey) {
         if (!activeClip) {
           setBusA(null);
@@ -1259,7 +1285,7 @@ const ScaleToFit = ({
         setBusA(prev => (prev && prev.clip.id === activeClip.id && prev.clip !== activeClip) ? { ...prev, clip: activeClip } : prev);
         setBusB(prev => (prev && prev.clip.id === activeClip.id && prev.clip !== activeClip) ? { ...prev, clip: activeClip } : prev);
       }
-    }, [activeClip, activeKey, isBusAReady, layer.sequenceCounter]);
+    }, [activeClip, activeKey, isBusAReady, layerState.sequenceCounter]);
 
     const [busALevel, setBusALevel] = useState(0);
     const [busBLevel, setBusBLevel] = useState(0);
@@ -1293,8 +1319,8 @@ const ScaleToFit = ({
     // Preload next
     let nextSrc = undefined;
     if (layer.playbackMode === "sequence" && activeClip) {
-      const currentSlotIndex = layer.activeSlotIndex !== null 
-        ? layer.activeSlotIndex 
+      const currentSlotIndex = layerState.activeSlotIndex !== null 
+        ? layerState.activeSlotIndex 
         : layer.slots.findIndex((s) => s?.id === activeClip.id);
       
       const nextClipIndex = layer.slots.findIndex((s, idx) => idx > currentSlotIndex && s !== null);
@@ -1327,13 +1353,14 @@ const ScaleToFit = ({
               masterVolume={masterVolume}
               opacity={opacity}
               isProgram={isProgram}
-              isPlaying={layer.isPlaying}
+              isPlaying={layerState.isPlaying}
               isTransmitting={isTransmitting}
               onEnded={() =>
                 onLayerEnded?.(
                   layer.id,
                   bus.clip.id,
                   parseInt(bus.key.split("-").pop() || "0"),
+                  oid,
                 )
               }
               loopOverride={
@@ -2992,64 +3019,47 @@ const VideoLayer = ({
         loopMode: "native_seamless",
         highResOptimization: true,
         maxThreads: 4,
-        optimizeCockpitPreview: true,
       },
     [perfSettings],
   );
 
-  const shouldOptimizeBypass = useMemo(() => {
-    return (
-      activePerf.optimizeCockpitPreview !== false &&
-      isTransmitting &&
-      isProgram &&
-      !isSlave &&
-      (clip.type === "video" || clip.type === "videoinput")
-    );
-  }, [activePerf.optimizeCockpitPreview, isTransmitting, isProgram, isSlave, clip.type]);
-
   useEffect(() => {
-    if (shouldOptimizeBypass) {
-      setFirstFrameRendered(true);
-      setIsReady(true);
-      onReady?.();
+    if (clip.type === "video" || clip.type === "videoinput") {
+      setFirstFrameRendered(false);
     } else {
-      if (clip.type === "video" || clip.type === "videoinput") {
-        setFirstFrameRendered(false);
-      } else {
-        setFirstFrameRendered(true);
-      }
+      setFirstFrameRendered(true);
     }
     earlyEndTriggered.current = false;
     earlyLoopTriggered.current = false;
-  }, [clip.id, clip.url, clip.type, shouldOptimizeBypass, onReady]);
+  }, [clip.id, clip.url, clip.type]);
 
   // CRITICAL: Delayed GPU decoder release on unmount to allow smooth AnimatePresence exit transitions.
   // This prevents instant black screen flashes during fade transitions.
-  useEffect(() => {
+    useEffect(() => {
     return () => {
-      const video = videoRef.current;
+    const video = videoRef.current;
 
-      if (cleanupTimeoutRef.current) {
-        clearTimeout(cleanupTimeoutRef.current);
-      }
+    if (cleanupTimeoutRef.current) {
+      clearTimeout(cleanupTimeoutRef.current);
+    }
 
-      if (video) {
-        const cleanDelay = Math.max(
-          100,
-          (transitionDuration || 0.4) * 1000 + 100,
-        );
+    if (video) {
+      const cleanDelay = Math.max(
+        100,
+        (transitionDuration || 0.4) * 1000 + 100,
+      );
 
-        cleanupTimeoutRef.current = setTimeout(() => {
-          try {
-            video.pause();
-            video.src = "";
-            video.removeAttribute("src");
-            video.load();
-          } catch (e) {}
-        }, cleanDelay);
-      }
-    };
-  }, [transitionDuration]);
+      cleanupTimeoutRef.current = setTimeout(() => {
+        try {
+          video.pause();
+          video.src = "";
+          video.removeAttribute("src");
+          video.load();
+        } catch (e) {}
+      }, cleanDelay);
+    }
+  };
+}, [transitionDuration]);
 
   // Sync native video loop property directly when clip loop state changes
   useEffect(() => {
@@ -3063,10 +3073,10 @@ const VideoLayer = ({
 
   // Report first frame rendered when state becomes true
   useEffect(() => {
-    if (!shouldOptimizeBypass && firstFrameRendered) {
+    if (firstFrameRendered) {
       onReady?.();
     }
-  }, [firstFrameRendered, shouldOptimizeBypass, onReady]);
+  }, [firstFrameRendered, onReady]);
 
   const handleEnded = () => {
     if (earlyEndTriggered.current) return;
@@ -3074,249 +3084,150 @@ const VideoLayer = ({
     onEndedRef.current?.();
   };
 
-  // Telemetry Heartbeats Emitter Effect
   useEffect(() => {
-    const video = videoRef.current;
-    const isVideo = clip.type === "video" || clip.type === "videoinput";
-    
-    // Only register/broadcast if we're actually rendering a video OR if we're actively bypassed
-    if (!isVideo) return;
+  const video = videoRef.current;
+  if (!video || clip.type !== "video") return;
 
-    const emitHeartbeat = () => {
-      let isPlaying = false;
-      if (shouldOptimizeBypass) {
-        isPlaying = activeIsPlaying;
-      } else if (video) {
-        isPlaying = !video.paused && video.currentTime > 0;
-      }
+  const handleTimeUpdate = () => {
+    onTimeUpdate?.(video.currentTime);
+    onProgressUpdate?.(video.currentTime, video.duration || 0);
 
-      let testCh = channelRef.current;
-      if (!testCh && typeof BroadcastChannel !== "undefined") {
-        testCh = new BroadcastChannel("lumin-output");
-        channelRef.current = testCh;
-      }
+    const now = Date.now();
 
-      const isOutputWindow = typeof window !== "undefined" && window.location.search.includes("mode=output") || isSlave;
+    if (now - lastBroadcastTimeRef.current >= 200) {
+      lastBroadcastTimeRef.current = now;
 
-      if (testCh) {
-        try {
-          testCh.postMessage({
-            type: "TELEMETRY_HEARTBEAT",
-            payload: {
-              trackerId,
-              isOutputWindow,
-              playing: isPlaying,
-              timestamp: Date.now()
-            }
-          });
-        } catch {}
-      }
+      if (typeof window !== "undefined") {
+        if (!(window as any).__luminVideoTimes) {
+          (window as any).__luminVideoTimes = {};
+        }
 
-      try {
-        window.dispatchEvent(
-          new CustomEvent("lumin-decoder-telemetry", {
-            detail: {
-              trackerId,
-              isOutputWindow,
-              playing: isPlaying
-            }
-          })
-        );
-      } catch {}
-    };
+        (window as any).__luminVideoTimes[trackerId] = video.currentTime;
 
-    if (video) {
-      video.addEventListener("loadedmetadata", emitHeartbeat);
-      video.addEventListener("play", emitHeartbeat);
-      video.addEventListener("playing", emitHeartbeat);
-      video.addEventListener("pause", emitHeartbeat);
-      video.addEventListener("ended", emitHeartbeat);
-    }
-
-    const timer = setInterval(emitHeartbeat, 1000);
-    emitHeartbeat();
-
-    return () => {
-      if (video) {
-        video.removeEventListener("loadedmetadata", emitHeartbeat);
-        video.removeEventListener("play", emitHeartbeat);
-        video.removeEventListener("playing", emitHeartbeat);
-        video.removeEventListener("pause", emitHeartbeat);
-        video.removeEventListener("ended", emitHeartbeat);
-      }
-      clearInterval(timer);
-
-      // Report stopped on unmount
-      let testCh = channelRef.current;
-      if (testCh) {
-        try {
-          testCh.postMessage({
-            type: "TELEMETRY_HEARTBEAT",
-            payload: { trackerId, playing: false }
-          });
-        } catch {}
-      }
-      try {
-        window.dispatchEvent(
-          new CustomEvent("lumin-decoder-telemetry", {
-            detail: { trackerId, playing: false }
-          })
-        );
-      } catch {}
-    };
-  }, [clip.id, trackerId, shouldOptimizeBypass, isSlave, activeIsPlaying]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!shouldOptimizeBypass && (!video || clip.type !== "video")) return;
-
-    const handleTimeUpdate = () => {
-      if (!video) return;
-      onTimeUpdate?.(video.currentTime);
-      onProgressUpdate?.(video.currentTime, video.duration || 0);
-
-      const now = Date.now();
-
-      if (now - lastBroadcastTimeRef.current >= 200) {
-        lastBroadcastTimeRef.current = now;
-
-        if (typeof window !== "undefined") {
-          if (!(window as any).__luminVideoTimes) {
-            (window as any).__luminVideoTimes = {};
-          }
-
-          (window as any).__luminVideoTimes[trackerId] = video.currentTime;
-
-          const isOutputWindow = typeof window !== "undefined" && window.location.search.includes("mode=output");
-          const isMaster =
-            (isOutputWindow && activePerf.optimizeCockpitPreview && isClockSource && isProgram) ||
-            (!isOutputWindow && !isSlave && isClockSource && isProgram);
+        // ✅ SOLO MASTER REAL EMITE
+        const isMaster =
+            !isSlave &&
+            isClockSource &&   // 🔥 ESTE ES CLAVE
+            isProgram;
           let ch = channelRef.current;
-              
-          if (isMaster) {
-            if (!ch && typeof BroadcastChannel !== "undefined") {
-              ch = new BroadcastChannel("lumin-output");
-              channelRef.current = ch;
-            }
+            
+    if (isMaster) {
+          let ch = channelRef.current;
 
-            if (ch) {
-              try {
-                ch.postMessage({
-                  type: "VIDEO_TIME_UPDATE",
-                  payload: {
-                    trackerId,
-                    clipId: clip.id,
-                    currentTime: video.currentTime,
-                    duration: video.duration || 0,
-                    globalTime: performance.now() / 1000,
-                    playing: !video.paused,
-                    speed: clip.speed || 1
-                  },
-                });
-              } catch {}
-            }
+          if (!ch && typeof BroadcastChannel !== "undefined") {
+            ch = new BroadcastChannel("lumin-output");
+            channelRef.current = ch;
+          }
+
+          if (ch) {
+            try {
+              ch.postMessage({
+          type: "VIDEO_TIME_UPDATE",
+          payload: {
+          trackerId,
+          clipId: clip.id,
+          currentTime: video.currentTime,
+          globalTime: performance.now() / 1000, // ✅ reloj global real
+          playing: !video.paused,
+          speed: clip.speed || 1
+          },
+              });
+            } catch {}
           }
         }
       }
-
-      // playlist logic intact
-      if (isPlaylistSequence && video.duration > 0) {
-        const remaining = video.duration - video.currentTime;
-        const threshold = transitionType === "cut" ? 0.15 : 0.35;
-
-        if (
-          remaining > 0 &&
-          remaining <= threshold &&
-          !earlyEndTriggered.current
-        ) {
-          earlyEndTriggered.current = true;
-          onEndedRef.current?.();
-        }
-      }
-    };
-
-    const handleBroadcastMessage = (e: MessageEvent) => {
-      if (e.data?.type !== "VIDEO_TIME_UPDATE") return;
-
-      const payload = e.data.payload;
-      if (!payload || payload.clipId !== clip.id) return;
-
-      if (shouldOptimizeBypass) {
-        onTimeUpdate?.(payload.currentTime);
-        onProgressUpdate?.(payload.currentTime, payload.duration || 0);
-        return;
-      }
-
-      if (!isSlave) return;
-
-      const vid = videoRef.current;
-      if (!vid || vid.readyState < 2) return;
-
-      const current = vid.currentTime;
-
-      const now = performance.now() / 1000;
-      const delta = now - payload.globalTime;
-
-      const target = payload.currentTime + delta * (payload.speed || 1);
-
-      const diff = target - current;
-
-      if (Math.abs(diff) < 0.02) return;
-
-      // SYNC
-      if (Math.abs(diff) > 0.8) {
-        vid.currentTime = target;
-      } else if (Math.abs(diff) > 0.08) {
-        const baseSpeed = payload.speed || 1;
-        const correction = diff * 0.25;
-
-        const newRate = Math.max(0.9, Math.min(1.1, baseSpeed + correction));
-        vid.playbackRate = newRate;
-
-        setTimeout(() => {
-          if (videoRef.current) {
-            videoRef.current.playbackRate = baseSpeed;
-          }
-        }, 120);
-      }
-
-      // PLAY / PAUSE
-      if (payload.playing !== undefined) {
-        if (payload.playing && vid.paused) {
-          vid.play().catch(() => {});
-        } else if (!payload.playing && !vid.paused) {
-          vid.pause();
-        }
-      }
-    };
-
-    let ch = channelRef.current;
-
-    if (!ch && typeof BroadcastChannel !== "undefined") {
-      ch = new BroadcastChannel("lumin-output");
-      channelRef.current = ch;
     }
 
-    if (ch) {
-      ch.addEventListener("message", handleBroadcastMessage);
-    }
+    // ✅ playlist logic intacta
+    if (isPlaylistSequence && video.duration > 0) {
+      const remaining = video.duration - video.currentTime;
+      const threshold = transitionType === "cut" ? 0.15 : 0.35;
 
-    if (video) {
-      video.addEventListener("timeupdate", handleTimeUpdate);
-    }
-
-    return () => {
-      if (video) {
-        video.removeEventListener("timeupdate", handleTimeUpdate);
+      if (
+        remaining > 0 &&
+        remaining <= threshold &&
+        !earlyEndTriggered.current
+      ) {
+        earlyEndTriggered.current = true;
+        onEndedRef.current?.();
       }
+    }
+  };
 
-      if (channelRef.current) {
-        channelRef.current.removeEventListener("message", handleBroadcastMessage);
-        channelRef.current.close();
-        channelRef.current = null;
+const handleBroadcastMessage = (e: MessageEvent) => {
+
+  if (!isSlave) return;
+
+  if (e.data?.type !== "VIDEO_TIME_UPDATE") return;
+
+  const payload = e.data.payload;
+  if (!payload || payload.trackerId !== trackerId) return;
+
+  const vid = videoRef.current;
+  if (!vid || vid.readyState < 2) return;
+
+  const current = vid.currentTime;
+
+  const now = performance.now() / 1000;
+  const delta = now - payload.globalTime;
+
+  const target = payload.currentTime + delta * (payload.speed || 1);
+
+  const diff = target - current;
+
+  if (Math.abs(diff) < 0.02) return;
+
+  // ✅ SYNC
+  if (Math.abs(diff) > 0.8) {
+    vid.currentTime = target;
+  } else if (Math.abs(diff) > 0.08) {
+    const baseSpeed = payload.speed || 1;
+    const correction = diff * 0.25;
+
+    const newRate = Math.max(0.9, Math.min(1.1, baseSpeed + correction));
+    vid.playbackRate = newRate;
+
+    setTimeout(() => {
+      if (videoRef.current) {
+        videoRef.current.playbackRate = baseSpeed;
       }
-    };
-  }, [clip.id, trackerId, shouldOptimizeBypass, isSlave, activePerf.optimizeCockpitPreview, isClockSource, isProgram]);
+    }, 120);
+  }
+
+  // ✅ PLAY / PAUSE
+  if (payload.playing !== undefined) {
+    if (payload.playing && vid.paused) {
+      vid.play().catch(() => {});
+    } else if (!payload.playing && !vid.paused) {
+      vid.pause();
+    }
+  }
+};
+
+
+  let ch = channelRef.current;
+
+  if (!ch && typeof BroadcastChannel !== "undefined") {
+    ch = new BroadcastChannel("lumin-output");
+    channelRef.current = ch;
+  }
+
+  if (ch) {
+    ch.addEventListener("message", handleBroadcastMessage);
+  }
+
+  video.addEventListener("timeupdate", handleTimeUpdate);
+
+  return () => {
+    video.removeEventListener("timeupdate", handleTimeUpdate);
+
+    if (channelRef.current) {
+      channelRef.current.removeEventListener("message", handleBroadcastMessage);
+      channelRef.current.close();
+      channelRef.current = null;
+    }
+  };
+}, [clip.id, trackerId]);
 
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
     videoRef.current = el;
@@ -3693,20 +3604,6 @@ const VideoLayer = ({
             <p className="text-white font-medium text-sm">Error de reproducción</p>
             <p className="text-red-200 text-xs max-w-xs mt-1 break-all">URL: {clip.url?.slice(0, 50)}...</p>
             <p className="text-red-200 text-xs max-w-xs mt-1">Este archivo no se puede cargar. Puede que su sesión haya expirado (blob) o el formato no sea soportado.</p>
-          </div>
-        ) : shouldOptimizeBypass ? (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-obs-dark-1/90 border border-obs-border/50 p-4 text-center aspect-video overflow-hidden relative">
-            <div className="absolute inset-0 opacity-40 bg-cover bg-center filter blur-md" style={{ backgroundImage: clip.thumbnail ? `url(${clip.thumbnail})` : undefined }} />
-            <div className="relative z-10 flex flex-col items-center">
-              <div className="flex items-center gap-2 mb-2 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-full animate-pulse">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                <span className="text-[9px] font-black tracking-widest text-emerald-400 font-sans">BYPASS / EN TRANSMISIÓN</span>
-              </div>
-              <span className="text-white text-[11px] font-bold uppercase tracking-wide truncate max-w-[220px] font-sans">{clip.name}</span>
-              <span className="text-obs-accent text-[8px] uppercase tracking-wider font-mono mt-0.5 blur-[0.1px]">
-                OPTIMIZACION PIPELINE (0% GPU EXTRA)
-              </span>
-            </div>
           </div>
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
@@ -5041,14 +4938,14 @@ const OutputView = React.memo(() => {
                               opacity={1}
                               isProgram={true}
                               isTransmitting={isTransmitting}
-                              onLayerEnded={(layerId: string, clipId: string, seqCounter: number) => {
+                              onLayerEnded={(layerId: string, clipId: string, seqCounter: number, oid?: string) => {
                                 channelRef.current?.postMessage({
                                   type: "LAYER_CLIP_ENDED",
                                   payload: {
                                     layerId: layerId,
                                     clipId: clipId,
                                     sequenceCounter: seqCounter,
-                                    outputId: mappedOutput?.id || "1",
+                                    outputId: oid || mappedOutput?.id || "1",
                                   },
                                 });
                               }}
@@ -8120,72 +8017,21 @@ const HoverVideoPreview = React.memo(
     className?: string;
     style?: React.CSSProperties;
   }) => {
-    const [isHovered, setIsHovered] = useState(false);
-    const videoRef = useRef<HTMLVideoElement>(null);
-
-    // Handle hover playback
-    useEffect(() => {
-      const video = videoRef.current;
-      if (!video) return;
-      if (isHovered) {
-        video.src = src;
-        video.preload = "auto";
-        video.play().catch(() => {});
-      } else {
-        video.pause();
-        video.preload = "none";
-        try {
-          video.src = "";
-          video.removeAttribute("src");
-          video.load();
-        } catch (e) {}
-      }
-    }, [isHovered, src]);
-
-    // Clean up decoder on unmount
-    useEffect(() => {
-      return () => {
-        const video = videoRef.current;
-        if (video) {
-          try {
-            video.pause();
-            video.src = "";
-            video.removeAttribute("src");
-            video.load();
-          } catch (e) {}
-        }
-      };
-    }, []);
-
     return (
-      <div
-        className="w-full h-full relative overflow-hidden"
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-      >
-        <video
-          ref={videoRef}
-          className={className}
-          muted
-          loop
-          playsInline
-          preload="none"
-          style={{ ...style, display: isHovered ? "block" : "none" }}
-        />
-        {!isHovered &&
-          (thumbnail ? (
-            <img
-              src={thumbnail}
-              className={className || "w-full h-full object-cover"}
-              alt="Preview"
-              referrerPolicy="no-referrer"
-              style={style}
-            />
-          ) : (
-            <div className="w-full h-full bg-obs-surface flex items-center justify-center">
-              <Play size={16} className="text-obs-muted opacity-20" />
-            </div>
-          ))}
+      <div className="w-full h-full relative overflow-hidden">
+        {thumbnail ? (
+          <img
+            src={thumbnail}
+            className={className || "w-full h-full object-cover"}
+            alt="Preview"
+            referrerPolicy="no-referrer"
+            style={style}
+          />
+        ) : (
+          <div className="w-full h-full bg-obs-surface flex items-center justify-center">
+            <Play size={16} className="text-obs-muted opacity-20" />
+          </div>
+        )}
       </div>
     );
   },
@@ -8568,7 +8414,7 @@ const Library = React.memo(
           f.type.startsWith("video") &&
           f.type !== "videoinput") ||
         (activeFolder === "image" && f.type.startsWith("image")) ||
-        (activeFolder === "pdf" && (f.type.includes("pdf") || f.type.includes("ppt") || f.type.includes("powerpoint") || f.name.toLowerCase().endsWith(".ppt") || f.name.toLowerCase().endsWith(".pptx"))) ||
+        (activeFolder === "pdf" && f.type.includes("pdf")) ||
         (activeFolder === "videoin" && f.type === "videoinput");
       return matchesSearch && matchesFolder;
     });
@@ -12143,10 +11989,7 @@ export default function App() {
   const [perfSettings, setPerfSettings] = useState(() => {
     try {
       const saved = localStorage.getItem("lumin_perf_settings");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return { optimizeCockpitPreview: true, ...parsed };
-      }
+      if (saved) return JSON.parse(saved);
     } catch {}
     return {
       gpuDecoding: "nvdec", // 'd3d11' | 'dxva2' | 'nvdec' | 'vaapi' | 'software'
@@ -12177,7 +12020,6 @@ export default function App() {
       timeoutRecovery: true,
       dynamicDecoderRestart: true,
       advancedPerfLogs: true,
-      optimizeCockpitPreview: true,
     };
   });
 
@@ -12185,6 +12027,46 @@ export default function App() {
   const [telemetryCpu, setTelemetryCpu] = useState(14.5);
   const [telemetryGpu, setTelemetryGpu] = useState(28.2);
   const [telemetryRam, setTelemetryRam] = useState(2.3);
+  const [playingVideosCount, setPlayingVideosCount] = useState(0);
+
+  useEffect(() => {
+    const isVideoAudiblyOrVisuallyActive = (v: HTMLVideoElement) => {
+      try {
+        if (v.paused || v.ended || v.readyState === 0 || v.currentTime === 0) {
+          return false;
+        }
+        // Walk up to make sure no parent is hidden/opacity 0
+        let el: HTMLElement | null = v;
+        while (el) {
+          const style = window.getComputedStyle(el);
+          if (style.display === "none" || style.visibility === "hidden") {
+            return false;
+          }
+          const op = parseFloat(style.opacity);
+          if (!isNaN(op) && op < 0.05) {
+            return false;
+          }
+          el = el.parentElement;
+        }
+        return true;
+      } catch (e) {
+        return !v.paused && !v.ended && v.readyState > 0 && v.currentTime > 0;
+      }
+    };
+
+    const checkPlayingVideos = () => {
+      try {
+        const videos = Array.from(document.querySelectorAll("video"));
+        const playing = videos.filter(isVideoAudiblyOrVisuallyActive);
+        setPlayingVideosCount(playing.length);
+      } catch (err) {
+        console.error("Error detecting playing videos:", err);
+      }
+    };
+    checkPlayingVideos();
+    const interval = setInterval(checkPlayingVideos, 500);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -12207,68 +12089,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("lumin_perf_settings", JSON.stringify(perfSettings));
   }, [perfSettings]);
-
-  const [activeDecoders, setActiveDecoders] = useState<Record<string, { isOutput: boolean; timestamp: number }>>({});
-
-  useEffect(() => {
-    const handleTelemetryMessage = (trackerId: string, isOutputWindow: boolean, playing: boolean) => {
-      setActiveDecoders(prev => {
-        const next = { ...prev };
-        if (playing) {
-          next[trackerId] = {
-            isOutput: isOutputWindow,
-            timestamp: Date.now()
-          };
-        } else {
-          delete next[trackerId];
-        }
-        return next;
-      });
-    };
-
-    const handleBroadcast = (event: MessageEvent) => {
-      if (event.data?.type === "TELEMETRY_HEARTBEAT") {
-        const { trackerId, isOutputWindow, playing } = event.data.payload || {};
-        if (trackerId) {
-          handleTelemetryMessage(trackerId, !!isOutputWindow, !!playing);
-        }
-      }
-    };
-
-    const handleLocalCustom = (event: Event) => {
-      const customEv = event as CustomEvent;
-      const { trackerId, isOutputWindow, playing } = customEv.detail || {};
-      if (trackerId) {
-        handleTelemetryMessage(trackerId, !!isOutputWindow, !!playing);
-      }
-    };
-
-    const ch = new BroadcastChannel("lumin-output");
-    ch.addEventListener("message", handleBroadcast);
-    window.addEventListener("lumin-decoder-telemetry" as any, handleLocalCustom);
-
-    const interval = setInterval(() => {
-      const now = Date.now();
-      setActiveDecoders(prev => {
-        let changed = false;
-        const next = { ...prev };
-        for (const [id, info] of Object.entries(next)) {
-          if (now - info.timestamp > 1500) {
-            delete next[id];
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
-    }, 1000);
-
-    return () => {
-      ch.removeEventListener("message", handleBroadcast);
-      ch.close();
-      window.removeEventListener("lumin-decoder-telemetry" as any, handleLocalCustom);
-      clearInterval(interval);
-    };
-  }, []);
   // libraryFiles declaration moved up to fix hosting
   const [selectedLibraryUrls, setSelectedLibraryUrls] = useState<Set<string>>(
     new Set(),
@@ -12291,8 +12111,9 @@ export default function App() {
       return route === "all" || route === outputId;
     });
     for (const layer of activeLayers) {
-      if (layer.activeClipId) {
-        const clip = clips.find((c) => c.id === layer.activeClipId);
+      const layerState = getLayerActiveState(layer, outputId);
+      if (layerState.activeClipId) {
+        const clip = clips.find((c) => c.id === layerState.activeClipId);
         if (clip && (clip.type === "video" || clip.type === "videoinput" || clip.name?.toLowerCase().endsWith(".mp4") || clip.name?.toLowerCase().endsWith(".mov") || clip.name?.toLowerCase().endsWith(".mkv"))) {
           return true;
         }
@@ -13139,15 +12960,15 @@ export default function App() {
     seqCounter?: number,
     outputId?: string,
   ) => {
-    const lastTime = lastLayerEndTimesRef.current[layerId] || 0;
+    const targetOutputId = outputId || layerOutputs[layerId] || "1";
+    const lastTimeKey = `${layerId}_${targetOutputId}`;
+    const lastTime = lastLayerEndTimesRef.current[lastTimeKey] || 0;
     const now = Date.now();
     // Reduce throttle to 50ms as in working versions to allow rapid sequence continuation
     if (now - lastTime < 50) {
       return;
     }
-    lastLayerEndTimesRef.current[layerId] = now;
-
-    const targetOutputId = outputId || layerOutputs[layerId] || "1";
+    lastLayerEndTimesRef.current[lastTimeKey] = now;
 
     // Reset the currentTime of the ended clip to 0 so it starts fresh next time
     const layerTrackerId = `layer_${targetOutputId}_${layerId}_${clipId}`;
@@ -13172,110 +12993,136 @@ export default function App() {
       const nextLayers = prev.map((layer) => {
         if (layer.id !== layerId) return layer;
 
+        const outputStates = { ...(layer.outputStates || {}) };
+        const layerState = outputStates[targetOutputId] || {
+          activeClipId: layer.activeClipId,
+          activeSlotIndex: layer.activeSlotIndex,
+          sequenceCounter: layer.sequenceCounter || 0,
+          isPlaying: layer.isPlaying ?? false,
+        };
+
         // Verify sequence counter to prevent historical events from triggering next
         if (
           seqCounter !== undefined &&
-          (layer.sequenceCounter || 0) !== seqCounter
+          (layerState.sequenceCounter || 0) !== seqCounter
         ) {
           return layer;
         }
 
         // Verify we are still on the same clip
-        if (layer.activeClipId !== clipId) return layer;
+        if (layerState.activeClipId !== clipId) return layer;
+
+        let nextState: any = null;
 
         if (layer.playbackMode === "single") {
           if (layer.loopVideo === false) {
             sideEffectStop = true;
-            return {
-              ...layer,
+            nextState = {
               activeClipId: null,
               activeSlotIndex: null,
+              sequenceCounter: (layerState.sequenceCounter || 0) + 1,
               isPlaying: false,
             };
+          } else {
+            return layer;
           }
-          return layer;
-        }
+        } else {
+          // Mode Sequence/Playlist: Find next non-null slot in current layer
+          const currentSlotIndex =
+            layerState.activeSlotIndex !== null
+              ? layerState.activeSlotIndex
+              : layer.slots.findIndex((s) => s?.id === layerState.activeClipId);
 
-        // Mode Sequence/Playlist: Find next non-null slot in current layer
-        const currentSlotIndex =
-          layer.activeSlotIndex !== null
-            ? layer.activeSlotIndex
-            : layer.slots.findIndex((s) => s?.id === layer.activeClipId);
-
-        let nextClipIndex = -1;
-        for (let i = currentSlotIndex + 1; i < layer.slots.length; i++) {
-          if (layer.slots[i]) {
-            nextClipIndex = i;
-            break;
-          }
-        }
-
-        if (nextClipIndex !== -1) {
-          const nextClip = layer.slots[nextClipIndex]!;
-          // Reset the next clip's stored time to 0 immediately so it starts fresh
-          const nextTrackerId = `layer_${targetOutputId}_${layerId}_${nextClip.id}`;
-          if (typeof window !== "undefined") {
-            if (!(window as any).__luminVideoTimes) {
-              (window as any).__luminVideoTimes = {};
+          let nextClipIndex = -1;
+          for (let i = currentSlotIndex + 1; i < layer.slots.length; i++) {
+            if (layer.slots[i]) {
+              nextClipIndex = i;
+              break;
             }
-            (window as any).__luminVideoTimes[nextTrackerId] = 0;
           }
-          const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
-          if (ch) {
-            try {
-              ch.postMessage({
-                type: "VIDEO_TIME_UPDATE",
-                payload: { trackerId: nextTrackerId, clipId: nextClip.id, currentTime: 0 },
-              });
-            } catch (err) {}
-          }
-          
-          return {
-            ...layer,
-            activeClipId: nextClip.id,
-            activeSlotIndex: nextClipIndex,
-            sequenceCounter: (layer.sequenceCounter || 0) + 1,
-            isPlaying: true,
-          };
-        } else if (layer.loop !== false) {
-          // Restart from beginning if loop is enabled
-          const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
-          if (firstSlotIndex !== -1) {
-            const firstClip = layer.slots[firstSlotIndex]!;
-            const firstTrackerId = `layer_${targetOutputId}_${layerId}_${firstClip.id}`;
+
+          if (nextClipIndex !== -1) {
+            const nextClip = layer.slots[nextClipIndex]!;
+            // Reset the next clip's stored time to 0 immediately so it starts fresh
+            const nextTrackerId = `layer_${targetOutputId}_${layerId}_${nextClip.id}`;
             if (typeof window !== "undefined") {
               if (!(window as any).__luminVideoTimes) {
                 (window as any).__luminVideoTimes = {};
               }
-              (window as any).__luminVideoTimes[firstTrackerId] = 0;
+              (window as any).__luminVideoTimes[nextTrackerId] = 0;
             }
-            const ch = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
-            if (ch) {
+            const chan = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
+            if (chan) {
               try {
-                ch.postMessage({
+                chan.postMessage({
                   type: "VIDEO_TIME_UPDATE",
-                  payload: { trackerId: firstTrackerId, clipId: firstClip.id, currentTime: 0 },
+                  payload: { trackerId: nextTrackerId, clipId: nextClip.id, currentTime: 0 },
                 });
               } catch (err) {}
             }
-
-            return {
-              ...layer,
-              activeClipId: firstClip.id,
-              activeSlotIndex: firstSlotIndex,
-              sequenceCounter: (layer.sequenceCounter || 0) + 1,
+            
+            nextState = {
+              activeClipId: nextClip.id,
+              activeSlotIndex: nextClipIndex,
+              sequenceCounter: (layerState.sequenceCounter || 0) + 1,
               isPlaying: true,
             };
+          } else if (layer.loop !== false) {
+            // Restart from beginning if loop is enabled
+            const firstSlotIndex = layer.slots.findIndex((s) => s !== null);
+            if (firstSlotIndex !== -1) {
+              const firstClip = layer.slots[firstSlotIndex]!;
+              const firstTrackerId = `layer_${targetOutputId}_${layerId}_${firstClip.id}`;
+              if (typeof window !== "undefined") {
+                if (!(window as any).__luminVideoTimes) {
+                  (window as any).__luminVideoTimes = {};
+                }
+                (window as any).__luminVideoTimes[firstTrackerId] = 0;
+              }
+              const chan = typeof BroadcastChannel !== "undefined"? new BroadcastChannel("lumin-output"): null;
+              if (chan) {
+                try {
+                  chan.postMessage({
+                    type: "VIDEO_TIME_UPDATE",
+                    payload: { trackerId: firstTrackerId, clipId: firstClip.id, currentTime: 0 },
+                  });
+                } catch (err) {}
+              }
+
+              nextState = {
+                activeClipId: firstClip.id,
+                activeSlotIndex: firstSlotIndex,
+                sequenceCounter: (layerState.sequenceCounter || 0) + 1,
+                isPlaying: true,
+              };
+            }
           }
         }
 
-        // Final fallback: no more clips and no loop
-        sideEffectStop = true;
+        if (!nextState) {
+          // Final fallback: no more clips and no loop
+          sideEffectStop = true;
+          nextState = {
+            activeClipId: null,
+            activeSlotIndex: null,
+            sequenceCounter: (layerState.sequenceCounter || 0) + 1,
+            isPlaying: false,
+          };
+        }
+
+        outputStates[targetOutputId] = nextState;
+
+        // For backward compatibility / overall summary we also update the layer's main properties
+        // but ONLY if the ended event is for the main assigned output or activeOutputId
+        const isPrimaryOutput = targetOutputId === (layerOutputs[layer.id] || "1") || targetOutputId === "all";
+
         return {
           ...layer,
-          activeClipId: null,
-          activeSlotIndex: null,
-          isPlaying: false,
+          activeClipId: isPrimaryOutput ? nextState.activeClipId : layer.activeClipId,
+          activeSlotIndex: isPrimaryOutput ? nextState.activeSlotIndex : layer.activeSlotIndex,
+          sequenceCounter: isPrimaryOutput ? nextState.sequenceCounter : layer.sequenceCounter,
+          isPlaying: isPrimaryOutput ? nextState.isPlaying : layer.isPlaying,
+          outputStates,
         };
       });
 
@@ -13381,6 +13228,17 @@ export default function App() {
           } else {
             setActiveLayerTriggers((prev) => ({ ...prev, [layerId]: "play" }));
           }
+          const outputStates = { ...(l.outputStates || {}) };
+          // Populate states for potential outputs as well
+          const targetStates = ["1", "2", "3", "4", "5", "all", linkedOutputId];
+          targetStates.forEach(oid => {
+            outputStates[oid] = {
+              activeClipId: clip.id,
+              activeSlotIndex: slotIdx,
+              sequenceCounter: ((l.outputStates?.[oid]?.sequenceCounter ?? l.sequenceCounter ?? 0) + 1),
+              isPlaying: true,
+            };
+          });
           return {
             ...l,
             activeClipId: clip.id,
@@ -13388,15 +13246,26 @@ export default function App() {
             sequenceCounter: (l.sequenceCounter || 0) + 1,
             isPlaying: true,
             playbackMode: mode,
+            outputStates,
           };
         }
         // If empty slot, stop the layer
         setActiveLayerTriggers((prev) => ({ ...prev, [layerId]: "stop" }));
+        const outputStates = { ...(l.outputStates || {}) };
+        ["1", "2", "3", "4", "5", "all", linkedOutputId].forEach(oid => {
+          outputStates[oid] = {
+            activeClipId: null,
+            activeSlotIndex: null,
+            sequenceCounter: (l.outputStates?.[oid]?.sequenceCounter ?? l.sequenceCounter ?? 0),
+            isPlaying: false,
+          };
+        });
         return {
           ...l,
           activeClipId: null,
           activeSlotIndex: null,
           isPlaying: false,
+          outputStates,
         };
       }),
     );
@@ -15440,6 +15309,35 @@ export default function App() {
                                   />
                                 </div>
                               </div>
+
+                              {/* VÍDEOS EN REPRODUCCIÓN */}
+                              <div className="col-span-2 bg-obs-dark-2 p-2 rounded relative overflow-hidden group border border-obs-text/5">
+                                <div className="flex justify-between items-center mb-1">
+                                  <span className="text-[7px] text-obs-muted uppercase font-black tracking-wider">
+                                    Vídeos Activos (Multicanal)
+                                  </span>
+                                  <span className={`text-[6px] font-bold uppercase tracking-tighter flex items-center gap-1 ${playingVideosCount > 0 ? "text-cyan-400 font-black" : "text-stone-500"}`}>
+                                    {playingVideosCount > 0 && (
+                                      <span className="w-1 h-1 rounded-full bg-cyan-400 animate-ping" />
+                                    )}
+                                    {playingVideosCount > 0 ? "REPRODUCIENDO" : "SIN SEÑAL"}
+                                  </span>
+                                </div>
+                                <div className="font-mono text-xs font-black text-white leading-none flex items-center gap-1.5">
+                                  <span className="text-cyan-400">{playingVideosCount}</span>
+                                  <span className="text-[7px] text-obs-muted uppercase">
+                                    {playingVideosCount === 1 ? "vídeo activo" : "vídeos simultáneos"}
+                                  </span>
+                                </div>
+                                <div className="w-full bg-obs-border/30 h-0.5 mt-1.5 rounded-full overflow-hidden">
+                                  <div
+                                    className="bg-cyan-500 h-full rounded-full transition-all duration-300"
+                                    style={{
+                                      width: `${Math.min(100, (playingVideosCount / 8) * 100)}%`,
+                                    }}
+                                  />
+                                </div>
+                              </div>
                             </div>
 
                             {/* Additional telemetry stats */}
@@ -15500,30 +15398,6 @@ export default function App() {
                                     : "NO DISPONIBLE"}
                                 </span>
                               </div>
-                              <div className="flex justify-between items-center border-t border-obs-text/5 pt-1.5">
-                                <span className="text-obs-muted">
-                                  Vídeos en Reproducción (Decoders)
-                                </span>
-                                <span className="text-emerald-400 font-bold">
-                                  {Object.keys(activeDecoders).length} ACTIVO(S)
-                                </span>
-                              </div>
-                              {Object.keys(activeDecoders).length > 0 && (
-                                <div className="border-t border-obs-text/5 pt-1 pb-1 pl-2 space-y-1 text-[6px] uppercase font-mono">
-                                  <div className="flex justify-between items-center">
-                                    <span className="text-obs-muted">├─ Cockpit (Previsualización)</span>
-                                    <span className="text-white font-bold">
-                                      {Object.values(activeDecoders).filter(d => !d.isOutput).length} activo(s)
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between items-center">
-                                    <span className="text-obs-muted">└─ Salida Externa (Emisión)</span>
-                                    <span className="text-obs-accent font-bold">
-                                      {Object.values(activeDecoders).filter(d => d.isOutput).length} activo(s)
-                                    </span>
-                                  </div>
-                                </div>
-                              )}
                             </div>
                           </div>
                         </div>
