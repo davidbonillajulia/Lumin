@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import JSZip from "jszip";
 import { PDFRenderer } from "./components/PDFRenderer";
 import { PerfManagerModal } from "./components/PerfManagerModal";
+import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
 import {
   Play,
   Pause,
@@ -506,6 +507,7 @@ const FluidTimeDisplay = ({
   layerOutputs?: any;
 }) => {
   const spanRef = useRef<HTMLSpanElement>(null);
+  const lastVideoRef = useRef<any>(null);
 
   const { resolvedClipId, resolvedTrackerId } = useMemo(() => {
     // 1. Check if there are active layer video clips mapped on this outputId
@@ -585,12 +587,8 @@ const FluidTimeDisplay = ({
               }
             }
 
-            const videoRefKey = outputId || "default";
-            if (!(window as any).__lastVideoRefs) {
-              (window as any).__lastVideoRefs = {};
-            }
-            if ((window as any).__lastVideoRefs[videoRefKey] !== video) {
-              (window as any).__lastVideoRefs[videoRefKey] = video;
+            if (lastVideoRef.current !== video) {
+              lastVideoRef.current = video;
               if (resolvedTrackerId) {
                 smoothedTime = (window as any).__luminVideoTimes?.[resolvedTrackerId] ?? actualCurrent;
               } else {
@@ -10374,6 +10372,7 @@ const PreviewManagerModal = ({
 // --- Main App ---
 
 export default function App() {
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [clips, setClips] = useState<Clip[]>(MOCK_CLIPS);
   const [lastSwitchTime, setLastSwitchTime] = useState(0);
   const [playlists, setPlaylists] = useState<Playlist[]>([
@@ -14439,6 +14438,7 @@ export default function App() {
     <div
       className={`flex flex-col h-screen font-sans selection:bg-obs-accent/30 overflow-hidden bg-obs-bg text-obs-text`}
     >
+      <DiagnosticsPanel isVisible={isDiagnosticsOpen} />
       <input
         type="file"
         ref={fileInputRef}
@@ -14975,6 +14975,12 @@ export default function App() {
               className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize"
             >
               Output
+            </button>
+            <button
+              onClick={() => setIsDiagnosticsOpen(!isDiagnosticsOpen)}
+              className={`text-[10px] px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize flex items-center ${isDiagnosticsOpen ? "bg-obs-accent text-white" : "text-obs-text hover:bg-obs-border"}`}
+            >
+              Monitorizar
             </button>
 
             <button className="text-[10px] text-obs-text hover:bg-obs-border px-3 py-1 rounded transition-colors font-bold tracking-widest capitalize">
