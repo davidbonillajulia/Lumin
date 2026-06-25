@@ -8655,8 +8655,16 @@ const Library = React.memo(
                     className={`${viewMode === "grid" ? "aspect-video w-full" : "w-12 h-8"} bg-black rounded-sm overflow-hidden flex-shrink-0 relative flex items-center justify-center`}
                   >
                     <LibraryMediaPreview file={file} />
+                    {transcodingFiles[file.url]?.status === 'converting' && (
+                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center p-1 z-10">
+                        <div className="w-full h-1 bg-obs-dark-2 rounded-full overflow-hidden">
+                           <div className="h-full bg-obs-accent transition-all duration-300" style={{width: `${transcodingFiles[file.url]?.progress}%`}} />
+                        </div>
+                        <span className="text-[7px] font-bold text-obs-accent mt-0.5">{transcodingFiles[file.url]?.progress}%</span>
+                      </div>
+                    )}
                     {viewMode === "grid" && (
-                      <div className="absolute bottom-0 left-0 right-0 bg-obs-dark-1 px-1 py-0.5">
+                      <div className="absolute bottom-0 left-0 right-0 bg-obs-dark-1 px-1 py-0.5 z-10">
                         <div className="text-[7px] truncate text-white uppercase font-bold">
                           {file.type.split("/")[1] || "DOC"}
                         </div>
@@ -8671,14 +8679,14 @@ const Library = React.memo(
                         >
                           <Trash2 size={10} />
                         </button>
-                        {(file.type.startsWith("video") && !file.isOptimized && file.path && file.type !== "videoinput") && (
+                        {(file.type.startsWith("video") && file.path && file.type !== "videoinput") && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleOptimiseVideo(file);
+                              if (!file.isOptimized) handleOptimiseVideo(file);
                             }}
-                            className="p-1 bg-black/60 hover:bg-green-500 rounded text-obs-accent hover:text-white opacity-0 group-hover:opacity-100 transition-all"
-                            title="Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"
+                            className={`p-1 rounded transition-all ${file.isOptimized ? "bg-obs-accent text-white" : "bg-black/60 hover:bg-green-500 text-obs-accent hover:text-white opacity-0 group-hover:opacity-100"}`}
+                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"}
                           >
                             <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse" : ""} />
                           </button>
@@ -8697,16 +8705,16 @@ const Library = React.memo(
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0 select-none">
-                        {(file.type.startsWith("video") && !file.isOptimized && file.path && file.type !== "videoinput") && (
+                        {(file.type.startsWith("video") && file.path && file.type !== "videoinput") && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleOptimiseVideo(file);
+                              if (!file.isOptimized) handleOptimiseVideo(file);
                             }}
-                            className="opacity-0 group-hover:opacity-100 text-obs-accent hover:text-green-400 transition-all p-1"
-                            title="Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"
+                            className={`p-1 rounded transition-all ${file.isOptimized ? "text-obs-accent" : "opacity-0 group-hover:opacity-100 text-obs-accent hover:text-green-400"}`}
+                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"}
                           >
-                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse" : ""} />
+                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse text-green-400" : ""} />
                           </button>
                         )}
                         <button
