@@ -8571,6 +8571,33 @@ const Library = React.memo(
           ))}
         </div>
 
+        <div className="flex items-center gap-2 px-2 py-1.5 border-b border-obs-border bg-obs-surface">
+           <div className="flex-1 relative">
+             <Search size={10} className="absolute left-2 top-1/2 -translate-y-1/2 text-obs-muted" />
+             <input
+               type="text"
+               placeholder="Buscar en biblioteca..."
+               value={searchQuery}
+               onChange={(e) => setSearchQuery(e.target.value)}
+               className="w-full bg-obs-dark-1 border border-obs-border rounded px-6 py-1 text-[10px] text-obs-text focus:outline-none focus:border-obs-accent"
+             />
+           </div>
+           <div className="flex items-center bg-obs-dark-1 border border-obs-border rounded shrink-0">
+             <button
+               onClick={() => setViewMode("grid")}
+               className={`p-1 ${viewMode === "grid" ? "text-obs-accent bg-obs-accent/10" : "text-obs-muted hover:text-white"}`}
+             >
+               <Grid size={12} />
+             </button>
+             <button
+               onClick={() => setViewMode("list")}
+               className={`p-1 ${viewMode === "list" ? "text-obs-accent bg-obs-accent/10" : "text-obs-muted hover:text-white"}`}
+             >
+               <List size={12} />
+             </button>
+           </div>
+        </div>
+
         <div className="flex-1 overflow-y-auto p-2 min-h-0">
           {libraryFiles.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 text-obs-muted gap-2 opacity-30">
@@ -8636,13 +8663,27 @@ const Library = React.memo(
                       </div>
                     )}
                     {viewMode === "grid" && (
-                      <button
-                        onClick={(e) => handleDeleteFile(file.url, e)}
-                        className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-red-500 rounded text-stone-300 hover:text-white opacity-0 group-hover:opacity-100 transition-all z-20"
-                        title="Eliminar archivo"
-                      >
-                        <Trash2 size={10} />
-                      </button>
+                      <div className="absolute top-1 right-1 flex flex-col gap-1 z-20">
+                        <button
+                          onClick={(e) => handleDeleteFile(file.url, e)}
+                          className="p-1 bg-black/60 hover:bg-red-500 rounded text-stone-300 hover:text-white opacity-0 group-hover:opacity-100 transition-all"
+                          title="Eliminar archivo"
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                        {(file.type.startsWith("video") && !file.isOptimized && file.path && file.type !== "videoinput") && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOptimiseVideo(file);
+                            }}
+                            className="p-1 bg-black/60 hover:bg-green-500 rounded text-obs-accent hover:text-white opacity-0 group-hover:opacity-100 transition-all"
+                            title="Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"
+                          >
+                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse" : ""} />
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                   {viewMode === "list" ? (
@@ -8656,6 +8697,18 @@ const Library = React.memo(
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0 select-none">
+                        {(file.type.startsWith("video") && !file.isOptimized && file.path && file.type !== "videoinput") && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOptimiseVideo(file);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 text-obs-accent hover:text-green-400 transition-all p-1"
+                            title="Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"
+                          >
+                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse" : ""} />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => handleDeleteFile(file.url, e)}
                           className="opacity-0 group-hover:opacity-100 text-obs-muted hover:text-red-500 transition-all p-1"
