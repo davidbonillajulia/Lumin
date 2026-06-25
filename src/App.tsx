@@ -8248,8 +8248,11 @@ const Library = React.memo(
     const [transcodingFiles, setTranscodingFiles] = useState<Record<string, { progress: number; status: 'idle' | 'converting' | 'success' | 'err'; error?: string }>>({});
 
     const handleOptimiseVideo = async (file: any) => {
-      if (!file.path) return;
-      const inputPath = file.path;
+      const inputPath = file.path || (file.file && file.file.path);
+      if (!inputPath) {
+        console.warn("No valid path found for optimization", file);
+        return;
+      }
       const lastDot = inputPath.lastIndexOf('.');
       const ext = lastDot !== -1 ? inputPath.substring(lastDot) : '.mp4';
       const basePath = lastDot !== -1 ? inputPath.substring(0, lastDot) : inputPath;
@@ -8355,6 +8358,7 @@ const Library = React.memo(
           }));
         }
       } catch (err: any) {
+        console.error("Transcoding exception:", err);
         clearInterval(progressInterval);
         setTranscodingFiles(prev => ({
           ...prev,
@@ -8663,6 +8667,11 @@ const Library = React.memo(
                         <span className="text-[7px] font-bold text-obs-accent mt-0.5">{transcodingFiles[file.url]?.progress}%</span>
                       </div>
                     )}
+                    {transcodingFiles[file.url]?.status === 'err' && (
+                      <div className="absolute inset-0 bg-red-900/60 flex flex-col items-center justify-center p-1 z-10" title={transcodingFiles[file.url]?.error}>
+                        <span className="text-[9px] font-bold text-white text-center leading-tight bg-black/80 px-1 py-0.5 rounded">Error<br/>Conversión</span>
+                      </div>
+                    )}
                     {viewMode === "grid" && (
                       <div className="absolute bottom-0 left-0 right-0 bg-obs-dark-1 px-1 py-0.5 z-10">
                         <div className="text-[7px] truncate text-white uppercase font-bold">
@@ -8686,9 +8695,9 @@ const Library = React.memo(
                               if (!file.isOptimized) handleOptimiseVideo(file);
                             }}
                             className={`p-1 rounded transition-all ${file.isOptimized ? "bg-obs-accent text-white" : "bg-black/60 hover:bg-green-500 text-obs-accent hover:text-white opacity-0 group-hover:opacity-100"}`}
-                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"}
+                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : (transcodingFiles[file.url]?.status === 'err' ? "Error en conversión" : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU")}
                           >
-                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse" : ""} />
+                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse" : (transcodingFiles[file.url]?.status === 'err' ? "text-red-500" : "")} />
                           </button>
                         )}
                       </div>
@@ -8696,9 +8705,17 @@ const Library = React.memo(
                   </div>
                   {viewMode === "list" ? (
                     <div className="flex-1 min-w-0 px-2 flex items-center justify-between">
-                      <div className="truncate">
-                        <div className="text-[10px] truncate leading-tight">
+                      <div className="truncate flex-1 pr-2">
+                        <div className="text-[10px] truncate leading-tight flex items-center gap-2">
                           {file.name}
+                          {transcodingFiles[file.url]?.status === 'converting' && (
+                            <div className="w-12 h-1 bg-obs-dark-2 rounded-full overflow-hidden flex-shrink-0">
+                               <div className="h-full bg-obs-accent transition-all duration-300" style={{width: `${transcodingFiles[file.url]?.progress}%`}} />
+                            </div>
+                          )}
+                          {transcodingFiles[file.url]?.status === 'err' && (
+                             <span className="text-[8px] text-red-500 font-bold ml-1">Error</span>
+                          )}
                         </div>
                         <div className="text-[8px] text-obs-muted uppercase">
                           {file.type.split("/")[1]}
@@ -8712,9 +8729,9 @@ const Library = React.memo(
                               if (!file.isOptimized) handleOptimiseVideo(file);
                             }}
                             className={`p-1 rounded transition-all ${file.isOptimized ? "text-obs-accent" : "opacity-0 group-hover:opacity-100 text-obs-accent hover:text-green-400"}`}
-                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU"}
+                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : (transcodingFiles[file.url]?.status === 'err' ? "Error en conversión" : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU")}
                           >
-                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse text-green-400" : ""} />
+                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse text-green-400" : (transcodingFiles[file.url]?.status === 'err' ? "text-red-500" : "")} />
                           </button>
                         )}
                         <button
