@@ -6,7 +6,7 @@ export const DiagnosticsPanel = ({ isVisible }: { isVisible: boolean }) => {
   const [memory, setMemory] = useState<any>(null);
   const frameCount = useRef(0);
   const lastTime = useRef(performance.now());
-  const reqRef = useRef<number>();
+  const reqRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (!isVisible) return;

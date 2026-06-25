@@ -440,14 +440,66 @@ if (!gotTheLock) {
     return filePath;
   });
 
+  function getFFmpegPath(forSpawn = false) {
+    // 1. Check current working directory or app's bin folder
+    const cwdPath = path.join(process.cwd(), 'bin', 'ffmpeg.exe');
+    if (fs.existsSync(cwdPath)) return cwdPath;
+
+    const cwdDirect = path.join(process.cwd(), 'ffmpeg.exe');
+    if (fs.existsSync(cwdDirect)) return cwdDirect;
+
+    if (process.platform === 'win32') {
+      // 2. Check AppData Local / Roaming
+      const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      const localFfmpeg = path.join(localAppData, 'ffmpeg', 'bin', 'ffmpeg.exe');
+      if (fs.existsSync(localFfmpeg)) return localFfmpeg;
+
+      const localFfmpegDirect = path.join(localAppData, 'Programs', 'ffmpeg', 'bin', 'ffmpeg.exe');
+      if (fs.existsSync(localFfmpegDirect)) return localFfmpegDirect;
+
+      // 3. Check Program Files
+      const programFiles = process.env.PROGRAMFILES || 'C:\\Program Files';
+      const pfFfmpeg = path.join(programFiles, 'ffmpeg', 'bin', 'ffmpeg.exe');
+      if (fs.existsSync(pfFfmpeg)) return pfFfmpeg;
+
+      const pf86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+      const pf86Ffmpeg = path.join(pf86, 'ffmpeg', 'bin', 'ffmpeg.exe');
+      if (fs.existsSync(pf86Ffmpeg)) return pf86Ffmpeg;
+
+      // 4. Check C:\ffmpeg
+      const cFfmpeg = 'C:\\ffmpeg\\bin\\ffmpeg.exe';
+      if (fs.existsSync(cFfmpeg)) return cFfmpeg;
+
+      // 5. Check process.resourcesPath (when compiled as an installer)
+      if (process.resourcesPath) {
+        const resPath = path.join(process.resourcesPath, 'bin', 'ffmpeg.exe');
+        if (fs.existsSync(resPath)) return resPath;
+        const resPathDirect = path.join(process.resourcesPath, 'ffmpeg.exe');
+        if (fs.existsSync(resPathDirect)) return resPathDirect;
+      }
+      
+      // 6. Check Electron AppPath
+      try {
+        const { app } = require('electron');
+        const appPath = path.join(app.getAppPath(), 'bin', 'ffmpeg.exe');
+        if (fs.existsSync(appPath)) return appPath;
+      } catch (e) {}
+    }
+
+    // Default to system-wide ffmpeg command
+    return 'ffmpeg';
+  }
+
   ipcMain.handle('check-ffmpeg', () => {
     return new Promise((resolve) => {
-      exec('ffmpeg -version', (err, stdout) => {
+      const ffmpegPath = getFFmpegPath(true);
+      const command = ffmpegPath === 'ffmpeg' ? 'ffmpeg -version' : `"${ffmpegPath}" -version`;
+      exec(command, (err, stdout) => {
         if (err) {
-          resolve({ available: false, error: err.message });
+          resolve({ available: false, error: err.message, path: ffmpegPath });
         } else {
           const firstLine = stdout.split('\n')[0];
-          resolve({ available: true, version: firstLine });
+          resolve({ available: true, version: firstLine, path: ffmpegPath });
         }
       });
     });
@@ -465,15 +517,51 @@ if (!gotTheLock) {
         }
       }
 
-      // Converted with H.264 Intra-frame (GOP=1) and tune=zerolatency for 0ms seek
-      const cmd = `ffmpeg -y -i "${inputPath}" -c:v libx264 -g 1 -keyint_min 1 -pix_fmt yuv420p -tune zerolatency -crf 18 -preset superfast -c:a aac -b:a 192k "${outputPath}"`;
-      
-      exec(cmd, (err, stdout, stderr) => {
-        if (err) {
-          console.error("Error running ffmpeg transcoding in main process:", err, stderr);
-          resolve({ success: false, error: err.message || stderr });
-        } else {
+      const ffmpegPath = getFFmpegPath(true);
+      const { spawn } = require('child_process');
+
+      // Arguments array for spawn - bypasses spaces/backslashes/quotes escaping on Windows
+      const args = [
+        '-y',
+        '-i', inputPath,
+        '-c:v', 'libx264',
+        '-g', '1',
+        '-keyint_min', '1',
+        '-pix_fmt', 'yuv420p',
+        '-tune', 'zerolatency',
+        '-crf', '18',
+        '-preset', 'superfast',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        outputPath
+      ];
+
+      console.log(`Starting FFmpeg spawn at path: ${ffmpegPath} with args:`, args);
+
+      const child = spawn(ffmpegPath, args);
+      let stderrData = '';
+
+      child.stderr.on('data', (data) => {
+        stderrData += data.toString();
+      });
+
+      child.on('error', (err) => {
+        console.error("Failed to start FFmpeg process:", err);
+        resolve({
+          success: false,
+          error: `No se pudo iniciar FFmpeg en: "${ffmpegPath}".\nPara usar la conversión, asegúrate de tener FFmpeg instalado y agregado a las variables de entorno de Windows, o simplemente descarga "ffmpeg.exe" y colócalo en la carpeta raíz del proyecto.\nDetalle: ${err.message}`
+        });
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) {
           resolve({ success: true, outputPath });
+        } else {
+          console.error(`FFmpeg exited with code ${code}. Error:`, stderrData);
+          resolve({
+            success: false,
+            error: `La conversión falló (FFmpeg código ${code}).\nPosiblemente el archivo de entrada está dañado o no es compatible.\nDetalle de error:\n${stderrData}`
+          });
         }
       });
     });

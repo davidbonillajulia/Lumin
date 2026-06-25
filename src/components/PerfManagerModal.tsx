@@ -83,6 +83,39 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<'gpu' | 'decoding' | 'codecs' | 'watchdog'>('gpu');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [ffmpegStatus, setFfmpegStatus] = useState<{ available: boolean; version?: string; error?: string; path?: string; checked: boolean }>({ available: false, checked: false });
+
+  const checkFFmpegNative = async () => {
+    if ((window as any).electron && typeof (window as any).electron.checkFFmpeg === 'function') {
+      try {
+        const res = await (window as any).electron.checkFFmpeg();
+        setFfmpegStatus({
+          available: res.available,
+          version: res.version,
+          error: res.error,
+          path: res.path,
+          checked: true
+        });
+      } catch (e: any) {
+        setFfmpegStatus({
+          available: false,
+          error: e.message || String(e),
+          checked: true
+        });
+      }
+    } else {
+      setFfmpegStatus({
+        available: true,
+        version: 'ffmpeg version 6.0 (Virtual Web Simulation)',
+        path: 'virtual_ffmpeg_web_preview',
+        checked: true
+      });
+    }
+  };
+
+  useEffect(() => {
+    checkFFmpegNative();
+  }, []);
   const [transcodingFile, setTranscodingFile] = useState<string | null>(null);
   const [transcodeProgress, setTranscodeProgress] = useState(0);
   const [logs, setLogs] = useState<string[]>([]);
@@ -650,6 +683,52 @@ export const PerfManagerModal: React.FC<PerfManagerModalProps> = ({
                 <div className="bg-obs-accent/5 border border-obs-accent/20 rounded p-3 text-[8.5px] text-obs-text leading-relaxed">
                   <p className="font-bold text-obs-accent mb-1 uppercase tracking-wider">🎯 Recomendación Profesional para Windows & Electron:</p>
                   En Windows y Electron, los formatos óptimos con decodificación acelerada por hardware nativo son <strong className="text-white">H.264 (MP4)</strong> y <strong className="text-white">VP9 (WebM con canal Alpha)</strong> configurados con intervalos de fotogramas clave muy cortos (<strong className="text-white">Short GOP / Intra-frame</strong>). Esto permite realizar saltos de tiempo (seeking) instantáneos con un uso de CPU de apenas el <strong className="text-white">1-2%</strong>, garantizando una estabilidad perfecta de la reproducción multicapa.
+                </div>
+
+                {/* DYNAMIC FFMPEG STATUS CHECKER */}
+                <div className={`p-3 rounded border text-[8.5px] leading-relaxed flex flex-col gap-2 ${ffmpegStatus.available ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${ffmpegStatus.available ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`} />
+                      <span className="font-bold uppercase tracking-wider">
+                        {ffmpegStatus.available ? '✓ MOTOR FFmpeg DETECTADO Y ACTIVO' : '✗ MOTOR FFmpeg NO DETECTADO'}
+                      </span>
+                    </div>
+                    <button 
+                      onClick={(e) => {
+                        e.preventDefault();
+                        checkFFmpegNative();
+                      }}
+                      className="p-1 rounded bg-black/40 hover:bg-black/60 text-stone-300 hover:text-white transition-colors cursor-pointer"
+                      title="Volver a verificar FFmpeg"
+                    >
+                      <RefreshCw size={10} className="hover:rotate-180 transition-transform duration-500" />
+                    </button>
+                  </div>
+                  {ffmpegStatus.available ? (
+                    <div className="space-y-1 text-stone-300">
+                      <p>El optimizador de códecs está listo para convertir tus vídeos de forma instantánea al formato de ultra-bajo retardo <strong className="text-white font-black">H.264 ALL-Intra (GOP=1)</strong>.</p>
+                      <p className="text-[7.5px] text-stone-400 truncate">Ruta utilizada: <span className="font-mono">{ffmpegStatus.path || 'ffmpeg global'}</span></p>
+                      {ffmpegStatus.version && <p className="text-[7.5px] text-stone-400 truncate">Versión: <span className="font-mono">{ffmpegStatus.version}</span></p>}
+                    </div>
+                  ) : (
+                    <div className="space-y-2 text-stone-300">
+                      <p className="font-semibold text-red-300">No se ha podido encontrar "ffmpeg" en tu sistema ni en la carpeta del proyecto. Sin él, la conversión a GOP=1 de forma nativa fallará.</p>
+                      <div className="bg-black/40 p-2 rounded text-[7.5px] font-mono text-stone-400 space-y-1">
+                        <p className="font-bold text-stone-200">Rutas de búsqueda comprobadas:</p>
+                        <p>1. Carpeta raíz del proyecto: <span className="text-amber-400">./ffmpeg.exe</span> o <span className="text-amber-400">./bin/ffmpeg.exe</span></p>
+                        <p>2. Rutas estándar: <span className="text-stone-300">C:\ffmpeg\bin\ffmpeg.exe</span> o <span className="text-stone-300">C:\Program Files\ffmpeg\bin\ffmpeg.exe</span></p>
+                        <p>3. Variables de entorno globales de Windows (PATH): <span className="text-stone-300">ffmpeg</span></p>
+                      </div>
+                      <div className="bg-amber-500/5 border border-amber-500/20 p-2.5 rounded text-amber-300 text-[8px] space-y-1 leading-normal">
+                        <p className="font-bold uppercase text-amber-400">👉 ¿Cómo solucionarlo de forma fácil y rápida?</p>
+                        <p>1. Descarga el archivo zip de FFmpeg compilado para Windows (desde <a href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" rel="noopener noreferrer" className="underline text-amber-200 hover:text-white">gyan.dev</a> o similar).</p>
+                        <p>2. Extrae el archivo <strong className="text-white">ffmpeg.exe</strong>.</p>
+                        <p>3. Pégalo directamente en la <strong className="text-white">carpeta raíz de este proyecto</strong> (el mismo lugar donde está "package.json") o crea una carpeta llamada <strong className="text-white">bin</strong> y colócalo ahí.</p>
+                        <p>4. Haz clic en el botón de recarga de arriba. ¡El programa lo detectará automáticamente y podrás optimizar todos tus vídeos al instante!</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-3 gap-3">
