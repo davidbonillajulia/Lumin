@@ -2968,6 +2968,7 @@ const VideoLayer = ({
   const [isReady, setIsReady] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [loadKey, setLoadKey] = useState(0);
+  const [streamObj, setStreamObj] = useState<MediaStream | null>(null);
 
   useEffect(() => {
     setHasError(false);
@@ -3076,6 +3077,86 @@ const VideoLayer = ({
       onReady?.();
     }
   }, [firstFrameRendered, onReady]);
+
+  // Handle slave stream capture
+  useEffect(() => {
+    if (!isSlave || typeof window === "undefined" || clip.type !== "video") {
+      setStreamObj(null);
+      return;
+    }
+
+    let active = true;
+    let attempts = 0;
+
+    const tryCapture = () => {
+      if (!active) return;
+      try {
+        const openerWindow = window.opener || window;
+        const openerVideos = openerWindow.__luminVideos;
+        if (openerVideos && openerVideos[trackerId]) {
+          const masterVideo = openerVideos[trackerId];
+          if (masterVideo !== videoRef.current) {
+            let stream = masterVideo.__capturedStream;
+            if (!stream) {
+              if (masterVideo.captureStream) {
+                stream = masterVideo.captureStream();
+              } else if (masterVideo.mozCaptureStream) {
+                stream = masterVideo.mozCaptureStream();
+              }
+              if (stream) {
+                masterVideo.__capturedStream = stream;
+              }
+            }
+            if (stream) {
+              setStreamObj(stream);
+              setIsReady(true);
+              setFirstFrameRendered(true);
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[VideoLayer] Could not capture stream for slave", e);
+      }
+
+      attempts++;
+      if (attempts < 20) { // Try for 2 seconds (100ms * 20)
+        setTimeout(tryCapture, 100);
+      } else {
+        // Fallback if master never appears
+        if (!window.opener) {
+            setStreamObj(null); // Will trigger fallback to src
+        }
+      }
+    };
+
+    tryCapture();
+
+    return () => {
+      active = false;
+    };
+  }, [isSlave, trackerId, clip.type]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (streamObj && video && clip.type === "video") {
+      video.srcObject = streamObj;
+      video.play().catch(() => {});
+    } else if (video && clip.type === "video" && !streamObj) {
+      if (isSlave && window.opener && typeof window.opener !== "undefined") {
+         // If we are a slave with an opener, we strongly prefer stream. 
+         // Don't fallback to src to avoid double downloading unless absolutely necessary.
+         // Since the attempt loop might still be running, just return.
+         return;
+      }
+      if (video.srcObject) {
+        video.srcObject = null;
+      }
+      if (!video.src || !video.src.includes(clip.url)) {
+        video.src = clip.url;
+      }
+    }
+  }, [streamObj, clip.type, clip.url, isSlave]);
 
   const handleEnded = () => {
     if (earlyEndTriggered.current) return;
@@ -3615,7 +3696,7 @@ const handleBroadcastMessage = (e: MessageEvent) => {
             <video
               key={loadKey}
               ref={videoRefCallback}
-              src={clip.type === "video" ? clip.url : undefined}
+              src={clip.type === "video" && !isSlave ? clip.url : undefined}
               className={`w-full h-full ${!isProgram || clip.fitToScale ? "object-contain" : "object-none"}`}
               style={{
                 transform: "translate3d(0, 0, 0)",
