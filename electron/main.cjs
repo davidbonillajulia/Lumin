@@ -441,6 +441,19 @@ if (!gotTheLock) {
   });
 
   function getFFmpegPath(forSpawn = false) {
+    // 0. Check ffmpeg-static
+    try {
+      let ffmpegStaticPath = require('ffmpeg-static');
+      if (ffmpegStaticPath) {
+        if (ffmpegStaticPath.includes('app.asar')) {
+          ffmpegStaticPath = ffmpegStaticPath.replace('app.asar', 'app.asar.unpacked');
+        }
+        if (fs.existsSync(ffmpegStaticPath)) return ffmpegStaticPath;
+      }
+    } catch (e) {
+      // Ignore if not found
+    }
+
     // 1. Check current working directory or app's bin folder
     const cwdPath = path.join(process.cwd(), 'bin', 'ffmpeg.exe');
     if (fs.existsSync(cwdPath)) return cwdPath;
