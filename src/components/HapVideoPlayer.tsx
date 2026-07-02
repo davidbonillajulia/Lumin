@@ -216,7 +216,10 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     gl.uniform1i(isYCoCgLoc, isYCoCg ? 1 : 0);
   }, [onError]);
 
-  // Cleanup WebGL resources
+  const frameQueueRef = useRef<Map<number, { data: Uint8Array; format: number }>>(new Map());
+  const decodingInProgressRef = useRef<Set<number>>(new Set());
+
+  // Cleanup WebGL resources and frame queue on unmount
   useEffect(() => {
     return () => {
       const gl = glRef.current;
@@ -225,6 +228,8 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
         if (bufferRef.current) gl.deleteBuffer(bufferRef.current);
         if (shaderProgramRef.current) gl.deleteProgram(shaderProgramRef.current);
       }
+      frameQueueRef.current.clear();
+      decodingInProgressRef.current.clear();
     };
   }, []);
 
@@ -239,12 +244,21 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
       try {
         setIsReady(false);
         const isElectron = typeof window !== "undefined" && (window as any).electron?.isElectron;
+        let useNative = false;
+        let meta: any = null;
 
         if (isElectron) {
-          // Native N-API C++ Demuxer & Decompressor (0% browser overhead, ultra performance)
-          console.log("[HAP Engine] Opening HAP file natively via N-API C++:", url);
-          const meta = await (window as any).electron.hapOpen(url);
-          
+          try {
+            console.log("[HAP Engine] Attempting to open HAP file natively:", url);
+            meta = await (window as any).electron.hapOpen(url);
+            useNative = true;
+          } catch (nativeErr) {
+            console.warn("[HAP Engine] Native C++ Addon not loaded/failed. Gracefully falling back to Pure JS/Wasm Decoder:", nativeErr);
+            useNative = false;
+          }
+        }
+
+        if (useNative && meta) {
           if (!active) {
             await (window as any).electron.hapClose(meta.handle);
             return;
@@ -318,20 +332,111 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     return () => {
       active = false;
       if (handleToClose !== null && typeof window !== "undefined" && (window as any).electron) {
-        (window as any).electron.hapClose(handleToClose);
+        (window as any).electron.hapClose(handleToClose).catch((err: any) => {
+          console.warn("[HAP Engine] Failed to close native handle:", err);
+        });
       }
     };
   }, [url, initWebGL, onError, onReady]);
 
   // ============================================================================
-  // Playback & Frame Render Animation Loop (Blazing fast ticks)
+  // Decoder Loop / Thread (Fills RAM FrameQueue asynchronously)
+  // ============================================================================
+  useEffect(() => {
+    if (!isReady) return;
+
+    let active = true;
+    const queue = frameQueueRef.current;
+    const decoding = decodingInProgressRef.current;
+
+    const decodeLoop = async () => {
+      while (active) {
+        const state = playbackStateRef.current;
+        const currentFrameIndex = Math.min(
+          state.frameCount - 1,
+          Math.max(0, Math.floor(state.currentTime * state.fps))
+        );
+
+        // Preload / Buffer size: 12 frames ahead
+        const bufferSize = 12;
+        const targetIndices: number[] = [];
+        for (let i = 0; i < bufferSize; i++) {
+          let idx = currentFrameIndex + i;
+          if (idx >= state.frameCount) {
+            if (state.loop) {
+              idx = idx % state.frameCount;
+            } else {
+              break;
+            }
+          }
+          targetIndices.push(idx);
+        }
+
+        // RAM cleanup: prune old/unused frames
+        for (const idx of queue.keys()) {
+          if (!targetIndices.includes(idx) && idx !== state.lastFrameIndex) {
+            queue.delete(idx);
+          }
+        }
+
+        // Find the next index that needs decoding
+        let frameToDecode = -1;
+        for (const idx of targetIndices) {
+          if (!queue.has(idx) && !decoding.has(idx)) {
+            frameToDecode = idx;
+            break;
+          }
+        }
+
+        if (frameToDecode !== -1) {
+          decoding.add(frameToDecode);
+          try {
+            let textureData: Uint8Array | null = null;
+            let format = 0x83f3; // Default DXT5
+
+            if (nativeHandle !== null) {
+              const frame = await (window as any).electron.hapGetFrame(nativeHandle, frameToDecode);
+              textureData = frame.data;
+              format = frame.format;
+            } else if (movieInfo) {
+              const decoded = decodeHapFrame(movieInfo, frameToDecode);
+              textureData = decoded.data;
+              format = decoded.format;
+            }
+
+            if (textureData && active) {
+              queue.set(frameToDecode, { data: textureData, format });
+            }
+          } catch (e) {
+            console.error("[HAP Decoder Thread] Error decoding frame:", frameToDecode, e);
+          } finally {
+            decoding.delete(frameToDecode);
+          }
+        }
+
+        // Yield execution to prevent blocking the CPU thread
+        await new Promise((resolve) => setTimeout(resolve, 4));
+      }
+    };
+
+    decodeLoop();
+
+    return () => {
+      active = false;
+      queue.clear();
+      decoding.clear();
+    };
+  }, [isReady, nativeHandle, movieInfo]);
+
+  // ============================================================================
+  // Playback & Frame Render Animation Loop (Synchronous Render Tick)
   // ============================================================================
   useEffect(() => {
     if (!isReady) return;
 
     let animId = 0;
 
-    const renderTick = async () => {
+    const renderTick = () => {
       const now = performance.now();
       const state = playbackStateRef.current;
       const deltaTime = (now - state.lastTime) / 1000.0;
@@ -363,50 +468,43 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
 
       // Blazing GPU Upload (Only push compressed blocks to VRAM on actual frame transitions)
       if (frameIndex !== state.lastFrameIndex) {
-        state.lastFrameIndex = frameIndex;
+        const gl = glRef.current;
+        if (gl) {
+          const queuedFrame = frameQueueRef.current.get(frameIndex);
 
-        try {
-          const gl = glRef.current;
-          if (gl) {
-            let textureData: Uint8Array | null = null;
-            let format = 0x83f3; // Default DXT5
+          if (queuedFrame) {
+            state.lastFrameIndex = frameIndex;
 
-            if (nativeHandle !== null) {
-              // Direct N-API C++ fast pipeline
-              const frame = await (window as any).electron.hapGetFrame(nativeHandle, frameIndex);
-              textureData = frame.data;
-              format = frame.format;
-            } else if (movieInfo) {
-              // Pure JS demuxer fallback
-              const decoded = decodeHapFrame(movieInfo, frameIndex);
-              textureData = decoded.data;
-              format = decoded.format;
-            }
-
-            if (textureData && gl) {
+            try {
               gl.bindTexture(gl.TEXTURE_2D, textureRef.current);
               
               // Direct hardware upload to GPU texture memory bypassing Chromium decoder!
               gl.compressedTexImage2D(
                 gl.TEXTURE_2D,
                 0,
-                format,
+                queuedFrame.format,
                 dimensions.width,
                 dimensions.height,
                 0,
-                textureData
+                queuedFrame.data
               );
-
-              // Render texture quad on active viewport
-              gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-              gl.clearColor(0.0, 0.0, 0.0, 1.0);
-              gl.clear(gl.COLOR_BUFFER_BIT);
-              gl.drawArrays(gl.TRIANGLES, 0, 6);
+            } catch (e) {
+              console.error("[HAP renderTick] Failed texture frame VRAM push:", e);
             }
+          } else {
+            // If the frame is not decoded yet, we keep rendering the previous texture already in VRAM.
+            // This is exactly how Resolume avoids freezes and keeps rendering fluid.
           }
-        } catch (e) {
-          console.error("[HAP renderTick] Failed texture frame VRAM push:", e);
         }
+      }
+
+      // Draw the texture onto the screen (100% synchronous, never waiting)
+      const gl = glRef.current;
+      if (gl) {
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
 
       animId = requestAnimationFrame(renderTick);
@@ -417,7 +515,7 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [isReady, nativeHandle, movieInfo, dimensions, onTimeUpdate, onProgressUpdate, onEnded]);
+  }, [isReady, dimensions, onTimeUpdate, onProgressUpdate, onEnded]);
 
   return (
     <div className={`relative overflow-hidden w-full h-full flex items-center justify-center ${className}`}>
