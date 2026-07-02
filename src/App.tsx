@@ -3103,8 +3103,27 @@ const VideoLayer = ({
       try {
         const openerWindow = window.opener || window;
         const openerVideos = openerWindow.__luminVideos;
-        if (openerVideos && openerVideos[trackerId]) {
-          const masterVideo = openerVideos[trackerId];
+        
+        let masterVideo = null;
+        if (openerVideos) {
+          const keys = [
+            monitorId && trackerId ? `monitor_${monitorId}_${trackerId}` : null,
+            outputId && clip.id ? `${outputId}_${clip.id}` : null,
+            trackerId,
+            clip.id,
+            monitorId,
+            outputId
+          ].filter(Boolean) as string[];
+
+          for (const k of keys) {
+            if (openerVideos[k]) {
+              masterVideo = openerVideos[k];
+              break;
+            }
+          }
+        }
+
+        if (masterVideo) {
           if (masterVideo !== videoRef.current) {
             let stream = masterVideo.__capturedStream;
             if (!stream) {
@@ -3145,7 +3164,7 @@ const VideoLayer = ({
     return () => {
       active = false;
     };
-  }, [isSlave, trackerId, clip.type]);
+  }, [isSlave, trackerId, clip.type, clip.id, monitorId, outputId]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -3721,7 +3740,7 @@ const VideoLayer = ({
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
             {(() => {
-              const isHap = !!(clip.url && (clip.url.toLowerCase().includes("format=hap") || clip.url.toLowerCase().includes("_hap") || clip.codec === "hap")) && !hapPlaybackFailed && !isSlave;
+              const isHap = !!(clip.url && (clip.url.toLowerCase().includes("format=hap") || clip.url.toLowerCase().includes("_hap") || clip.codec === "hap")) && !hapPlaybackFailed;
             if (isHap) {
               return (
                 <HapVideoPlayer
