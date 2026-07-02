@@ -19,6 +19,10 @@ interface HapVideoPlayerProps {
   onReady?: () => void;
   onError?: (err: string) => void;
   className?: string;
+  monitorId?: string;
+  outputId?: string;
+  clipId?: string;
+  isSlave?: boolean;
 }
 
 export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
@@ -34,6 +38,10 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
   onReady,
   onError,
   className = "",
+  monitorId,
+  outputId,
+  clipId,
+  isSlave = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const glRef = useRef<WebGLRenderingContext | null>(null);
@@ -90,6 +98,55 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
       bc.close();
     };
   }, [trackerId]);
+
+  // Register Canvas element for Stream Capture synchronization
+  useEffect(() => {
+    if (typeof window === "undefined" || isSlave) return;
+    const el = canvasRef.current;
+    if (!el) return;
+
+    (window as any).__luminVideos = (window as any).__luminVideos || {};
+
+    if (monitorId) {
+      (window as any).__luminVideos[monitorId] = el;
+      if (trackerId) {
+        (window as any).__luminVideos[`monitor_${monitorId}_${trackerId}`] = el;
+      }
+    }
+    if (outputId) {
+      (window as any).__luminVideos[outputId] = el;
+      if (clipId) {
+        (window as any).__luminVideos[`${outputId}_${clipId}`] = el;
+      }
+    }
+    if (trackerId) {
+      (window as any).__luminVideos[trackerId] = el;
+    }
+    if (clipId) {
+      (window as any).__luminVideos[clipId] = el;
+    }
+
+    return () => {
+      if (monitorId && (window as any).__luminVideos?.[monitorId] === el) {
+        delete (window as any).__luminVideos[monitorId];
+      }
+      if (monitorId && trackerId && (window as any).__luminVideos?.[`monitor_${monitorId}_${trackerId}`] === el) {
+        delete (window as any).__luminVideos[`monitor_${monitorId}_${trackerId}`];
+      }
+      if (outputId && (window as any).__luminVideos?.[outputId] === el) {
+        delete (window as any).__luminVideos[outputId];
+      }
+      if (outputId && clipId && (window as any).__luminVideos?.[`${outputId}_${clipId}`] === el) {
+        delete (window as any).__luminVideos[`${outputId}_${clipId}`];
+      }
+      if (trackerId && (window as any).__luminVideos?.[trackerId] === el) {
+        delete (window as any).__luminVideos[trackerId];
+      }
+      if (clipId && (window as any).__luminVideos?.[clipId] === el) {
+        delete (window as any).__luminVideos[clipId];
+      }
+    };
+  }, [isSlave, monitorId, outputId, trackerId, clipId, isReady]);
 
   // ============================================================================
   // WebGL Pipeline Setup

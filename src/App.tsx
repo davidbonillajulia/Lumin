@@ -576,7 +576,9 @@ const FluidTimeDisplay = ({
           const activeIsPlaying = clip ? (clip.isPlaying !== false) : false;
           const actualTotal = clip?.duration || 0;
 
-          if (video) {
+          const isStream = video && (video.srcObject !== null || video.duration === Infinity || isNaN(video.duration));
+
+          if (video && !isStream) {
             const broadcastCurrent = resolvedTrackerId ? ((window as any).__luminVideoTimes?.[resolvedTrackerId] || 0) : 0;
             let actualCurrent = video.currentTime || 0;
             const actualTotalVideo = video.duration || 0;
@@ -615,19 +617,24 @@ const FluidTimeDisplay = ({
               ? Math.max(0, actualTotalVideo - Math.min(smoothedTime, actualTotalVideo))
               : Math.min(smoothedTime, actualTotalVideo);
           } else {
-            // Fallback to background Broadcast value
+            // Fallback to background Broadcast value (or stream logic)
             const actualCurrent = resolvedTrackerId ? ((window as any).__luminVideoTimes?.[resolvedTrackerId] || 0) : 0;
+            const isPaused = video ? video.paused : true;
 
             if (actualCurrent > 0 && actualCurrent < (actualTotal || 999999)) {
               const diff = actualCurrent - smoothedTime;
               if (smoothedTime === 0 || Math.abs(diff) > 0.6) {
                 smoothedTime = actualCurrent;
               } else {
-                smoothedTime += dt;
-                if (smoothedTime < actualCurrent) {
+                if (!isPaused) {
+                  smoothedTime += dt;
+                  if (smoothedTime < actualCurrent) {
+                    smoothedTime = actualCurrent;
+                  } else if (smoothedTime > actualCurrent + 0.3) {
+                    smoothedTime = actualCurrent + 0.3;
+                  }
+                } else {
                   smoothedTime = actualCurrent;
-                } else if (smoothedTime > actualCurrent + 0.3) {
-                  smoothedTime = actualCurrent + 0.3;
                 }
               }
             } else {
@@ -3714,7 +3721,7 @@ const VideoLayer = ({
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
             {(() => {
-              const isHap = !!(clip.url && (clip.url.toLowerCase().includes("format=hap") || clip.url.toLowerCase().includes("_hap") || clip.codec === "hap")) && !hapPlaybackFailed;
+              const isHap = !!(clip.url && (clip.url.toLowerCase().includes("format=hap") || clip.url.toLowerCase().includes("_hap") || clip.codec === "hap")) && !hapPlaybackFailed && !isSlave;
             if (isHap) {
               return (
                 <HapVideoPlayer
@@ -3724,6 +3731,10 @@ const VideoLayer = ({
                   loop={loopOverride !== undefined ? loopOverride : clip.loop !== false}
                   speed={clip.speed || 1.0}
                   trackerId={trackerId}
+                  monitorId={monitorId}
+                  outputId={outputId}
+                  clipId={clip.id}
+                  isSlave={isSlave}
                   onTimeUpdate={(time) => {
                     onTimeUpdate?.(time);
                     if (typeof window !== "undefined") {
