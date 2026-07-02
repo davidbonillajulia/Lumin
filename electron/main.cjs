@@ -596,15 +596,72 @@ if (!gotTheLock) {
     });
   });
 
+  // Helper to convert URIs or custom protocols back to clean OS native file paths
+  function toNativePath(urlOrPath) {
+    if (!urlOrPath) return urlOrPath;
+    let rawPath = urlOrPath;
+    
+    // Strip query parameters and hashes if any
+    const queryIndex = rawPath.indexOf('?');
+    if (queryIndex !== -1) {
+      rawPath = rawPath.slice(0, queryIndex);
+    }
+    const hashIndex = rawPath.indexOf('#');
+    if (hashIndex !== -1) {
+      rawPath = rawPath.slice(0, hashIndex);
+    }
+
+    // Strip protocol prefix if present
+    if (rawPath.startsWith('lumin-file:///')) {
+      rawPath = rawPath.slice(14);
+    } else if (rawPath.startsWith('lumin-file://')) {
+      rawPath = rawPath.slice(12);
+    } else if (rawPath.startsWith('lumin-file:')) {
+      rawPath = rawPath.slice(11);
+    } else if (rawPath.startsWith('file:///')) {
+      rawPath = rawPath.slice(8);
+    } else if (rawPath.startsWith('file://')) {
+      rawPath = rawPath.slice(7);
+    } else if (rawPath.startsWith('file:')) {
+      rawPath = rawPath.slice(5);
+    }
+
+    // Decode URI components
+    let decodedPath = rawPath;
+    try {
+      decodedPath = decodeURIComponent(rawPath);
+    } catch (e) {
+      console.error("Failed to decodeURIComponent path:", rawPath, e);
+    }
+
+    // On Windows or paths with a "/C:" style drive letter prefix, remove the leading slashes
+    if (process.platform === 'win32' || decodedPath.match(/^\/+([a-zA-Z]:)/)) {
+      decodedPath = decodedPath.replace(/^\/+/, '');
+    }
+
+    // On Windows, restore drive letter colon if missing e.g. "c/Users" -> "c:/Users"
+    if (process.platform === 'win32') {
+      if (decodedPath.match(/^([a-zA-Z])([\/\\].*)/)) {
+        decodedPath = decodedPath.replace(/^([a-zA-Z])([\/\\].*)/, '$1:$2');
+      }
+    }
+
+    // Normalize slashes based on platform
+    const nativePath = process.platform === 'win32' ? decodedPath.replace(/\//g, '\\') : decodedPath;
+    return nativePath;
+  }
+
   // HAP Native Decoder IPC Handlers
   ipcMain.handle('hap-open', async (event, filePath) => {
     if (!hapAddon) {
       throw new Error("Native HAP decoder addon is not loaded/available.");
     }
     try {
-      return hapAddon.open(filePath);
+      const nativePath = toNativePath(filePath);
+      console.log("[HAP Native] Resolved file path for N-API open:", nativePath);
+      return hapAddon.open(nativePath);
     } catch (err) {
-      console.error("Error in native hap-open:", err);
+      console.error("Error in native hap-open with path:", filePath, err);
       throw err;
     }
   });

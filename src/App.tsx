@@ -2968,11 +2968,13 @@ const VideoLayer = ({
   const onEndedRef = useRef(onEnded);
   const [isReady, setIsReady] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [hapPlaybackFailed, setHapPlaybackFailed] = useState(false);
   const [loadKey, setLoadKey] = useState(0);
   const [streamObj, setStreamObj] = useState<MediaStream | null>(null);
 
   useEffect(() => {
     setHasError(false);
+    setHapPlaybackFailed(false);
   }, [clip.url]);
 
   const [firstFrameRendered, setFirstFrameRendered] = useState(
@@ -3712,7 +3714,7 @@ const VideoLayer = ({
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
             {(() => {
-              const isHap = !!(clip.url && (clip.url.toLowerCase().endsWith(".mov") || clip.url.includes("format=hap") || clip.codec === "hap"));
+              const isHap = !!(clip.url && (clip.url.toLowerCase().endsWith(".mov") || clip.url.includes("format=hap") || clip.codec === "hap")) && !hapPlaybackFailed;
             if (isHap) {
               return (
                 <HapVideoPlayer
@@ -3738,7 +3740,8 @@ const VideoLayer = ({
                     setFirstFrameRendered(true);
                   }}
                   onError={() => {
-                    setHasError(true);
+                    console.warn("[VideoLayer] HAP decoding failed or not HAP codec. Falling back to standard HTML5 video player for:", clip.url);
+                    setHapPlaybackFailed(true);
                   }}
                   className={`w-full h-full ${!isProgram || clip.fitToScale ? "object-contain" : "object-none"}`}
                 />
@@ -8847,18 +8850,6 @@ const Library = React.memo(
                         >
                           <Trash2 size={10} />
                         </button>
-                        {(file.type.startsWith("video") && file.type !== "videoinput") && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!file.isOptimized) handleOptimiseVideo(file);
-                            }}
-                            className={`p-1 rounded transition-all ${file.isOptimized ? "bg-emerald-500 text-white opacity-100 z-30" : "bg-black/60 hover:bg-green-500 text-obs-accent hover:text-white opacity-0 group-hover:opacity-100"}`}
-                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : (transcodingFiles[file.url]?.status === 'err' ? "Error en conversión. Reintentar." : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU")}
-                          >
-                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse" : (transcodingFiles[file.url]?.status === 'err' ? "text-red-500" : (file.isOptimized ? "text-white" : ""))} />
-                          </button>
-                        )}
                       </div>
                     )}
                   </div>
@@ -8881,18 +8872,6 @@ const Library = React.memo(
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0 select-none">
-                        {(file.type.startsWith("video") && file.type !== "videoinput") && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!file.isOptimized) handleOptimiseVideo(file);
-                            }}
-                            className={`p-1 rounded transition-all ${file.isOptimized ? "text-emerald-400 opacity-100" : "opacity-0 group-hover:opacity-100 text-obs-accent hover:text-green-400"}`}
-                            title={file.isOptimized ? "Vídeo Optimizado (H.264 ALL-Intra)" : (transcodingFiles[file.url]?.status === 'err' ? "Error en conversión. Reintentar." : "Optimizar vídeo (H.264 ALL-Intra) - Resuelve los cortes de GPU")}
-                          >
-                            <Zap size={10} className={transcodingFiles[file.url]?.status === 'converting' ? "animate-pulse text-green-400" : (transcodingFiles[file.url]?.status === 'err' ? "text-red-500 animate-bounce" : (file.isOptimized ? "text-emerald-400 font-bold scale-110" : ""))} />
-                          </button>
-                        )}
                         <button
                           onClick={(e) => handleDeleteFile(file.url, e)}
                           className="opacity-0 group-hover:opacity-100 text-obs-muted hover:text-red-500 transition-all p-1"
