@@ -615,7 +615,7 @@ if (!gotTheLock) {
     if (rawPath.startsWith('lumin-file:///')) {
       rawPath = rawPath.slice(14);
     } else if (rawPath.startsWith('lumin-file://')) {
-      rawPath = rawPath.slice(12);
+      rawPath = rawPath.slice(13);
     } else if (rawPath.startsWith('lumin-file:')) {
       rawPath = rawPath.slice(11);
     } else if (rawPath.startsWith('file:///')) {

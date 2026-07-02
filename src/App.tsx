@@ -3714,7 +3714,7 @@ const VideoLayer = ({
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
             {(() => {
-              const isHap = !!(clip.url && (clip.url.toLowerCase().endsWith(".mov") || clip.url.includes("format=hap") || clip.codec === "hap")) && !hapPlaybackFailed;
+              const isHap = !!(clip.url && (clip.url.toLowerCase().includes("format=hap") || clip.url.toLowerCase().includes("_hap") || clip.codec === "hap")) && !hapPlaybackFailed;
             if (isHap) {
               return (
                 <HapVideoPlayer
