@@ -8,6 +8,22 @@ const os = require('os');
 // Native check if running in development
 const isDev = !app.isPackaged;
 
+// Load HAP C++ Native Addon safely
+let hapAddon = null;
+try {
+  const addonPath = path.join(__dirname, '../build/Release/hap_decoder_addon.node');
+  if (fs.existsSync(addonPath)) {
+    hapAddon = require(addonPath);
+    console.log("HAP C++ Native Addon loaded successfully from:", addonPath);
+  } else {
+    // Try node-gyp default locations
+    hapAddon = require('../build/Release/hap_decoder_addon.node');
+    console.log("HAP C++ Native Addon loaded from release path");
+  }
+} catch (err) {
+  console.warn("HAP C++ Native Addon NOT loaded. Falling back to pure JS/WebGL decoder:", err.message);
+}
+
 // Resolve appData directory safely for diagnosis logs
 let appDataDir = process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME, 'Library/Application Support') : '/var/local');
 try {
@@ -578,6 +594,44 @@ if (!gotTheLock) {
         }
       });
     });
+  });
+
+  // HAP Native Decoder IPC Handlers
+  ipcMain.handle('hap-open', async (event, filePath) => {
+    if (!hapAddon) {
+      throw new Error("Native HAP decoder addon is not loaded/available.");
+    }
+    try {
+      return hapAddon.open(filePath);
+    } catch (err) {
+      console.error("Error in native hap-open:", err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('hap-get-frame', async (event, { handle, frameIndex }) => {
+    if (!hapAddon) {
+      throw new Error("Native HAP decoder addon is not loaded/available.");
+    }
+    try {
+      const frame = hapAddon.getFrame(handle, frameIndex);
+      return {
+        data: new Uint8Array(frame.data),
+        format: frame.format
+      };
+    } catch (err) {
+      console.error(`Error in native hap-get-frame (handle: ${handle}, frame: ${frameIndex}):`, err);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('hap-close', async (event, handle) => {
+    if (!hapAddon) return;
+    try {
+      hapAddon.close(handle);
+    } catch (err) {
+      console.error("Error in native hap-close:", err);
+    }
   });
 
   ipcMain.on('exit-app', () => {

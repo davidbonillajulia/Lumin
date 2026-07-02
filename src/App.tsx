@@ -68,6 +68,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { motion, AnimatePresence, animate, Reorder } from "motion/react";
+import { HapVideoPlayer } from "./components/HapVideoPlayer";
 
 // --- Types ---
 interface ClipTransform {
@@ -3710,147 +3711,183 @@ const VideoLayer = ({
           </div>
         ) : clip.type === "video" || clip.type === "videoinput" ? (
           <>
-            <video
-              key={loadKey}
-              ref={videoRefCallback}
-              src={clip.type === "video" && !isSlave ? clip.url : undefined}
-              className={`w-full h-full ${!isProgram || clip.fitToScale ? "object-contain" : "object-none"}`}
-              style={{
-                transform: "translate3d(0, 0, 0)",
-                backfaceVisibility: "hidden",
-                WebkitBackfaceVisibility: "hidden",
-                transformStyle: "preserve-3d",
-                willChange: "transform",
-                imageRendering: activePerf.highResOptimization
-                  ? "auto"
-                  : "pixelated",
-              }}
-              muted={true}
-              loop={
-                clip.type === "video"
-                  ? loopOverride !== undefined
-                    ? loopOverride
-                    : clip.loop !== false
-                  : true
-              }
-              playsInline
-              crossOrigin={clip.url?.startsWith("http") ? "anonymous" : undefined}
-              preload={
-                isProgram ||
-                activeIsPlaying ||
-                activePerf.bufferingMode === "ultra_preload"
-                  ? "auto"
-                  : "metadata"
-              }
-              onLoadedData={() => {
-                setIsReady(true);
-                setFirstFrameRendered(true);
-                const savedPath = clip.path || (clip.file && clip.file.path);
-                console.log("[VideoLayer LOG] video.onLoadedData disparado:", {
-                  nombre: clip.name,
-                  id: clip.id,
-                  ruta_guardada: savedPath || "Ninguna",
-                  ruta_restaurada: savedPath || "Ninguna",
-                  url_final: videoRef.current?.src || clip.url,
-                  activeIsPlaying
-                });
-
-                if (activeIsPlaying && videoRef.current) {
-                  videoRef.current.play().then(() => {
-                    console.log("[VideoLayer LOG] video.play() SUCCESS resultado para:", clip.name, {
-                      url: videoRef.current?.src || clip.url
-                    });
-                  }).catch((err) => {
-                    console.error("[VideoLayer LOG] video.play() REJECTED play() rejected para:", clip.name, {
-                      url: videoRef.current?.src || clip.url,
-                      error: err
-                    });
-                  });
-                }
-              }}
-              onCanPlay={() => {
-                setIsReady(true);
-                setFirstFrameRendered(true);
-              }}
-              onPlaying={() => setFirstFrameRendered(true)}
-              onWaiting={() => {
-                if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
-                  videoRef.current.play().catch((err) => console.error("[VideoLayer LOG] video.play() rejected on waiting:", clip.url, err));
-                }
-              }}
-              onStalled={() => {
-                if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
-                  videoRef.current.play().catch((err) => console.error("[VideoLayer LOG] video.play() rejected on stalled:", clip.url, err));
-                }
-              }}
-              onError={(e) => {
-                const currentSrc = videoRef.current?.src || "";
-                const savedPath = clip.path || (clip.file && clip.file.path);
-                console.error("[VideoLayer LOG] errores de carga (onerror) en `<video>`:", {
-                  nombre: clip.name,
-                  id: clip.id,
-                  ruta_guardada: savedPath || "Ninguna",
-                  ruta_restaurada: savedPath || "Ninguna",
-                  url_final: currentSrc || clip.url,
-                  errorEvent: e
-                });
-                
-                // Si la fuente ya está vacía, no hacemos nada
-                if (!currentSrc || currentSrc === window.location.href) {
-                  return;
-                }
-
-                // Self-healing: try to force the correct URL
-                const hasPath = clip.path || (clip.file && clip.file.path);
-                if (hasPath && (window as any).electron) {
-                  try {
-                    const nativeUrl = buildLuminFileUrl(hasPath) || "";
-                    if (clip.url !== nativeUrl && nativeUrl) {
-                      console.log("[VideoLayer LOG] Autocorrección de URL usando path absoluto:", nativeUrl);
-                      if (onUpdateClip) {
-                        onUpdateClip(clip.id, { url: nativeUrl, path: hasPath });
-                      } else if (typeof updateClip === "function") {
-                        updateClip(clip.id, { url: nativeUrl, path: hasPath });
+            {(() => {
+              const isHap = !!(clip.url && (clip.url.toLowerCase().endsWith(".mov") || clip.url.includes("format=hap") || clip.codec === "hap"));
+            if (isHap) {
+              return (
+                <HapVideoPlayer
+                  key={loadKey}
+                  url={clip.url}
+                  playing={activeIsPlaying}
+                  loop={loopOverride !== undefined ? loopOverride : clip.loop !== false}
+                  speed={clip.speed || 1.0}
+                  trackerId={trackerId}
+                  onTimeUpdate={(time) => {
+                    onTimeUpdate?.(time);
+                    if (typeof window !== "undefined") {
+                      if (!(window as any).__luminVideoTimes) {
+                        (window as any).__luminVideoTimes = {};
                       }
-                      return;
+                      (window as any).__luminVideoTimes[trackerId] = time;
                     }
-                  } catch (err) {
-                    console.error("[VideoLayer LOG] Autocorrección fallida:", err);
-                  }
+                  }}
+                  onProgressUpdate={onProgressUpdate}
+                  onEnded={handleEnded}
+                  onReady={() => {
+                    setIsReady(true);
+                    setFirstFrameRendered(true);
+                  }}
+                  onError={() => {
+                    setHasError(true);
+                  }}
+                  className={`w-full h-full ${!isProgram || clip.fitToScale ? "object-contain" : "object-none"}`}
+                />
+              );
+            }
+            return (
+              <video
+                key={loadKey}
+                ref={videoRefCallback}
+                src={clip.type === "video" && !isSlave ? clip.url : undefined}
+                className={`w-full h-full ${!isProgram || clip.fitToScale ? "object-contain" : "object-none"}`}
+                style={{
+                  transform: "translate3d(0, 0, 0)",
+                  backfaceVisibility: "hidden",
+                  WebkitBackfaceVisibility: "hidden",
+                  transformStyle: "preserve-3d",
+                  willChange: "transform",
+                  imageRendering: activePerf.highResOptimization
+                    ? "auto"
+                    : "pixelated",
+                }}
+                muted={true}
+                loop={
+                  clip.type === "video"
+                    ? loopOverride !== undefined
+                      ? loopOverride
+                      : clip.loop !== false
+                    : true
                 }
-
-                // Never retry broken blobs as they're from another session
-                if (currentSrc.startsWith("blob:") || (!currentSrc.startsWith("http") && !currentSrc.startsWith("lumin-file:"))) {
-                  console.warn("Media source dead. Marking as errored.");
-                  setHasError(true);
-                  if (videoRef.current) {
-                    videoRef.current.removeAttribute("src"); // Stop it from auto retrying forever
-                  }
-                  return;
+                playsInline
+                crossOrigin={clip.url?.startsWith("http") ? "anonymous" : undefined}
+                preload={
+                  isProgram ||
+                  activeIsPlaying ||
+                  activePerf.bufferingMode === "ultra_preload"
+                    ? "auto"
+                    : "metadata"
                 }
-
-                if (activeIsPlaying && videoRef.current && !hasError) {
-                  if (currentSrc) {
-                    setTimeout(() => {
-                      if (videoRef.current) {
-                        videoRef.current.load();
-                        videoRef.current.play().catch((err) => console.error("Recarga automática de vídeo falló:", err));
-                      }
-                    }, 2000);
-                  }
-                }
-              }}
-              onTimeUpdate={(e) => {
-                if (
-                  clip.type === "video" &&
-                  e.currentTarget.currentTime > 0.01
-                ) {
+                onLoadedData={() => {
+                  setIsReady(true);
                   setFirstFrameRendered(true);
-                }
-                onTimeUpdate?.(e.currentTarget.currentTime);
-              }}
-              onEnded={handleEnded}
-            />
+                  const savedPath = clip.path || (clip.file && clip.file.path);
+                  console.log("[VideoLayer LOG] video.onLoadedData disparado:", {
+                    nombre: clip.name,
+                    id: clip.id,
+                    ruta_guardada: savedPath || "Ninguna",
+                    ruta_restaurada: savedPath || "Ninguna",
+                    url_final: videoRef.current?.src || clip.url,
+                    activeIsPlaying
+                  });
+
+                  if (activeIsPlaying && videoRef.current) {
+                    videoRef.current.play().then(() => {
+                      console.log("[VideoLayer LOG] video.play() SUCCESS resultado para:", clip.name, {
+                        url: videoRef.current?.src || clip.url
+                      });
+                    }).catch((err) => {
+                      console.error("[VideoLayer LOG] video.play() REJECTED play() rejected para:", clip.name, {
+                        url: videoRef.current?.src || clip.url,
+                        error: err
+                      });
+                    });
+                  }
+                }}
+                onCanPlay={() => {
+                  setIsReady(true);
+                  setFirstFrameRendered(true);
+                }}
+                onPlaying={() => setFirstFrameRendered(true)}
+                onWaiting={() => {
+                  if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
+                    videoRef.current.play().catch((err) => console.error("[VideoLayer LOG] video.play() rejected on waiting:", clip.url, err));
+                  }
+                }}
+                onStalled={() => {
+                  if (activeIsPlaying && videoRef.current && videoRef.current.paused) {
+                    videoRef.current.play().catch((err) => console.error("[VideoLayer LOG] video.play() rejected on stalled:", clip.url, err));
+                  }
+                }}
+                onError={(e) => {
+                  const currentSrc = videoRef.current?.src || "";
+                  const savedPath = clip.path || (clip.file && clip.file.path);
+                  console.error("[VideoLayer LOG] errores de carga (onerror) en `<video>`:", {
+                    nombre: clip.name,
+                    id: clip.id,
+                    ruta_guardada: savedPath || "Ninguna",
+                    ruta_restaurada: savedPath || "Ninguna",
+                    url_final: currentSrc || clip.url,
+                    errorEvent: e
+                  });
+                  
+                  // Si la fuente ya está vacía, no hacemos nada
+                  if (!currentSrc || currentSrc === window.location.href) {
+                    return;
+                  }
+
+                  // Self-healing: try to force the correct URL
+                  const hasPath = clip.path || (clip.file && clip.file.path);
+                  if (hasPath && (window as any).electron) {
+                    try {
+                      const nativeUrl = buildLuminFileUrl(hasPath) || "";
+                      if (clip.url !== nativeUrl && nativeUrl) {
+                        console.log("[VideoLayer LOG] Autocorrección de URL usando path absoluto:", nativeUrl);
+                        if (onUpdateClip) {
+                          onUpdateClip(clip.id, { url: nativeUrl, path: hasPath });
+                        } else if (typeof updateClip === "function") {
+                          updateClip(clip.id, { url: nativeUrl, path: hasPath });
+                        }
+                        return;
+                      }
+                    } catch (err) {
+                      console.error("[VideoLayer LOG] Autocorrección fallida:", err);
+                    }
+                  }
+
+                  // Never retry broken blobs as they're from another session
+                  if (currentSrc.startsWith("blob:") || (!currentSrc.startsWith("http") && !currentSrc.startsWith("lumin-file:"))) {
+                    console.warn("Media source dead. Marking as errored.");
+                    setHasError(true);
+                    if (videoRef.current) {
+                      videoRef.current.removeAttribute("src"); // Stop it from auto retrying forever
+                    }
+                    return;
+                  }
+
+                  if (activeIsPlaying && videoRef.current && !hasError) {
+                    if (currentSrc) {
+                      setTimeout(() => {
+                        if (videoRef.current) {
+                          videoRef.current.load();
+                          videoRef.current.play().catch((err) => console.error("Recarga automática de vídeo falló:", err));
+                        }
+                      }, 2000);
+                    }
+                  }
+                }}
+                onTimeUpdate={(e) => {
+                  if (
+                    clip.type === "video" &&
+                    e.currentTarget.currentTime > 0.01
+                  ) {
+                    setFirstFrameRendered(true);
+                  }
+                  onTimeUpdate?.(e.currentTarget.currentTime);
+                }}
+                onEnded={handleEnded}
+              />
+            );
+          })()}
             {clip.type === "video" && nextSrc && (
               <video
                 src={nextSrc}

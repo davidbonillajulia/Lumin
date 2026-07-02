@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('electron', {
   getStartFile: () => ipcRenderer.invoke('get-start-file'),
   checkFFmpeg: () => ipcRenderer.invoke('check-ffmpeg'),
   transcodeToIntra: (inputPath, outputPath) => ipcRenderer.invoke('transcode-to-intra', { inputPath, outputPath }),
+  hapOpen: (filePath) => ipcRenderer.invoke('hap-open', filePath),
+  hapGetFrame: (handle, frameIndex) => ipcRenderer.invoke('hap-get-frame', { handle, frameIndex }),
+  hapClose: (handle) => ipcRenderer.invoke('hap-close', handle),
   onOpenLuminFile: (callback) => {
     const subscription = (event, path) => callback(path);
     ipcRenderer.on('open-lumin-file', subscription);
