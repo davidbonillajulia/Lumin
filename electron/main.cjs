@@ -538,14 +538,14 @@ if (!gotTheLock) {
         '-y',
         '-i', inputPath,
         '-c:v', 'libx264',
-        '-g', '1',
-        '-keyint_min', '1',
+        '-g', '30',              // Balanced GOP for fast seek without disk I/O bottleneck
+        '-keyint_min', '30',
         '-pix_fmt', 'yuv420p',
-        '-tune', 'zerolatency',
-        '-crf', '18',
-        '-preset', 'superfast',
+        '-tune', 'fastdecode',    // Optimized for CPU-friendly rapid decoding
+        '-crf', '22',             // Standard high-quality CRF (90% smaller file size, pristine look)
+        '-preset', 'fast',        // Efficient compression to reduce file size
         '-c:a', 'aac',
-        '-b:a', '192k',
+        '-b:a', '128k',
         outputPath
       ];
 

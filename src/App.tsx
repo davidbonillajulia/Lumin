@@ -3165,149 +3165,166 @@ const VideoLayer = ({
   };
 
   useEffect(() => {
-  const video = videoRef.current;
-  if (!video || clip.type !== "video") return;
+    const video = videoRef.current;
+    if (!video || clip.type !== "video") return;
 
-  const handleTimeUpdate = () => {
-    onTimeUpdate?.(video.currentTime);
-    onProgressUpdate?.(video.currentTime, video.duration || 0);
+    const broadcastTime = (force = false) => {
+      if (!video) return;
 
-    const now = Date.now();
+      onTimeUpdate?.(video.currentTime);
+      onProgressUpdate?.(video.currentTime, video.duration || 0);
 
-    if (now - lastBroadcastTimeRef.current >= 200) {
-      lastBroadcastTimeRef.current = now;
+      const now = Date.now();
 
-      if (typeof window !== "undefined") {
-        if (!(window as any).__luminVideoTimes) {
-          (window as any).__luminVideoTimes = {};
-        }
+      if (force || now - lastBroadcastTimeRef.current >= 200) {
+        lastBroadcastTimeRef.current = now;
 
-        (window as any).__luminVideoTimes[trackerId] = video.currentTime;
-
-        // ✅ SOLO MASTER REAL EMITE
-        const isMaster =
-            !isSlave &&
-            isClockSource &&   // 🔥 ESTE ES CLAVE
-            isProgram;
-          let ch = channelRef.current;
-            
-    if (isMaster) {
-          let ch = channelRef.current;
-
-          if (!ch && typeof BroadcastChannel !== "undefined") {
-            ch = new BroadcastChannel("lumin-output");
-            channelRef.current = ch;
+        if (typeof window !== "undefined") {
+          if (!(window as any).__luminVideoTimes) {
+            (window as any).__luminVideoTimes = {};
           }
 
-          if (ch) {
-            try {
-              ch.postMessage({
-          type: "VIDEO_TIME_UPDATE",
-          payload: {
-          trackerId,
-          clipId: clip.id,
-          currentTime: video.currentTime,
-          globalTime: performance.now() / 1000, // ✅ reloj global real
-          playing: !video.paused,
-          speed: clip.speed || 1
-          },
-              });
-            } catch {}
+          (window as any).__luminVideoTimes[trackerId] = video.currentTime;
+
+          // ✅ SOLO MASTER REAL EMITE
+          const isMaster =
+              !isSlave &&
+              isClockSource &&   // 🔥 ESTE ES CLAVE
+              isProgram;
+              
+          if (isMaster) {
+            let ch = channelRef.current;
+
+            if (!ch && typeof BroadcastChannel !== "undefined") {
+              ch = new BroadcastChannel("lumin-output");
+              channelRef.current = ch;
+            }
+
+            if (ch) {
+              try {
+                ch.postMessage({
+                  type: "VIDEO_TIME_UPDATE",
+                  payload: {
+                    trackerId,
+                    clipId: clip.id,
+                    currentTime: video.currentTime,
+                    globalTime: performance.now() / 1000, // ✅ reloj global real
+                    playing: !video.paused,
+                    speed: clip.speed || 1
+                  },
+                });
+              } catch {}
+            }
           }
         }
       }
-    }
 
-    // ✅ playlist logic intacta
-    if (isPlaylistSequence && video.duration > 0) {
-      const remaining = video.duration - video.currentTime;
-      const threshold = transitionType === "cut" ? 0.15 : 0.35;
+      // ✅ playlist logic intacta
+      if (isPlaylistSequence && video.duration > 0) {
+        const remaining = video.duration - video.currentTime;
+        const threshold = transitionType === "cut" ? 0.15 : 0.35;
 
-      if (
-        remaining > 0 &&
-        remaining <= threshold &&
-        !earlyEndTriggered.current
-      ) {
-        earlyEndTriggered.current = true;
-        onEndedRef.current?.();
+        if (
+          remaining > 0 &&
+          remaining <= threshold &&
+          !earlyEndTriggered.current
+        ) {
+          earlyEndTriggered.current = true;
+          onEndedRef.current?.();
+        }
       }
-    }
-  };
+    };
 
-const handleBroadcastMessage = (e: MessageEvent) => {
+    const handleTimeUpdate = () => broadcastTime(false);
+    const handleForceUpdate = () => broadcastTime(true);
 
-  if (!isSlave) return;
+    const handleBroadcastMessage = (e: MessageEvent) => {
+      if (!isSlave) return;
 
-  if (e.data?.type !== "VIDEO_TIME_UPDATE") return;
+      if (e.data?.type !== "VIDEO_TIME_UPDATE") return;
 
-  const payload = e.data.payload;
-  if (!payload || payload.trackerId !== trackerId) return;
+      const payload = e.data.payload;
+      if (!payload || payload.trackerId !== trackerId) return;
 
-  const vid = videoRef.current;
-  if (!vid || vid.readyState < 2) return;
+      const vid = videoRef.current;
+      if (!vid) return;
 
-  const current = vid.currentTime;
-
-  const now = performance.now() / 1000;
-  const delta = now - payload.globalTime;
-
-  const target = payload.currentTime + delta * (payload.speed || 1);
-
-  const diff = target - current;
-
-  if (Math.abs(diff) < 0.02) return;
-
-  // ✅ SYNC
-  if (Math.abs(diff) > 0.8) {
-    vid.currentTime = target;
-  } else if (Math.abs(diff) > 0.08) {
-    const baseSpeed = payload.speed || 1;
-    const correction = diff * 0.25;
-
-    const newRate = Math.max(0.9, Math.min(1.1, baseSpeed + correction));
-    vid.playbackRate = newRate;
-
-    setTimeout(() => {
-      if (videoRef.current) {
-        videoRef.current.playbackRate = baseSpeed;
+      // ✅ 1. PLAY / PAUSE FIRST (Runs independently of readystate and small time differences)
+      if (payload.playing !== undefined) {
+        if (payload.playing && vid.paused) {
+          vid.play().catch(() => {});
+        } else if (!payload.playing && !vid.paused) {
+          vid.pause();
+        }
       }
-    }, 120);
-  }
 
-  // ✅ PLAY / PAUSE
-  if (payload.playing !== undefined) {
-    if (payload.playing && vid.paused) {
-      vid.play().catch(() => {});
-    } else if (!payload.playing && !vid.paused) {
-      vid.pause();
+      // If video is not ready to be synchronized yet, skip time sync
+      if (vid.readyState < 2) return;
+
+      const current = vid.currentTime;
+      const now = performance.now() / 1000;
+      const delta = now - payload.globalTime;
+
+      const target = payload.currentTime + delta * (payload.speed || 1);
+      const diff = target - current;
+
+      // If paused, we do a hard jump if the discrepancy is significant, but we skip speed corrections
+      if (vid.paused) {
+        if (Math.abs(diff) > 0.1) {
+          vid.currentTime = target;
+        }
+        return;
+      }
+
+      if (Math.abs(diff) < 0.02) return;
+
+      // ✅ 2. TIME SYNC CORRECTION
+      if (Math.abs(diff) > 0.8) {
+        vid.currentTime = target;
+      } else if (Math.abs(diff) > 0.08) {
+        const baseSpeed = payload.speed || 1;
+        const correction = diff * 0.25;
+
+        const newRate = Math.max(0.9, Math.min(1.1, baseSpeed + correction));
+        vid.playbackRate = newRate;
+
+        setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.playbackRate = baseSpeed;
+          }
+        }, 120);
+      }
+    };
+
+    let ch = channelRef.current;
+
+    if (!ch && typeof BroadcastChannel !== "undefined") {
+      ch = new BroadcastChannel("lumin-output");
+      channelRef.current = ch;
     }
-  }
-};
 
-
-  let ch = channelRef.current;
-
-  if (!ch && typeof BroadcastChannel !== "undefined") {
-    ch = new BroadcastChannel("lumin-output");
-    channelRef.current = ch;
-  }
-
-  if (ch) {
-    ch.addEventListener("message", handleBroadcastMessage);
-  }
-
-  video.addEventListener("timeupdate", handleTimeUpdate);
-
-  return () => {
-    video.removeEventListener("timeupdate", handleTimeUpdate);
-
-    if (channelRef.current) {
-      channelRef.current.removeEventListener("message", handleBroadcastMessage);
-      channelRef.current.close();
-      channelRef.current = null;
+    if (ch) {
+      ch.addEventListener("message", handleBroadcastMessage);
     }
-  };
-}, [clip.id, trackerId]);
+
+    video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("play", handleForceUpdate);
+    video.addEventListener("pause", handleForceUpdate);
+    video.addEventListener("seeking", handleForceUpdate);
+
+    return () => {
+      video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("play", handleForceUpdate);
+      video.removeEventListener("pause", handleForceUpdate);
+      video.removeEventListener("seeking", handleForceUpdate);
+
+      if (channelRef.current) {
+        channelRef.current.removeEventListener("message", handleBroadcastMessage);
+        channelRef.current.close();
+        channelRef.current = null;
+      }
+    };
+  }, [clip.id, trackerId]);
 
   const videoRefCallback = useCallback((el: HTMLVideoElement | null) => {
     videoRef.current = el;
@@ -12595,6 +12612,31 @@ export default function App() {
             perfSettings,
           },
         });
+
+        // 🔥 Immediate video progress push for active master videos
+        if (typeof window !== "undefined" && (window as any).__luminVideos) {
+          const lVideos = (window as any).__luminVideos;
+          setTimeout(() => {
+            try {
+              for (const key of Object.keys(lVideos)) {
+                const vid = lVideos[key];
+                if (vid && vid instanceof HTMLVideoElement && vid.readyState >= 1) {
+                  outputChannel.current?.postMessage({
+                    type: "VIDEO_TIME_UPDATE",
+                    payload: {
+                      trackerId: key,
+                      clipId: key.split("_").pop(),
+                      currentTime: vid.currentTime,
+                      globalTime: performance.now() / 1000,
+                      playing: !vid.paused,
+                      speed: vid.playbackRate || 1
+                    }
+                  });
+                }
+              }
+            } catch (err) {}
+          }, 150);
+        }
       }
       if (event.data.type === "CLIP_ENDED") {
         const { outputId, clipId } = event.data.payload;
