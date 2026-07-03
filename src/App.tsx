@@ -3088,83 +3088,14 @@ const VideoLayer = ({
     }
   }, [firstFrameRendered, onReady]);
 
-  // Handle slave stream capture
+  // Handle slave stream capture (Disabled to use high-performance native decoding like Resolume)
   useEffect(() => {
-    if (!isSlave || typeof window === "undefined" || clip.type !== "video") {
-      setStreamObj(null);
-      return;
+    setStreamObj(null);
+    if (isSlave && clip.type === "video") {
+      setIsReady(true);
+      setFirstFrameRendered(true);
     }
-
-    let active = true;
-    let attempts = 0;
-
-    const tryCapture = () => {
-      if (!active) return;
-      try {
-        const openerWindow = window.opener || window;
-        const openerVideos = openerWindow.__luminVideos;
-        
-        let masterVideo = null;
-        if (openerVideos) {
-          const keys = [
-            monitorId && trackerId ? `monitor_${monitorId}_${trackerId}` : null,
-            outputId && clip.id ? `${outputId}_${clip.id}` : null,
-            trackerId,
-            clip.id,
-            monitorId,
-            outputId
-          ].filter(Boolean) as string[];
-
-          for (const k of keys) {
-            if (openerVideos[k]) {
-              masterVideo = openerVideos[k];
-              break;
-            }
-          }
-        }
-
-        if (masterVideo) {
-          if (masterVideo !== videoRef.current) {
-            let stream = masterVideo.__capturedStream;
-            if (!stream) {
-              if (masterVideo.captureStream) {
-                stream = masterVideo.captureStream();
-              } else if (masterVideo.mozCaptureStream) {
-                stream = masterVideo.mozCaptureStream();
-              }
-              if (stream) {
-                masterVideo.__capturedStream = stream;
-              }
-            }
-            if (stream) {
-              setStreamObj(stream);
-              setIsReady(true);
-              setFirstFrameRendered(true);
-              return;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn("[VideoLayer] Could not capture stream for slave", e);
-      }
-
-      attempts++;
-      if (attempts < 20) { // Try for 2 seconds (100ms * 20)
-        setTimeout(tryCapture, 100);
-      } else {
-        // Fallback if master never appears
-        if (!window.opener) {
-            setStreamObj(null); // Will trigger fallback to src
-        }
-      }
-    };
-
-    tryCapture();
-
-    return () => {
-      active = false;
-    };
-  }, [isSlave, trackerId, clip.type, clip.id, monitorId, outputId]);
+  }, [isSlave, clip.type]);
 
   useEffect(() => {
     const video = videoRef.current;

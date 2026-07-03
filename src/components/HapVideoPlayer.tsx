@@ -78,22 +78,6 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     playbackStateRef.current.speed = speed;
   }, [playing, loop, speed]);
 
-  // Find the master player registered in window.opener or window
-  const getMasterPlayer = useCallback(() => {
-    if (typeof window === "undefined") return null;
-    const openerWindow = window.opener || window;
-    const openerHapPlayers = openerWindow.__luminHapPlayers;
-    if (openerHapPlayers) {
-      const keys = [trackerId, clipId, monitorId, outputId].filter(Boolean);
-      for (const k of keys) {
-        if (k && openerHapPlayers[k]) {
-          return openerHapPlayers[k];
-        }
-      }
-    }
-    return null;
-  }, [trackerId, clipId, monitorId, outputId]);
-
   // Handle master-slave BroadCast Channel Sync integration
   useEffect(() => {
     if (typeof window === "undefined" || !trackerId) return;
@@ -103,8 +87,30 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     const handleSyncMessage = (e: MessageEvent) => {
       if (e.data?.type === "VIDEO_TIME_UPDATE" && e.data.payload?.trackerId === trackerId) {
         const payload = e.data.payload;
-        playbackStateRef.current.currentTime = payload.currentTime;
-        playbackStateRef.current.playing = payload.playing;
+        const state = playbackStateRef.current;
+        if (state) {
+          if (payload.playing !== undefined) {
+            state.playing = payload.playing;
+          }
+          if (payload.speed !== undefined) {
+            state.speed = payload.speed;
+          }
+          if (payload.loop !== undefined) {
+            state.loop = payload.loop;
+          }
+          
+          if (isSlave) {
+            const now = performance.now() / 1000;
+            const delta = now - (payload.globalTime || now);
+            const target = payload.currentTime + delta * (payload.speed || 1);
+            const diff = target - state.currentTime;
+
+            // If discrepancy is larger than 100ms or video is paused, do a hard sync jump
+            if (!state.playing || Math.abs(diff) > 0.1) {
+              state.currentTime = Math.max(0, Math.min(state.duration, target));
+            }
+          }
+        }
       }
     };
 
@@ -113,7 +119,7 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
       bc.removeEventListener("message", handleSyncMessage);
       bc.close();
     };
-  }, [trackerId]);
+  }, [trackerId, isSlave]);
 
   // Register Canvas element for Stream Capture synchronization
   useEffect(() => {
@@ -346,50 +352,6 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     const loadMovie = async () => {
       try {
         setIsReady(false);
-        if (isSlave) {
-          // If we are a slave, wait for the master player to register and copy its stats
-          let activeSlave = true;
-          let attempts = 0;
-          const findMasterAndInit = () => {
-            if (!active || !activeSlave) return;
-            const master = getMasterPlayer();
-            if (master) {
-              const meta = master.playbackStateRef.current;
-              const width = master.dimensions?.width || 1920;
-              const height = master.dimensions?.height || 1080;
-
-              setDimensions({ width, height });
-              setDuration(master.duration || meta.duration);
-              setFps(master.fps || meta.fps);
-
-              playbackStateRef.current = {
-                currentTime: meta.currentTime,
-                playing: meta.playing,
-                loop: meta.loop,
-                speed: meta.speed,
-                lastFrameIndex: -1,
-                lastTime: performance.now(),
-                frameCount: meta.frameCount,
-                duration: master.duration || meta.duration,
-                fps: master.fps || meta.fps,
-                isYCoCg: meta.isYCoCg,
-              };
-
-              initWebGL(width, height, meta.isYCoCg);
-              setIsReady(true);
-              onReady?.();
-            } else {
-              attempts++;
-              if (attempts < 50 && active && activeSlave) { // try for 5 seconds
-                setTimeout(findMasterAndInit, 100);
-              } else {
-                console.warn("[HapVideoPlayer Slave] Master player not found for sync. URL:", url);
-              }
-            }
-          };
-          findMasterAndInit();
-          return;
-        }
 
         const isElectron = typeof window !== "undefined" && (window as any).electron?.isElectron;
         let useNative = false;
@@ -491,7 +453,7 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
   // Decoder Loop / Thread (Fills RAM FrameQueue asynchronously)
   // ============================================================================
   useEffect(() => {
-    if (!isReady || isSlave) return;
+    if (!isReady) return;
 
     let active = true;
     const queue = frameQueueRef.current;
@@ -588,34 +550,20 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
       const now = performance.now();
       const state = playbackStateRef.current;
 
-      if (isSlave) {
-        const master = getMasterPlayer();
-        if (master && master.playbackStateRef?.current) {
-          const mState = master.playbackStateRef.current;
-          state.currentTime = mState.currentTime;
-          state.playing = mState.playing;
-          state.speed = mState.speed;
-          state.loop = mState.loop;
-          state.frameCount = mState.frameCount;
-          state.fps = mState.fps;
-          state.duration = mState.duration;
-        }
-      } else {
-        const deltaTime = (now - state.lastTime) / 1000.0;
-        state.lastTime = now;
+      const deltaTime = (now - state.lastTime) / 1000.0;
+      state.lastTime = now;
 
-        // Update current playtime
-        if (state.playing) {
-          state.currentTime += deltaTime * state.speed;
+      // Update current playtime
+      if (state.playing) {
+        state.currentTime += deltaTime * state.speed;
 
-          if (state.currentTime >= state.duration) {
-            if (state.loop) {
-              state.currentTime = state.currentTime % state.duration;
-            } else {
-              state.currentTime = state.duration;
-              state.playing = false;
-              onEnded?.();
-            }
+        if (state.currentTime >= state.duration) {
+          if (state.loop) {
+            state.currentTime = state.currentTime % state.duration;
+          } else {
+            state.currentTime = state.duration;
+            state.playing = false;
+            onEnded?.();
           }
         }
       }
@@ -633,15 +581,7 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
       if (frameIndex !== state.lastFrameIndex) {
         const gl = glRef.current;
         if (gl) {
-          let queuedFrame = null;
-          if (isSlave) {
-            const master = getMasterPlayer();
-            if (master && master.frameQueueRef?.current) {
-              queuedFrame = master.frameQueueRef.current.get(frameIndex);
-            }
-          } else {
-            queuedFrame = frameQueueRef.current.get(frameIndex);
-          }
+          const queuedFrame = frameQueueRef.current.get(frameIndex);
 
           if (queuedFrame) {
             state.lastFrameIndex = frameIndex;
@@ -686,7 +626,7 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     return () => {
       cancelAnimationFrame(animId);
     };
-  }, [isReady, dimensions, onTimeUpdate, onProgressUpdate, onEnded, isSlave, getMasterPlayer]);
+  }, [isReady, dimensions, onTimeUpdate, onProgressUpdate, onEnded]);
 
   return (
     <div className={`relative overflow-hidden w-full h-full flex items-center justify-center ${className}`}>
