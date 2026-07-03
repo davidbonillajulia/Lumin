@@ -87,30 +87,8 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     const handleSyncMessage = (e: MessageEvent) => {
       if (e.data?.type === "VIDEO_TIME_UPDATE" && e.data.payload?.trackerId === trackerId) {
         const payload = e.data.payload;
-        const state = playbackStateRef.current;
-        if (state) {
-          if (payload.playing !== undefined) {
-            state.playing = payload.playing;
-          }
-          if (payload.speed !== undefined) {
-            state.speed = payload.speed;
-          }
-          if (payload.loop !== undefined) {
-            state.loop = payload.loop;
-          }
-          
-          if (isSlave) {
-            const now = performance.now() / 1000;
-            const delta = now - (payload.globalTime || now);
-            const target = payload.currentTime + delta * (payload.speed || 1);
-            const diff = target - state.currentTime;
-
-            // If discrepancy is larger than 100ms or video is paused, do a hard sync jump
-            if (!state.playing || Math.abs(diff) > 0.1) {
-              state.currentTime = Math.max(0, Math.min(state.duration, target));
-            }
-          }
-        }
+        playbackStateRef.current.currentTime = payload.currentTime;
+        playbackStateRef.current.playing = payload.playing;
       }
     };
 
@@ -119,7 +97,7 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
       bc.removeEventListener("message", handleSyncMessage);
       bc.close();
     };
-  }, [trackerId, isSlave]);
+  }, [trackerId]);
 
   // Register Canvas element for Stream Capture synchronization
   useEffect(() => {
@@ -169,36 +147,6 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
       }
     };
   }, [isSlave, monitorId, outputId, trackerId, clipId, isReady]);
-
-  // Register Master HAP Player object for Slave synchronization
-  useEffect(() => {
-    if (typeof window === "undefined" || isSlave) return;
-
-    (window as any).__luminHapPlayers = (window as any).__luminHapPlayers || {};
-
-    const playerObj = {
-      frameQueueRef,
-      playbackStateRef,
-      dimensions,
-      duration,
-      fps,
-      isReady,
-    };
-
-    const keys = [trackerId, clipId, monitorId, outputId].filter(Boolean) as string[];
-
-    for (const key of keys) {
-      (window as any).__luminHapPlayers[key] = playerObj;
-    }
-
-    return () => {
-      for (const key of keys) {
-        if ((window as any).__luminHapPlayers?.[key] === playerObj) {
-          delete (window as any).__luminHapPlayers[key];
-        }
-      }
-    };
-  }, [isSlave, trackerId, clipId, monitorId, outputId, dimensions, duration, fps, isReady]);
 
   // ============================================================================
   // WebGL Pipeline Setup
@@ -352,7 +300,6 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     const loadMovie = async () => {
       try {
         setIsReady(false);
-
         const isElectron = typeof window !== "undefined" && (window as any).electron?.isElectron;
         let useNative = false;
         let meta: any = null;
@@ -549,7 +496,6 @@ export const HapVideoPlayer: React.FC<HapVideoPlayerProps> = ({
     const renderTick = () => {
       const now = performance.now();
       const state = playbackStateRef.current;
-
       const deltaTime = (now - state.lastTime) / 1000.0;
       state.lastTime = now;
 
