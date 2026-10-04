@@ -62,6 +62,11 @@
 }
 
 @layer base {
+  html, body, #root {
+    background-color: #000000;
+    margin: 0;
+    padding: 0;
+  }
   body {
     font-family: var(--custom-sans, "IBM Plex Sans"), ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;

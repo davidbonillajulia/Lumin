@@ -1,4 +1,4 @@
-const { app, BrowserWindow, screen, ipcMain, shell, dialog, protocol, net } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, shell, dialog, protocol, net, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
@@ -209,6 +209,7 @@ if (!gotTheLock) {
       height: 1080,
       title: 'LUMIN Media Server',
       backgroundColor: '#000000',
+      autoHideMenuBar: true,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -218,6 +219,10 @@ if (!gotTheLock) {
     });
 
     mainWindow.setMenu(null);
+    if (typeof mainWindow.removeMenu === 'function') {
+      mainWindow.removeMenu();
+    }
+    mainWindow.setMenuBarVisibility(false);
 
     if (isDev) {
       mainWindow.loadURL('http://localhost:3000');
@@ -248,6 +253,13 @@ if (!gotTheLock) {
   }
 
   app.whenReady().then(() => {
+    // Completely remove default application menu (File, Edit, View, Window, Help)
+    try {
+      Menu.setApplicationMenu(null);
+    } catch (e) {
+      console.warn("Could not set global application menu to null:", e);
+    }
+
     // Register custom file protocol handler for seamless local video streaming, range requests, and scrubbing
     protocol.handle('lumin-file', (request) => {
       try {
@@ -1831,6 +1843,7 @@ try {
         frame: true,
         resizable: true,
         alwaysOnTop: true,
+        autoHideMenuBar: true,
         title: 'LUMIN Timer Controller',
         backgroundColor: '#000000',
         webPreferences: {
@@ -1842,6 +1855,10 @@ try {
       });
 
       outputWindow.setMenu(null);
+      if (typeof outputWindow.removeMenu === 'function') {
+        outputWindow.removeMenu();
+      }
+      outputWindow.setMenuBarVisibility(false);
 
       if (isDev) {
         outputWindow.loadURL(`http://localhost:3000${url}`);
@@ -1866,7 +1883,8 @@ try {
         height: targetDisplay.bounds.height,
         fullscreen: true,
         frame: false,
-        title: `LUMIN Output - ${targetDisplay.label}`,
+        autoHideMenuBar: true,
+        title: '',
         backgroundColor: '#000000',
         webPreferences: {
           nodeIntegration: false,
@@ -1876,10 +1894,20 @@ try {
         },
       });
 
+      outputWindow.setMenu(null);
+      if (typeof outputWindow.removeMenu === 'function') {
+        outputWindow.removeMenu();
+      }
+      outputWindow.setMenuBarVisibility(false);
+
+      const queryString = url && url.includes('?') ? url.slice(url.indexOf('?')) : (url && url.startsWith('?') ? url : `?${url || ''}`);
       if (isDev) {
         outputWindow.loadURL(`http://localhost:3000${url}`);
       } else {
-        outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: url });
+        outputWindow.loadFile(path.join(__dirname, '../dist/index.html'), { 
+          search: queryString,
+          hash: url 
+        });
       }
 
       outputWindows.set(screenId || 'primary', outputWindow);

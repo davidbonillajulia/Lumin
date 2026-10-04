@@ -4641,7 +4641,7 @@ const OutputView = React.memo(() => {
 
   useEffect(() => {
     console.log("OutputView: Montado.");
-    document.title = "LUMIN OUTPUT";
+    document.title = "";
 
     const channel = new BroadcastChannel("lumin-output");
     channelRef.current = channel;
@@ -4703,9 +4703,7 @@ const OutputView = React.memo(() => {
 
   if (error) {
     return (
-      <div className="bg-black h-screen w-screen flex flex-col items-center justify-center text-red-500 font-mono text-[10px] p-8 uppercase tracking-widest">
-        <span>Error de Salida</span>
-      </div>
+      <div className="bg-black h-screen w-screen cursor-none" />
     );
   }
 
@@ -4876,10 +4874,10 @@ const OutputView = React.memo(() => {
           </div>
         )}
 
-        {/* Fullscreen Guard Overlay - Invisible Click Catcher */}
-        {!isFullscreen && (
+        {/* Fullscreen Guard Overlay - Invisible Click Catcher for web browser */}
+        {!window.electron && !isFullscreen && (
           <div
-            className="fixed inset-0 z-[1000] bg-obs-dark-1 cursor-pointer"
+            className="fixed inset-0 z-[1000] bg-black cursor-pointer"
             onClick={(e) => {
               e.stopPropagation();
               document.documentElement.requestFullscreen().catch(() => {});
@@ -10679,7 +10677,7 @@ const PreviewManagerModal = ({
 
 // --- Main App ---
 
-export default function App() {
+function MainStudioApp() {
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [clips, setClips] = useState<Clip[]>(MOCK_CLIPS);
   const [lastSwitchTime, setLastSwitchTime] = useState(0);
@@ -17017,4 +17015,38 @@ export default function App() {
 
     </div>
   );
+}
+
+export default function App() {
+  const isOutputMode = (() => {
+    try {
+      const search = window.location.search || "";
+      const hash = window.location.hash || "";
+      const href = window.location.href || "";
+      return search.includes("mode=output") || hash.includes("mode=output") || href.includes("mode=output");
+    } catch {
+      return false;
+    }
+  })();
+
+  const isFloatingTimerMode = (() => {
+    try {
+      const search = window.location.search || "";
+      const hash = window.location.hash || "";
+      const href = window.location.href || "";
+      return search.includes("mode=floating_timer") || hash.includes("mode=floating_timer") || href.includes("mode=floating_timer");
+    } catch {
+      return false;
+    }
+  })();
+
+  if (isOutputMode) {
+    return <OutputView />;
+  }
+
+  if (isFloatingTimerMode) {
+    return <FloatingTimerPopoutView />;
+  }
+
+  return <MainStudioApp />;
 }
