@@ -1,4 +1,32 @@
 const { app, BrowserWindow, screen, ipcMain, shell, dialog, protocol, net, Menu } = require('electron');
+
+// CRITICAL: Strip the global Electron default application menu (File, Edit, View, Window, Help) immediately
+try {
+  Menu.setApplicationMenu(null);
+} catch (e) {
+  console.warn("Could not set global application menu to null early:", e);
+}
+
+// Ensure every single BrowserWindow created anywhere in Electron has NO menu
+app.on('browser-window-created', (event, win) => {
+  try {
+    win.setMenu(null);
+    if (typeof win.removeMenu === 'function') {
+      win.removeMenu();
+    }
+    win.setMenuBarVisibility(false);
+  } catch (e) {}
+
+  win.webContents.on('did-finish-load', () => {
+    try {
+      win.setMenu(null);
+      if (typeof win.removeMenu === 'function') {
+        win.removeMenu();
+      }
+      win.setMenuBarVisibility(false);
+    } catch (e) {}
+  });
+});
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
@@ -1882,8 +1910,8 @@ try {
         width: targetDisplay.bounds.width,
         height: targetDisplay.bounds.height,
         fullscreen: true,
+        kiosk: true, // Kiosk mode completely suppresses all menus, OS borders, and shortcuts
         frame: false,
-        autoHideMenuBar: true,
         title: '',
         backgroundColor: '#000000',
         webPreferences: {
@@ -1899,6 +1927,26 @@ try {
         outputWindow.removeMenu();
       }
       outputWindow.setMenuBarVisibility(false);
+
+      outputWindow.webContents.on('did-finish-load', () => {
+        try {
+          outputWindow.setMenu(null);
+          if (typeof outputWindow.removeMenu === 'function') {
+            outputWindow.removeMenu();
+          }
+          outputWindow.setMenuBarVisibility(false);
+        } catch (e) {}
+      });
+
+      outputWindow.on('ready-to-show', () => {
+        try {
+          outputWindow.setMenu(null);
+          if (typeof outputWindow.removeMenu === 'function') {
+            outputWindow.removeMenu();
+          }
+          outputWindow.setMenuBarVisibility(false);
+        } catch (e) {}
+      });
 
       const queryString = url && url.includes('?') ? url.slice(url.indexOf('?')) : (url && url.startsWith('?') ? url : `?${url || ''}`);
       if (isDev) {
