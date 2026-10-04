@@ -1,30 +1,31 @@
 const { app, BrowserWindow, screen, ipcMain, shell, dialog, protocol, net, Menu } = require('electron');
 
-// CRITICAL: Strip the global Electron default application menu (File, Edit, View, Window, Help) immediately
+function hideWindowMenu(win) {
+  win.setMenu(Menu.buildFromTemplate([]));
+  win.setMenuBarVisibility(false);
+}
+
+// Use an empty menu explicitly so Electron cannot restore its default menu.
 try {
-  Menu.setApplicationMenu(null);
+  Menu.setApplicationMenu(Menu.buildFromTemplate([]));
 } catch (e) {
-  console.warn("Could not set global application menu to null early:", e);
+  console.error("Could not set the empty application menu early:", e);
 }
 
 // Ensure every single BrowserWindow created anywhere in Electron has NO menu
 app.on('browser-window-created', (event, win) => {
   try {
-    win.setMenu(null);
-    if (typeof win.removeMenu === 'function') {
-      win.removeMenu();
-    }
-    win.setMenuBarVisibility(false);
-  } catch (e) {}
+    hideWindowMenu(win);
+  } catch (e) {
+    console.error("Could not hide the menu on a new window:", e);
+  }
 
   win.webContents.on('did-finish-load', () => {
     try {
-      win.setMenu(null);
-      if (typeof win.removeMenu === 'function') {
-        win.removeMenu();
-      }
-      win.setMenuBarVisibility(false);
-    } catch (e) {}
+      hideWindowMenu(win);
+    } catch (e) {
+      console.error("Could not hide the menu after a window finished loading:", e);
+    }
   });
 });
 const path = require('path');
@@ -246,11 +247,7 @@ if (!gotTheLock) {
       },
     });
 
-    mainWindow.setMenu(null);
-    if (typeof mainWindow.removeMenu === 'function') {
-      mainWindow.removeMenu();
-    }
-    mainWindow.setMenuBarVisibility(false);
+    hideWindowMenu(mainWindow);
 
     if (isDev) {
       mainWindow.loadURL('http://localhost:3000');
@@ -281,11 +278,11 @@ if (!gotTheLock) {
   }
 
   app.whenReady().then(() => {
-    // Completely remove default application menu (File, Edit, View, Window, Help)
+    // Keep the application menu empty so Electron cannot restore its default menu.
     try {
-      Menu.setApplicationMenu(null);
+      Menu.setApplicationMenu(Menu.buildFromTemplate([]));
     } catch (e) {
-      console.warn("Could not set global application menu to null:", e);
+      console.error("Could not set the empty application menu:", e);
     }
 
     // Register custom file protocol handler for seamless local video streaming, range requests, and scrubbing
@@ -1882,11 +1879,7 @@ try {
         },
       });
 
-      outputWindow.setMenu(null);
-      if (typeof outputWindow.removeMenu === 'function') {
-        outputWindow.removeMenu();
-      }
-      outputWindow.setMenuBarVisibility(false);
+      hideWindowMenu(outputWindow);
 
       if (isDev) {
         outputWindow.loadURL(`http://localhost:3000${url}`);
@@ -1923,30 +1916,22 @@ try {
         },
       });
 
-      outputWindow.setMenu(null);
-      if (typeof outputWindow.removeMenu === 'function') {
-        outputWindow.removeMenu();
-      }
-      outputWindow.setMenuBarVisibility(false);
+      hideWindowMenu(outputWindow);
 
       outputWindow.webContents.on('did-finish-load', () => {
         try {
-          outputWindow.setMenu(null);
-          if (typeof outputWindow.removeMenu === 'function') {
-            outputWindow.removeMenu();
-          }
-          outputWindow.setMenuBarVisibility(false);
-        } catch (e) {}
+          hideWindowMenu(outputWindow);
+        } catch (e) {
+          console.error("Could not hide the external output menu after loading:", e);
+        }
       });
 
       outputWindow.on('ready-to-show', () => {
         try {
-          outputWindow.setMenu(null);
-          if (typeof outputWindow.removeMenu === 'function') {
-            outputWindow.removeMenu();
-          }
-          outputWindow.setMenuBarVisibility(false);
-        } catch (e) {}
+          hideWindowMenu(outputWindow);
+        } catch (e) {
+          console.error("Could not hide the external output menu before showing:", e);
+        }
       });
 
       const queryString = url && url.includes('?') ? url.slice(url.indexOf('?')) : (url && url.startsWith('?') ? url : `?${url || ''}`);
