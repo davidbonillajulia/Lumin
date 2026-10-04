@@ -1912,6 +1912,7 @@ try {
         fullscreen: true,
         kiosk: true, // Kiosk mode completely suppresses all menus, OS borders, and shortcuts
         frame: false,
+        autoHideMenuBar: true,
         title: '',
         backgroundColor: '#000000',
         webPreferences: {
